@@ -5,6 +5,7 @@ node_modules/
 .expo/
 .expo-shared/
 .state/
+.runtime/
 .env
 .env.*
 !.env.example

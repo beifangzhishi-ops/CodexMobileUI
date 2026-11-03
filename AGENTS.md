@@ -18,3 +18,9 @@
 - Maintain README.md and AGENTS.md with actual current behavior. Keep architecture and roadmap docs consistent. Explicitly mark any feature that lacks real-host or Android-device validation.
 - Use stable Android package identity `dev.codexmobileui.app`. Keystores, credentials, local runtime state and per-machine configuration are not tracked.
 - For a Git repository, commit finished verified work. Push to existing configured remote only; never create or publish a public remote without separate authorization, never force push.
+
+## Shared Windows launchers
+- The independently bundled shared-stack scripts in `scripts/` must maintain protocol and behavior parity with the AOI launcher across 6v/noha. This is source synchronization only, never a runtime dependency on AOI.
+- A shared stack is owned only by the checkout that started its proxy and backend. Other checkouts may hot-attach after port, readiness, and process-identity checks; they must not adopt PID files, restart, or stop foreign processes.
+- Shared-stack first-start/stop uses a cross-checkout Windows mutex; Gateway startup has a separate mutex and process ownership. Never auto-stop active Desktop, AOI, mobile clients, or shared work on launcher exit.
+- Gateway remains loopback-only. Do not configure or enable a live Funnel endpoint without a distinct security review and explicit user authorization. Do not claim a health endpoint proves authenticated mobile or multi-client approval correctness.

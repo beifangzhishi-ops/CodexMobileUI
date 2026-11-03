@@ -33,6 +33,8 @@ The immediate live validation sequence should be: inspect native App Server comp
 
 ## Modules
 
+The optional Windows scripts in `scripts/` host the shared proxy/backend or attach to an already healthy stack, without any runtime AOI dependency. The local Gateway remains independently owned by CodexMobileUI; see [shared-launcher.md](shared-launcher.md). Shared-stack ownership is per launching checkout, not per connected client.
+
 | Module | Responsibility |
 | --- | --- |
 | `src/core/host.ts` | validate HTTPS target host |
