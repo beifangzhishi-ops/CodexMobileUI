@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  applyNotification, extractMessages, normalizeThread, parseThreadList, parseThreadSnapshot,
+  applyNotification, extractMessages, normalizeThread, parseThreadList,
+  parseThreadSnapshot, parseThreadSnapshotState,
 } from '../src/core/protocol';
 
 test('normalize threads without inventing a project or name', () => {
@@ -32,7 +33,7 @@ test('extract original Codex message ids and message ordering', () => {
   const messages = extractMessages('thread', turns);
   assert.deepEqual(messages.map((m) => m.id), ['t1:u1', 't1:a1', 't2:u2']);
   assert.deepEqual(messages.map((m) => m.ordinal), [0, 2, 100000]);
-  assert.deepEqual(parseThreadSnapshot({ thread: { id: 'thread', turns } }, 'bad'), messages);
+  assert.deepEqual(parseThreadSnapshot({ thread: { id: 'thread', turns } }, 'thread'), messages);
 });
 
 test('delta streaming and completed item use stable ids and never duplicate', () => {
@@ -52,8 +53,48 @@ test('delta streaming and completed item use stable ids and never duplicate', ()
   }, 'th');
   assert.equal(messages.length, 1);
   assert.equal(messages[0].text, 'Hello!');
+  messages = applyNotification(messages, {
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'th', turnId: 't1', itemId: 'a1', delta: ' late duplicate' },
+  }, 'th');
+  assert.equal(messages[0].text, 'Hello!', 'no delta may append to a completed item');
   assert.equal(applyNotification(messages, {
     method: 'item/agentMessage/delta',
     params: { threadId: 'elsewhere', turnId: 't1', itemId: 'a1', delta: 'ignore' },
   }, 'th')[0].text, 'Hello!');
+});
+
+test('unknown thread snapshot schema cannot erase an existing SQLite cache', () => {
+  assert.throws(() => parseThreadSnapshot({}, 'id'), /did not include turns/);
+  assert.throws(
+    () => parseThreadSnapshot({ thread: { id: 'different', turns: [] } }, 'id'),
+    /different thread/,
+  );
+  assert.deepEqual(parseThreadSnapshot({ thread: { id: 'id', turns: [] } }, 'id'), []);
+  assert.throws(() => parseThreadList({}), /unrecognized result/);
+});
+
+test('a mid-turn thread/read keeps assistant output editable by later live deltas', () => {
+  const running = parseThreadSnapshotState({ thread: {
+    id: 'th', turns: [{ id: 'turn', status: 'inProgress', items: [
+      { id: 'user', type: 'userMessage', content: [{ type: 'text', text: 'question' }] },
+      { id: 'agent', type: 'agentMessage', text: 'Hel' },
+    ] }],
+  } }, 'th');
+  assert.equal(running.running, true);
+  assert.equal(running.messages[0].complete, true);
+  assert.equal(running.messages[1].complete, false);
+  const appended = applyNotification(running.messages, {
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'th', turnId: 'turn', itemId: 'agent', delta: 'lo' },
+  }, 'th');
+  assert.equal(appended[1].text, 'Hello');
+  const finished = parseThreadSnapshotState({ thread: {
+    id: 'th', turns: [{ id: 'turn', status: 'completed', items: [
+      { id: 'user', type: 'userMessage', content: [{ type: 'text', text: 'question' }] },
+      { id: 'agent', type: 'agentMessage', text: 'Hello' },
+    ] }],
+  } }, 'th');
+  assert.equal(finished.running, false);
+  assert.equal(finished.messages[1].complete, true);
 });

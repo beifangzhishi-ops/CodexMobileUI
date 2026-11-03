@@ -59,6 +59,7 @@ function MainApp() {
   [session.threads]);
   const visible = session.threads.filter((thread) => project === null || thread.cwd === project);
   const selected = session.threads.find((thread) => thread.id === session.activeThreadId);
+  const newThreadCwd = project ?? selected?.cwd ?? projects[0] ?? null;
 
   if (checking) return (
     <View style={styles.loading}><ActivityIndicator color="#ade5d7" size="large" /></View>
@@ -97,7 +98,7 @@ function MainApp() {
           <Pressable
             style={styles.primary}
             disabled={session.status !== 'online'}
-            onPress={() => { void session.createThread(project).catch((e: unknown) => Alert.alert('无法新建', String(e))); }}
+            onPress={() => { void session.createThread(newThreadCwd).catch((e: unknown) => Alert.alert('无法新建', String(e))); }}
           ><Text style={styles.primaryText}>新建 Codex 会话</Text></Pressable>
         </View>
       )}
@@ -175,7 +176,7 @@ function MainApp() {
               style={[styles.primary, session.status !== 'online' && styles.disabled]}
               disabled={session.status !== 'online'}
               onPress={() => {
-                void session.createThread(project).then(() => setThreadChooser(false))
+                void session.createThread(newThreadCwd).then(() => setThreadChooser(false))
                   .catch((e: unknown) => Alert.alert('新建失败', String(e)));
               }}
             ><Text style={styles.primaryText}>＋ 新建会话</Text></Pressable>

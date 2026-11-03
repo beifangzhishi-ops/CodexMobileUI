@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Host } from '../core/host';
 import { CodexTransport } from '../core/transport';
+import { listAllThreads } from '../core/threadApi';
 import {
-  applyNotification, parseThreadList, parseThreadSnapshot, recordOf,
+  applyNotification, parseThreadSnapshotState, recordOf,
   type ChatMessage, type CodexNotice, type CodexThread,
 } from '../core/protocol';
 import { accessToken } from '../auth/tokens';
@@ -45,7 +46,6 @@ export function useCodexSession(host: Host | null): CodexSession {
   const active = useRef<string | null>(null);
   const generation = useRef(0);
   const reconnect = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const disposed = useRef(false);
 
   const readThread = useCallback(async (id: string, source?: CodexTransport) => {
     if (!host) return;
@@ -53,12 +53,15 @@ export function useCodexSession(host: Host | null): CodexSession {
     if (!connection?.connected) return;
     const sequence = ++generation.current;
     const raw = await connection.request('thread/read', { threadId: id, includeTurns: true });
-    const complete = parseThreadSnapshot(raw, id);
+    const snapshot = parseThreadSnapshotState(raw, id);
     if (sequence !== generation.current) return;
-    await replaceMessages(host.id, id, complete);
+    // Never persist partially generated assistant text as finalized history.
+    // An active turn becomes authoritative only on a completed snapshot.
+    if (!snapshot.running) await replaceMessages(host.id, id, snapshot.messages);
     if (active.current === id && sequence === generation.current) {
-      setMessages(complete);
-      setLastSynced(Date.now());
+      setMessages(snapshot.messages);
+      setRunning(snapshot.running);
+      if (!snapshot.running) setLastSynced(Date.now());
     }
   }, [host]);
 
@@ -66,31 +69,36 @@ export function useCodexSession(host: Host | null): CodexSession {
     if (!host) return;
     active.current = id;
     setActiveThreadId(id);
-    generation.current++;
+    const selection = ++generation.current;
     setRunning(false);
     const cached = await loadMessages(host.id, id);
-    if (active.current === id) setMessages(cached);
-    if (client.current?.connected) {
+    if (active.current !== id || generation.current !== selection) return;
+    setMessages(cached);
+    const connection = client.current;
+    if (connection?.connected) {
       try {
-        await client.current.request('thread/resume', { threadId: id });
-        await readThread(id);
-      } catch (e) { setError(errorString(e)); }
+        await connection.request('thread/resume', { threadId: id });
+        if (active.current !== id || generation.current !== selection ||
+            client.current !== connection) return;
+        await readThread(id, connection);
+      } catch (e) {
+        if (client.current === connection) setError(errorString(e));
+      }
     }
   }, [host, readThread]);
 
   const refresh = useCallback(async () => {
-    if (!host || !client.current?.connected) return;
-    const result = await client.current.request('thread/list', {
-      limit: 100, sortKey: 'recency_at',
-    });
-    const list = parseThreadList(result);
+    const connection = client.current;
+    if (!host || !connection?.connected) return;
+    const list = await listAllThreads(connection);
+    if (client.current !== connection) return;
     await storeThreads(host.id, list);
+    if (client.current !== connection) return;
     setThreads(list);
     if (active.current) await readThread(active.current);
   }, [host, readThread]);
 
   useEffect(() => {
-    disposed.current = false;
     const currentHost = host;
     setStatus('offline');
     setThreads([]);
@@ -104,6 +112,7 @@ export function useCodexSession(host: Host | null): CodexSession {
     let retry = 0;
     let alive = true;
     const handleNotice = (notice: CodexNotice) => {
+      if (!alive) return;
       const threadId = active.current;
       if (threadId) {
         const p = notice.params;
@@ -112,7 +121,9 @@ export function useCodexSession(host: Host | null): CodexSession {
           if (notice.method === 'turn/started') setRunning(true);
           if (notice.method === 'turn/completed') {
             setRunning(false);
-            void readThread(threadId).catch((e) => setError(errorString(e)));
+            void readThread(threadId).catch((e) => {
+              if (alive) setError(errorString(e));
+            });
           }
           if (notice.method === 'item/completed' ||
               notice.method === 'item/agentMessage/delta') {
@@ -122,10 +133,10 @@ export function useCodexSession(host: Host | null): CodexSession {
       }
       if (notice.method === 'thread/started' || notice.method === 'thread/name/updated') {
         // A thread may have been created by Desktop or AOI.
-        void client.current?.request('thread/list', { limit: 100, sortKey: 'recency_at' })
-          .then((result) => {
+        if (!client.current) return;
+        void listAllThreads(client.current)
+          .then((list) => {
             if (!alive) return;
-            const list = parseThreadList(result);
             setThreads(list);
             void storeThreads(currentHost.id, list);
           }).catch(() => undefined);
@@ -160,8 +171,7 @@ export function useCodexSession(host: Host | null): CodexSession {
         retry = 0;
         setStatus('online');
         setError(null);
-        const result = await connection.request('thread/list', { limit: 100, sortKey: 'recency_at' });
-        const list = parseThreadList(result);
+        const list = await listAllThreads(connection);
         if (!alive) return;
         setThreads(list);
         void storeThreads(currentHost.id, list);
@@ -186,9 +196,14 @@ export function useCodexSession(host: Host | null): CodexSession {
         if (!alive) return;
         setThreads(cached);
         if (cached[0]) {
-          active.current = cached[0].id;
-          setActiveThreadId(cached[0].id);
-          setMessages(await loadMessages(currentHost.id, cached[0].id));
+          const cachedId = cached[0].id;
+          active.current = cachedId;
+          setActiveThreadId(cachedId);
+          const selection = ++generation.current;
+          const cachedMessages = await loadMessages(currentHost.id, cachedId);
+          if (alive && active.current === cachedId && generation.current === selection) {
+            setMessages(cachedMessages);
+          }
         }
       } catch (e) { if (alive) setError(errorString(e)); }
       if (alive) await establish();
@@ -196,36 +211,51 @@ export function useCodexSession(host: Host | null): CodexSession {
 
     return () => {
       alive = false;
-      disposed.current = true;
-      if (reconnect.current) clearTimeout(reconnect.current);
+      if (reconnect.current) {
+        clearTimeout(reconnect.current);
+        reconnect.current = null;
+      }
       client.current?.close();
       client.current = null;
     };
   }, [host?.id, readThread]);
 
   const createThread = useCallback(async (cwd: string | null) => {
-    if (!client.current?.connected) throw new Error('当前无法新建会话：电脑离线');
-    const response = await client.current.request('thread/start', cwd ? { cwd } : {});
+    const connection = client.current;
+    if (!connection?.connected) throw new Error('当前无法新建会话：电脑离线');
+    const response = await connection.request('thread/start', cwd ? { cwd } : {});
     const id = recordOf(recordOf(response).thread).id;
     if (typeof id !== 'string') throw new Error('Codex 未返回新会话 ID');
+    if (client.current !== connection) {
+      throw new Error('会话已在原电脑创建。请切换回原电脑查找，不要重复创建。');
+    }
     await refresh();
+    if (client.current !== connection) {
+      throw new Error('会话已在原电脑创建。请切换回原电脑查找，不要重复创建。');
+    }
     await chooseThread(id);
   }, [refresh, chooseThread]);
 
   const send = useCallback(async (text: string) => {
     const id = active.current;
-    if (!id || !client.current?.connected) throw new Error('离线时只能保存草稿，不会自动发送');
+    const connection = client.current;
+    if (!id || !connection?.connected) throw new Error('离线时只能保存草稿，不会自动发送');
     if (!text.trim()) return;
     setError(null);
     try {
-      await client.current.request('turn/start', {
+      await connection.request('turn/start', {
         threadId: id, input: [{ type: 'text', text }],
       });
-      // Real server messages, not optimistic locally invented turns.
-      await readThread(id);
+      // A successful RPC only means Codex accepted the turn. Do not read a
+      // mid-turn snapshot here: a partially materialized agentMessage could
+      // replace live text deltas and make streaming appear frozen. User/agent
+      // items arrive over native events; the final turn/completed event then
+      // reconciles and persists the authoritative thread snapshot.
     } catch (e) {
       setError('发送状态未确认。请先核对电脑端会话，再决定是否重发。' + errorString(e));
-      void readThread(id).catch(() => undefined);
+      if (client.current === connection) {
+        void readThread(id, connection).catch(() => undefined);
+      }
       throw e;
     }
   }, [readThread]);

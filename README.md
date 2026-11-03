@@ -23,9 +23,9 @@ The app does not connect to CCM, AOI, CMP, or ChatGPT Desktop. Each target compu
 
 - Expo SDK 58 / React Native Android, `@assistant-ui/react-native` with a native Markdown renderer.
 - Expo Dev Client dependency for validation of native modules that are not covered by Expo Go.
-- Discover actual threads via Codex `thread/list`, open with `thread/resume`, read committed turns via `thread/read`, and send user turns with `turn/start`.
-- Stream agent text deltas when delivered by App Server and reconcile final turn history rather than building a second chat engine. `threadId`, `turnId` and `itemId` are used to deduplicate messages.
-- Local SQLite snapshots of seen messages and threads; offline drafts are never automatically sent on reconnection.
+- Discover actual threads through paginated Codex `thread/list` (rather than silently truncating at 100), open with `thread/resume`, read turns via `thread/read`, and send user turns with `turn/start`.
+- Stream agent text deltas when delivered by App Server and reconcile final turn history rather than building a second chat engine. `threadId`, `turnId` and `itemId` are used to deduplicate messages; completed items ignore late deltas. An invalid thread snapshot cannot erase cached history.
+- Local SQLite snapshots of seen messages and threads; immediate, serialized local draft writes are never automatically sent on reconnection. In-progress agent output is not persisted as confirmed history.
 - Per-host OAuth 2.0 authorization code + PKCE S256, short-lived access tokens, rotating refresh tokens, token revocation, local browser consent with a host-specific secret.
 - Unit and integration tests for parser, OAuth, WSS authorization and JSON-RPC relay.
 
@@ -76,6 +76,7 @@ npm.cmd run android
 - `npm run check`: Android TypeScript, gateway TypeScript, unit + local integration tests.
 - `npm run build:gateway`: gateway compilation.
 - `npm run probe:readonly`: sends only `initialize` and `thread/list` to the existing loopback shared App Server; prints no private thread data.
+- `node scripts/probe-thread-snapshot.mjs`: read-only check of `thread/read` on one existing local thread; outputs only structural counts and item-type names. Requires the shared App Server to be running and does not start it.
 - `npm run probe:authenticated`: after building the gateway, creates a temporary localhost-only OAuth grant and verifies an authenticated `thread/list` across the gateway to the existing shared app server, without changing the shared service or printing conversations.
 - `npm run export:android`: JS bundle export, **not an APK**.
 - Follow [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md), [SECURITY.md](SECURITY.md), and [AGENTS.md](AGENTS.md).

@@ -16,6 +16,8 @@
 5. Mobile receives native Codex events, displays new text and reconciles stable thread/turn/item history on completion. A dropped connection triggers reconnect; committed messages are retrieved from Codex, deduplicated and stored locally.
 6. When offline, already cached messages remain readable and the composer persists a draft. The draft **never automatically sends** after reconnect.
 
+The thread list follows native pagination with cursor-loop detection. Unrecognized `thread/list` or `thread/read` responses fail closed instead of replacing cached history with an empty set. Messages for an unfinished turn are rendered but not written to the confirmed-history cache; a subsequent final snapshot reconciles them. Draft writes are serialized per host+thread so closing a composer promptly or sending successfully cannot allow stale asynchronous saves to overwrite the latest draft.
+
 ## Trust boundaries
 
 - Public Funnel routes must terminate at the **authenticated** gateway, not at the app server or model proxy.
@@ -39,10 +41,12 @@ The optional Windows scripts in `scripts/` host the shared proxy/backend or atta
 | --- | --- |
 | `src/core/host.ts` | validate HTTPS target host |
 | `src/core/protocol.ts` | typed native Codex thread/message extraction |
+| `src/core/threadApi.ts` | paginated native thread listing, cursor validation |
 | `src/core/transport.ts` | WSS auth, JSON-RPC request, notifications |
 | `src/auth/` | PKCE browser and SecureStore token rotation |
 | `src/session/` | single active thread subscription/reconciliation |
 | `src/storage/` | SQLite materialized cache and unsent drafts |
+| `src/storage/writeQueue.ts` | testable sequential writes for independent drafts |
 | `src/ui/`, `App.tsx` | native chat/navigation/rendering |
 | `gateway/oauth.ts` | authorization, token mint/validate/revoke |
 | `gateway/http.ts` | consent and OAuth HTTP endpoints |

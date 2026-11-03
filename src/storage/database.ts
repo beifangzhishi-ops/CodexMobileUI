@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import type { ChatMessage, CodexThread } from '../core/protocol';
 import type { Host } from '../core/host';
+import { createKeyedWriteQueue } from './writeQueue';
 
 let opening: Promise<SQLite.SQLiteDatabase> | undefined;
 
@@ -83,7 +84,8 @@ export async function loadMessages(hostId: string, threadId: string): Promise<Ch
     hostId, threadId,
   );
   return rows.map((r) => ({
-    id: r.id, threadId, turnId: r.turn_id, role: r.role, text: r.body, ordinal: r.ordinal,
+    id: r.id, threadId, turnId: r.turn_id, role: r.role, text: r.body,
+    ordinal: r.ordinal, complete: true,
   }));
 }
 
@@ -114,10 +116,18 @@ export async function loadDraft(hostId: string, threadId: string): Promise<strin
   return row?.text ?? '';
 }
 
+// Preserve typing order even when SQLite's asynchronous writes finish out of order.
+// A later empty draft after a successful send must not be overwritten by an older
+// in-flight keystroke write.
+const queueDraftWrite = createKeyedWriteQueue();
+
 export async function storeDraft(hostId: string, threadId: string, text: string): Promise<void> {
-  const db = await database();
-  await db.runAsync(
-    'INSERT INTO drafts (host_id,thread_id,text) VALUES (?,?,?) ON CONFLICT(host_id,thread_id) DO UPDATE SET text=excluded.text',
-    hostId, threadId, text,
-  );
+  const key = JSON.stringify([hostId, threadId]);
+  await queueDraftWrite(key, async () => {
+    const db = await database();
+    await db.runAsync(
+      'INSERT INTO drafts (host_id,thread_id,text) VALUES (?,?,?) ON CONFLICT(host_id,thread_id) DO UPDATE SET text=excluded.text',
+      hostId, threadId, text,
+    );
+  });
 }

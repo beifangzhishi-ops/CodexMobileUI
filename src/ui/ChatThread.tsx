@@ -63,11 +63,14 @@ function Composer({ host, session }: { host: Host; session: CodexSession }) {
     return () => { alive = false; };
   }, [host.id, threadId]);
 
-  useEffect(() => {
-    if (!ready) return;
-    const timer = setTimeout(() => { void storeDraft(host.id, threadId, draft); }, 300);
-    return () => clearTimeout(timer);
-  }, [ready, draft, host.id, threadId]);
+  const updateDraft = useCallback((value: string) => {
+    setDraft(value);
+    // Write through while editing: closing the thread immediately must not
+    // discard the last characters of a draft or ever queue an automatic send.
+    void storeDraft(host.id, threadId, value).catch(() => {
+      Alert.alert('草稿保存失败', '这段文字仍在输入框中，请不要退出应用。');
+    });
+  }, [host.id, threadId]);
 
   const send = useCallback(async () => {
     if (!draft.trim() || session.status !== 'online' || busy) return;
@@ -93,9 +96,9 @@ function Composer({ host, session }: { host: Host; session: CodexSession }) {
         <TextInput
           style={styles.input}
           multiline
-          editable={ready}
+          editable={ready && !busy}
           value={draft}
-          onChangeText={setDraft}
+          onChangeText={updateDraft}
           placeholder="发送消息给 Codex…"
           placeholderTextColor="#8190a3"
           textAlignVertical="top"

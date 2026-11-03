@@ -19,6 +19,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   ordinal: number;
+  /** Committed server items are final; late/replayed deltas must not append to them. */
+  complete?: boolean;
 }
 
 export interface CodexNotice {
@@ -80,6 +82,7 @@ function messageFromItem(
     role: item.type === 'userMessage' ? 'user' : 'assistant',
     text,
     ordinal: index,
+    complete: true,
   };
 }
 
@@ -118,10 +121,11 @@ export function applyNotification(
     const id = `${turnId}:${itemId}`;
     const current = previous.find((m) => m.id === id);
     if (current) {
+      if (current.complete) return [...previous];
       return previous.map((m) => m.id === id ? { ...m, text: m.text + p.delta } : m);
     }
     return [...previous, {
-      id, threadId, turnId, role: 'assistant', text: p.delta,
+      id, threadId, turnId, role: 'assistant', text: p.delta, complete: false,
       ordinal: previous.length ? Math.max(...previous.map((m) => m.ordinal)) + 1 : 0,
     }];
   }
@@ -138,13 +142,43 @@ export function upsertMessage(messages: readonly ChatMessage[], incoming: ChatMe
 
 export function parseThreadList(result: unknown): CodexThread[] {
   const data = recordOf(result).data;
-  return (Array.isArray(data) ? data : [])
+  if (!Array.isArray(data)) {
+    throw new Error('Codex thread/list returned an unrecognized result; keeping local history');
+  }
+  return data
     .map(normalizeThread)
     .filter((thread): thread is CodexThread => thread !== null);
 }
 
 export function parseThreadSnapshot(result: unknown, fallbackThreadId: string): ChatMessage[] {
+  return parseThreadSnapshotState(result, fallbackThreadId).messages;
+}
+
+export interface ThreadSnapshotState {
+  messages: ChatMessage[];
+  running: boolean;
+}
+
+export function parseThreadSnapshotState(
+  result: unknown,
+  fallbackThreadId: string,
+): ThreadSnapshotState {
   const thread = recordOf(recordOf(result).thread);
-  const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  return extractMessages(optionalString(thread.id) ?? fallbackThreadId, turns);
+  if (!Array.isArray(thread.turns)) {
+    throw new Error('Codex thread/read did not include turns; keeping cached messages');
+  }
+  const actualId = optionalString(thread.id) ?? fallbackThreadId;
+  if (actualId !== fallbackThreadId) {
+    throw new Error('Codex thread/read returned a different thread; keeping cached messages');
+  }
+  const lastTurn = recordOf(thread.turns[thread.turns.length - 1]);
+  const running = lastTurn.status === 'inProgress' ||
+    lastTurn.status === 'in_progress' ||
+    lastTurn.status === 'running';
+  const incompleteTurnId = running ? optionalString(lastTurn.id) : null;
+  const messages = extractMessages(actualId, thread.turns).map((message) =>
+    incompleteTurnId === message.turnId && message.role === 'assistant'
+      ? { ...message, complete: false }
+      : message);
+  return { messages, running };
 }

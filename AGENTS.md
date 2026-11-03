@@ -10,6 +10,7 @@
 - Never make the app depend on CCM/AOI; they are protocol references only. Do not modify CCM, AOI, the shared Codex proxy, or production authentication services without distinct user approval.
 - Treat network payloads, model text, file URIs and all external links as untrusted. Never execute remote HTML/script or expose arbitrary Windows paths. Use authenticated HTTPS/WSS with host/thread/resource checks for all new endpoints.
 - Preserve genuine App Server protocol and native messages; when live events are dropped, recover from authoritative `thread/read` rather than blindly replaying text. Correlate by thread/turn/item IDs and keep locally drafted text from silently auto-sending.
+- Keep native history pagination and stream/cache reconciliation in the core modules, not inside Android screen components. Treat malformed server snapshots as a read failure, not a request to clear SQLite; never persist in-progress assistant text as a completed message. Serialize writes of drafts per host/thread.
 - Review backwards compatibility and any changes to settled architecture with the user before implementing. Remove superseded names and dead files; do not keep inactive compatibility shims by default.
 
 ## Quality, tests, documentation
