@@ -18,6 +18,8 @@ If both ports are listening, both `/readyz` checks pass, and the listening proce
 
 If the ports are busy but the stack cannot be identified as healthy, startup fails closed. If an owned service is unhealthy, startup does not silently kill/restart it. Launcher exit does not stop the server. Only an explicit stop from the owner can stop its stack.
 
+Desktop shared-start failures now preserve the detailed child-script output (action, line and exception) instead of showing only a generic exit code. The presence of an old PID file is not proof of ownership: inspect its process identity and port listeners before a manual stop. No launcher will forcefully reclaim an unverified or unhealthy process.
+
 **Operational caution:** stopping an owned stack disconnects all consumers, even ones that hot-attached from other projects. Check running turns before an explicit stop. The launcher does not yet query active turns or implement cross-client approval arbitration.
 
 ## Mobile Gateway
@@ -27,6 +29,12 @@ Gateway is a separate Node.js service on **127.0.0.1:48888**. It uses `gateway/`
 Configure a local ignored `.env` using `.env.example` with `MOBILE_PUBLIC_ORIGIN`, a random `MOBILE_APPROVAL_SECRET` of at least 24 characters, `CODEX_APP_SERVER_WS=ws://127.0.0.1:45789`, and `MOBILE_GATEWAY_PORT=48888`. Process environment overrides local file values. First build the Gateway with `npm run build:gateway`.
 
 The launcher never manages Tailscale Funnel itself. Configure a dedicated Funnel HTTPS route **only after** reviewing the Gateway security boundary, OAuth, and path permissions against a real host. Gateway startup health does not prove OAuth or end-to-end mobile operation.
+
+## Desktop single instance and service lifetime
+
+The optional `Start-Codex-Shared-Proxy.cmd` Desktop launcher shares `Global\\CodexSharedDesktop_SingleLaunch` with AOI. It serializes Desktop process detection, shared-stack attach/start, launch and verification. If a Desktop already exists, the new launch stops with exit code 20; it does not stop the existing Desktop or backend. If only the shared stack exists, it hot-attaches then launches one Desktop. A pre-existing Desktop with an absent/unhealthy shared stack is not automatically reconfigured.
+
+Closing Desktop does not close the independently managed shared stack or Mobile Gateway. Background AOI and mobile connections can continue. Stopping a stack explicitly from its owner still disconnects all clients; a Desktop exit alone is never permission to stop it. Live dual-launch, Windows Store launch identity, and real Desktop-to-shared-backend attachment are not yet verified.
 
 Gateway process ownership is separate from stack ownership. Duplicate starts reuse only this checkout's verified healthy Gateway. A Gateway owned by another checkout, or an unidentified process occupying 48888, is not adopted or terminated.
 
