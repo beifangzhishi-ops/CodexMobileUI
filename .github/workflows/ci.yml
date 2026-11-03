@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static-and-integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Type check, protocol tests, local gateway integration tests
+        run: npm run check
+      - name: Compile gateway
+        run: npm run build:gateway

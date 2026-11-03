@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.gateway.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": ["gateway/**/*.ts"],
+  "exclude": ["node_modules", "tests"]
+}

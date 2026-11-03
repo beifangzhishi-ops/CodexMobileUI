@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.gateway.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": ".tmp/testdist"
+  },
+  "include": ["gateway/**/*.ts", "src/core/protocol.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules"]
+}

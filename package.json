@@ -1,0 +1,39 @@
+{
+  "name": "codex-mobile-ui",
+  "version": "0.1.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "dev": "expo start --dev-client --localhost",
+    "android": "expo run:android",
+    "gateway": "node dist/gateway/main.js",
+    "build:gateway": "tsc -p tsconfig.gateway-build.json",
+    "probe:readonly": "node scripts/probe-readonly.mjs",
+    "probe:authenticated": "node scripts/probe-authenticated-relay.mjs",
+    "typecheck": "tsc --noEmit",
+    "typecheck:gateway": "tsc --noEmit -p tsconfig.gateway.json",
+    "test": "tsc -p tsconfig.tests.json && node .tmp/testdist/tests/all.js",
+    "check": "npm run typecheck && npm run typecheck:gateway && npm run test",
+    "export:android": "expo export --platform android"
+  },
+  "dependencies": {
+    "@assistant-ui/react-native": "^0.1.51",
+    "expo": "~58.0.22",
+    "expo-auth-session": "~58.0.16",
+    "expo-dev-client": "~58.0.18",
+    "expo-secure-store": "~58.0.2",
+    "expo-sqlite": "~58.0.15",
+    "expo-web-browser": "~58.0.7",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-enriched-markdown": "^1.1.1",
+    "react-native-safe-area-context": "~5.10.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.3.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^6.0.0"
+  }
+}
