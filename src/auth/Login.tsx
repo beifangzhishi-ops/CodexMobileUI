@@ -5,6 +5,7 @@ import * as WebBrowser from 'expo-web-browser';
 import type { Host } from '../core/host';
 import { CLIENT_ID, REDIRECT_URI, storeTokens } from './tokens';
 import { getAuthorizedCode } from './authorizationResult';
+import { palette } from '../ui/theme';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -105,18 +106,18 @@ export function OAuthLogin({
         onPress={() => { void authorize(); }}
         style={[styles.button, saving && styles.disabled]}
       >
-        {saving ? <ActivityIndicator color="#162337" /> : <Text style={styles.buttonText}>使用 OAuth 授权</Text>}
+        {saving ? <ActivityIndicator color={palette.canvas} /> : <Text style={styles.buttonText}>使用 OAuth 授权</Text>}
       </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  panel: { padding: 24, gap: 16 },
-  title: { fontSize: 22, fontWeight: '700', color: '#e9eef7' },
-  subtitle: { fontSize: 14, color: '#a5b4c6', lineHeight: 22 },
-  error: { color: '#ff9696' },
-  button: { borderRadius: 14, padding: 14, backgroundColor: '#b8d1f9', alignItems: 'center' },
-  buttonText: { color: '#13253b', fontWeight: '700' },
+  panel: { paddingVertical: 12, gap: 14 },
+  title: { fontSize: 18, fontWeight: '600', color: palette.text },
+  subtitle: { fontSize: 14, color: palette.subtle, lineHeight: 21 },
+  error: { color: '#ffa2a2', fontSize: 14 },
+  button: { borderRadius: 14, padding: 14, backgroundColor: palette.white, alignItems: 'center' },
+  buttonText: { color: palette.canvas, fontWeight: '700' },
   disabled: { opacity: 0.5 },
 });

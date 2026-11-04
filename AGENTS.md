@@ -1,12 +1,12 @@
 # CodexMobileUI repository rules
 
 ## Purpose and authority
-- Personal-use Android app for the actual shared Codex App Server of 6v/noha. Native Codex thread IDs and persisted turns remain authoritative. The Android SQLite DB stores caches, upload references and local unsent drafts; never create a competing chat state machine.
+- Personal-use Android app eventually targeting the shared Codex App Server. **Current Android home screen is a deliberately isolated visual-demo mode:** its in-memory sample conversations must never be synchronized into Codex or SQLite. When real Codex integration resumes, native Codex thread IDs and persisted turns remain authoritative. The existing SQLite DB remains reserved for real host records, caches and drafts.
 - Keep the project safe to publish openly. No secrets, real host URLs/IPs, passwords, OAuth tokens, signing keys, local user data or personal chat transcripts may enter source, docs, logs, fixtures, Git or release assets.
 - This is staged implementation. Every feature must be described as tested or untested accurately; do not present mock or compile-only behavior as a validated Android APK.
 
 ## Architecture and scope
-- Maintain strict modules for `src/core` protocol/transport, `src/session` synchronization and state, `src/storage` SQLite, `src/auth` PKCE/token storage, `src/ui` RN assistant-ui and rendering, `gateway` authentication and local Codex relay, and `tests`.
+- Maintain strict modules for `src/demo` memory-only sample threads, `src/core` protocol/transport, `src/session` future host synchronization, `src/storage` SQLite host records and real-thread caches, `src/auth` PKCE/token storage, `src/ui` RN assistant-ui and rendering, `gateway` authentication and local Codex relay, and `tests`. The demo must never call `useCodexSession`, `turn/start`, `thread/list`, or Gateway endpoints.
 - Never make the app depend on CCM/AOI; they are protocol references only. Do not modify CCM, AOI, the shared Codex proxy, or production authentication services without distinct user approval.
 - Treat network payloads, model text, file URIs and all external links as untrusted. Never execute remote HTML/script or expose arbitrary Windows paths. Use authenticated HTTPS/WSS with host/thread/resource checks for all new endpoints.
 - Preserve genuine App Server protocol and native messages; when live events are dropped, recover from authoritative `thread/read` rather than blindly replaying text. Correlate by thread/turn/item IDs and keep locally drafted text from silently auto-sending.
@@ -17,7 +17,7 @@
 ## Quality, tests, documentation
 - Before changes, read this AGENTS.md, then README.md and relevant module contracts.
 - Run `npm run check` and appropriate native/manual checks before marking work complete. Tests must never contact private real hosts or use actual OAuth secrets; use ephemeral loopback test servers.
-- On 6v, use **WCM for native Android builds and globally shared build-tool installation/verification**. Use **CCM for source changes, tests, docs and Git**. Do not start a second build while an existing CCM/WCM Gradle build is running.
+- Use **CCM** for source changes, tests, native Android builds, docs and Git. Do not start a second build while a Gradle build is running.
 - Windows Expo SDK 58 builds require official shared Android SDK CMake 3.31.6/Ninja 1.12.1 for long generated New Architecture paths. The checked-in `scripts/build-android-windows.ps1` selects it using a Windows-only Gradle override and checks JDK 17, Node 24, API 37, NDK 27 and signing. Do not overwrite SDK-managed binaries or pin Windows-only tooling for Linux builds.
 - For an independently installable test APK, build the Release variant **with embedded JavaScript**; Debug requires Metro. The current Release variant is signed with a debug/test key, not a production identity. Preserve caches by default; use `-RegenerateCMake` only when intentionally changing the native build graph.
 - Maintain README.md and AGENTS.md with actual current behavior. Keep architecture and roadmap docs consistent. Explicitly mark any feature that lacks real-host or Android-device validation.

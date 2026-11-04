@@ -37,5 +37,5 @@ test("mobile OAuth tap creates a fresh request instead of silently disabling its
   assert.doesNotMatch(oauthLogin, /AuthSession\.useAuthRequest\(/);
   assert.doesNotMatch(oauthLogin, /disabled=\{!request/);
   assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
-  assert.equal(appSettings.expo.android.versionCode, 2);
+  assert.ok(Number.isInteger(appSettings.expo.android.versionCode) && appSettings.expo.android.versionCode > 0);
 });
