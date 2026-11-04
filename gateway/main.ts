@@ -1,9 +1,13 @@
 import http from 'node:http';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createHttpHandler } from './http.js';
 import { OAuthStore } from './oauth.js';
 import { permitMobileRpcFrame } from './rpcPolicy.js';
+import {
+  classifyGatewayClient, classifyGatewayRoute, createGatewayJournal,
+  type GatewayTrace,
+} from './diagnostics.js';
 
 interface Config {
   publicOrigin: string;
@@ -34,12 +38,33 @@ function configuration(): Config {
 
 export function createGateway(config: Config) {
   const oauth = new OAuthStore(config.secret, config.redirectUri, config.stateFile);
-  const server = http.createServer(createHttpHandler(oauth, config.publicOrigin));
+  const journal = createGatewayJournal(resolve(dirname(config.stateFile), 'mobile-gateway-requests.jsonl'));
+  const server = http.createServer(createHttpHandler(oauth, config.publicOrigin, (event) => {
+    console.warn('[mobile-oauth] ' + new Date().toISOString() + ' ' + event);
+  }, journal.append));
   const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
+  let wsSequence = 0;
   server.on('upgrade', (req, socket, head) => {
+    const requestId = ++wsSequence;
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-    if (path !== '/connect') { socket.destroy(); return; }
+    const clientType = classifyGatewayClient(
+      typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
+    );
+    const fields = {
+      requestId, route: classifyGatewayRoute(req.url ?? '/'),
+      method: 'OTHER' as const, client: clientType,
+    };
+    const logWs = (event: GatewayTrace['event'], extra: Partial<GatewayTrace> = {}) => {
+      journal.append({ event, ...fields, ...extra });
+    };
+    logWs('ws.received');
+    if (path !== '/connect') {
+      logWs('ws.rejected');
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (client) => {
+      logWs('ws.upgraded');
       let upstream: WebSocket | undefined;
       let accessToken = '';
       let accepted = false;
@@ -49,19 +74,30 @@ export function createGateway(config: Config) {
       }, 30_000);
       client.on('message', (bytes, binary) => {
         if (!accepted) {
-          if (binary) { client.close(4001, 'invalid authentication'); return; }
+          if (binary) {
+            logWs('ws.authRejected');
+            client.close(4001, 'invalid authentication');
+            return;
+          }
           let credentials: { type?: string; accessToken?: string } = {};
           try { credentials = JSON.parse(bytes.toString()) as typeof credentials; }
-          catch { client.close(4001, 'invalid authentication'); return; }
+          catch {
+            logWs('ws.authRejected');
+            client.close(4001, 'invalid authentication');
+            return;
+          }
           if (credentials.type !== 'authenticate' || !oauth.verify(credentials.accessToken ?? '')) {
+            logWs('ws.authRejected');
             client.close(4001, 'unauthorized');
             return;
           }
           accepted = true;
+          logWs('ws.authAccepted');
           accessToken = credentials.accessToken ?? '';
           clearTimeout(authTimer);
           upstream = new WebSocket(config.upstream, { perMessageDeflate: false });
           upstream.once('open', () => {
+            logWs('ws.upstreamReady');
             if (client.readyState !== WebSocket.OPEN) return;
             client.send(JSON.stringify({ type: 'ready' }));
           });
@@ -69,7 +105,10 @@ export function createGateway(config: Config) {
             if (client.readyState === WebSocket.OPEN) client.send(message, { binary: isBinary });
           });
           upstream.on('close', () => client.close(1011, 'upstream closed'));
-          upstream.on('error', () => client.close(1011, 'upstream unavailable'));
+          upstream.on('error', () => {
+            logWs('ws.upstreamFailed');
+            client.close(1011, 'upstream unavailable');
+          });
           return;
         }
         if (!oauth.verify(accessToken)) {
@@ -90,7 +129,8 @@ export function createGateway(config: Config) {
         }
         if (upstream?.readyState === WebSocket.OPEN) upstream.send(bytes, { binary });
       });
-      client.on('close', () => {
+      client.on('close', (closeCode) => {
+        logWs('ws.closed', { closeCode });
         clearTimeout(authTimer);
         clearInterval(expiryPoll);
         if (upstream && upstream.readyState !== WebSocket.CLOSED) upstream.close();
@@ -102,9 +142,13 @@ export function createGateway(config: Config) {
   return {
     listen: () => new Promise<void>((accept, reject) => {
       server.once('error', reject);
-      server.listen(config.listenPort, '127.0.0.1', () => accept());
+      server.listen(config.listenPort, '127.0.0.1', () => {
+        journal.append({ event: 'gateway.started' });
+        accept();
+      });
     }),
     close: () => new Promise<void>((done) => {
+      journal.append({ event: 'gateway.stopped' });
       for (const socket of wss.clients) socket.terminate();
       wss.close(() => server.close(() => done()));
     }),

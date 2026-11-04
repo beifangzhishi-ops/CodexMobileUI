@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AuthorizationError, OAuthStore, PUBLIC_CLIENT_ID, type AuthorizationRequest } from './oauth.js';
+import { classifyGatewayClient, classifyGatewayRoute, type GatewayTrace } from './diagnostics.js';
 
 const htmlHeader = {
   'Content-Type': 'text/html; charset=utf-8',
@@ -88,18 +89,33 @@ function defaultAudit(event: OAuthAuditEvent): void {
 export function createHttpHandler(
   store: OAuthStore, baseUrl: string,
   audit: (event: OAuthAuditEvent) => void = defaultAudit,
+  trace?: (event: GatewayTrace) => void,
 ) {
+  let requestSequence = 0;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const requestId = ++requestSequence;
+    const method = req.method === 'GET' ? 'GET' : req.method === 'POST' ? 'POST' : 'OTHER';
+    const route = classifyGatewayRoute(req.url ?? '/');
+    const client = classifyGatewayClient(
+      typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
+    );
+    const started = Date.now();
+    const record = (event: GatewayTrace['event'], extra: Partial<GatewayTrace> = {}) => {
+      trace?.({ event, requestId, route, method, client, ...extra });
+    };
+    record('http.received');
+    res.once('finish', () => {
+      record('http.finished', { status: res.statusCode, elapsedMs: Date.now() - started });
+    });
+    res.once('close', () => {
+      if (!res.writableFinished) record('http.aborted', { elapsedMs: Date.now() - started });
+    });
+    const recordAudit = (event: OAuthAuditEvent) => {
+      audit(event);
+      record('oauth.decision', { decision: event });
+    };
     try {
       const url = new URL(req.url ?? '/', baseUrl);
-      if (url.pathname.startsWith('/oauth/')) {
-        // CCM-style request trace, intentionally excluding query, body and host.
-        const started = Date.now();
-        res.once('finish', () => {
-          const method = req.method === 'POST' ? 'POST' : req.method === 'GET' ? 'GET' : 'OTHER';
-          console.info(`[mobile-oauth] ${new Date().toISOString()} http ${method} ${url.pathname} status=${res.statusCode} elapsedMs=${Date.now() - started}`);
-        });
-      }
       if (req.method === 'GET' && url.pathname === '/health') {
         send(res, 200, { status: 'ok', name: 'codex-mobile-gateway' });
         return;
@@ -136,7 +152,7 @@ export function createHttpHandler(
         try {
           request = store.validateRequest(data);
         } catch (error) {
-          audit('authorization_invalid');
+          recordAudit('authorization_invalid');
           res.writeHead(400, htmlHeader);
           res.end(invalidPage);
           return;
@@ -151,12 +167,12 @@ export function createHttpHandler(
           location = store.approve(request, data.get('approval_secret') ?? '');
         } catch (error) {
           if (!(error instanceof AuthorizationError) || error.code !== 'access_denied') throw error;
-          audit('consent_denied');
+          recordAudit('consent_denied');
           res.writeHead(403, htmlHeader);
           res.end(consentPage(request, '授权密钥不正确，请核对当前电脑对应的密钥并重试。'));
           return;
         }
-        audit('consent_granted');
+        recordAudit('consent_granted');
         res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
         res.end();
         return;
@@ -171,7 +187,7 @@ export function createHttpHandler(
             ? store.refresh(data.get('refresh_token') ?? '')
             : null;
         if (!tokens) throw new AuthorizationError('unsupported_grant_type');
-        audit(grantType === 'refresh_token' ? 'oauth_token_refreshed' : 'oauth_token_issued');
+        recordAudit(grantType === 'refresh_token' ? 'oauth_token_refreshed' : 'oauth_token_issued');
         send(res, 200, tokens);
         return;
       }
@@ -186,7 +202,7 @@ export function createHttpHandler(
     } catch (error) {
       const code = error instanceof AuthorizationError ? error.code : 'server_error';
       if (code === 'invalid_grant' && (req.url ?? '').startsWith('/oauth/token')) {
-        audit('oauth_invalid_grant');
+        recordAudit('oauth_invalid_grant');
       }
       send(res, code === 'server_error' ? 500 : 400, { error: code });
     }

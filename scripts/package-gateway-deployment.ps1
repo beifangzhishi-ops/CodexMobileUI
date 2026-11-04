@@ -16,6 +16,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $scratch 'dist'),
 Copy-Item -LiteralPath $gateway -Destination (Join-Path $scratch 'dist\gateway') -Recurse
 Copy-Item -LiteralPath $ws -Destination (Join-Path $scratch 'node_modules\ws') -Recurse
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'gateway-only.ps1') -Destination (Join-Path $scratch 'scripts\gateway-only.ps1')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'show-gateway-requests.ps1') -Destination (Join-Path $scratch 'scripts\show-gateway-requests.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'init-gateway-env.cjs') -Destination (Join-Path $scratch 'scripts\init-gateway-env.cjs')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'probe-funnel-auth.cjs') -Destination (Join-Path $scratch 'scripts\probe-funnel-auth.cjs')
 @'
@@ -28,6 +29,10 @@ The mobile gateway listens only on localhost 48888. Tailscale Funnel HTTPS
 8443 forwards to it, never directly to the Codex App Server.
 Create a private .env with unique random secret; use .env.example as a guide.
 Start/stop/status: scripts/gateway-only.ps1 (no shared launcher operations).
+Gateway request diagnostics: scripts/show-gateway-requests.ps1.
+The private .state/mobile-gateway-requests.jsonl records request arrival,
+completion/abort, HTTP status, elapsed time, and coarse client type.
+Only allowlisted fields are stored; no OAuth values or request URLs.
 '@ | Set-Content -LiteralPath (Join-Path $scratch 'README.md') -Encoding utf8
 @'
 # Gateway deployment rules
@@ -37,6 +42,8 @@ primary CodexMobileUI repository on 6v, maintained through CCM.
 Never start, stop, adopt or modify the independent Codex App Server, AOI,
 Desktop or shared launcher. Never commit or share .env or .state files.
 Only this Gateway's own local port 48888 and Funnel 8443 are controlled here.
+Preserve the private .state/mobile-gateway-requests.jsonl log and rotations
+on updates. Read them with scripts/show-gateway-requests.ps1.
 '@ | Set-Content -LiteralPath (Join-Path $scratch 'AGENTS.md') -Encoding utf8
 @'
 MOBILE_PUBLIC_ORIGIN=https://your-node.example.ts.net:8443

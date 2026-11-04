@@ -7,4 +7,5 @@ import './storage.test';
 import './oauth.test';
 import './authorization-result.test';
 import './diagnostics.test';
+import './gateway-diagnostics.test';
 import './gateway.test';
