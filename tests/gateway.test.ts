@@ -2,14 +2,85 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
+import { createHttpHandler, type OAuthAuditEvent } from '../gateway/http';
 import { createGateway } from '../gateway/main';
-import { PUBLIC_CLIENT_ID } from '../gateway/oauth';
+import { OAuthStore, PUBLIC_CLIENT_ID } from '../gateway/oauth';
 
 const SECRET = 'gateway-test-only-secret-is-long-enough';
 const VERIFIER = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_~';
 const REDIRECT = 'codexmobileui://oauth';
+
+test('incorrect consent key preserves the form for bounded retry and logs only safe events', async () => {
+  const directory = resolve('.tmp', 'consent-retry-' + randomUUID());
+  mkdirSync(directory, { recursive: true });
+  const events: OAuthAuditEvent[] = [];
+  const store = new OAuthStore(SECRET, REDIRECT, resolve(directory, 'state.json'));
+  const httpServer = createServer(createHttpHandler(
+    store, 'https://gateway.example.test', (event) => events.push(event),
+  ));
+  await new Promise<void>((accept, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(0, '127.0.0.1', accept);
+  });
+  const address = httpServer.address();
+  if (!address || typeof address === 'string') throw new Error('test server did not listen');
+  const base = `http://127.0.0.1:${address.port}`;
+  const postConsent = (intent: string, secret: string) => fetch(base + '/oauth/approve', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ intent, approval_secret: secret }),
+  });
+  const getIntent = async (): Promise<string> => {
+    const params = new URLSearchParams({
+      client_id: PUBLIC_CLIENT_ID,
+      redirect_uri: REDIRECT,
+      response_type: 'code',
+      state: 'retry-test-csrf-12345678',
+      code_challenge_method: 'S256',
+      code_challenge: createHash('sha256').update(VERIFIER).digest('base64url'),
+    });
+    const consent = await fetch(base + '/oauth/authorize?' + params);
+    assert.equal(consent.status, 200);
+    const intent = (await consent.text()).match(/name="intent" value="([a-zA-Z0-9_-]+)"/)?.[1];
+    assert.ok(intent);
+    return intent;
+  };
+  try {
+    const firstIntent = await getIntent();
+    const denied = await postConsent(firstIntent, 'incorrect-private-value');
+    assert.equal(denied.status, 403);
+    const retryPage = await denied.text();
+    assert.match(retryPage, /<form method="POST" action="\/oauth\/approve">/);
+    assert.match(retryPage, /role="alert"/);
+    assert.ok(retryPage.includes(`name="intent" value="${firstIntent}"`));
+    assert.doesNotMatch(retryPage, /incorrect-private-value/);
+    assert.doesNotMatch(retryPage, new RegExp(SECRET));
+    assert.equal(events[0], 'approval_denied');
+    const accepted = await postConsent(firstIntent, SECRET);
+    assert.equal(accepted.status, 303);
+    assert.match(accepted.headers.get('location') ?? '', /^codexmobileui:\/\/oauth\?/);
+
+    const secondIntent = await getIntent();
+    for (let index = 0; index < 5; index++) {
+      const attempt = await postConsent(secondIntent, 'wrong');
+      assert.equal(attempt.status, 403);
+    }
+    const locked = await postConsent(secondIntent, SECRET);
+    assert.equal(locked.status, 400);
+    const expired = await locked.text();
+    assert.match(expired, /授权请求已失效/);
+    assert.doesNotMatch(expired, /<form method="POST"/);
+    assert.equal(events.at(-1), 'approval_expired');
+    assert.ok(events.every((event) => ['approval_denied', 'approval_expired'].includes(event)));
+  } finally {
+    await new Promise<void>((done) => httpServer.close(() => done()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async () => {
   const directory = resolve('.tmp', 'integration-' + randomUUID());
