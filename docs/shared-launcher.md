@@ -20,6 +20,8 @@ If the ports are busy but the stack cannot be identified as healthy, startup fai
 
 Desktop shared-start failures now preserve the detailed child-script output (action, line and exception) instead of showing only a generic exit code. The presence of an old PID file is not proof of ownership: inspect its process identity and port listeners before a manual stop. No launcher will forcefully reclaim an unverified or unhealthy process.
 
+The Desktop launcher streams child shared-stack output as it happens and probes the Clash TCP port with a 3-second connection timeout. Preparation, backend readiness and proxy readiness have distinct progress lines. These diagnostics require a new launcher invocation; modifying files does not affect an already running script.
+
 **Operational caution:** stopping an owned stack disconnects all consumers, even ones that hot-attached from other projects. Check running turns before an explicit stop. The launcher does not yet query active turns or implement cross-client approval arbitration.
 
 ## Mobile Gateway

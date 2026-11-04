@@ -21,6 +21,7 @@
 - For a Git repository, commit finished verified work. Push to existing configured remote only; never create or publish a public remote without separate authorization, never force push.
 
 ## Shared Windows launchers
+- Shared Desktop launchers must stream child shared-stack output as it arrives; TCP proxy probes must be bounded and should not leave misleading progress bars. Preserve distinct runtime/backend/proxy startup phase messages and synchronize those modules with AOI.
 - All shared Desktop launchers use `Global\\CodexSharedDesktop_SingleLaunch` to serialize detecting and starting the unique Desktop instance. If one Desktop exists, a second Desktop must not launch. Desktop closing does not stop the independently owned shared App Server or Gateway.
 - The independently bundled shared-stack scripts in `scripts/` must maintain protocol and behavior parity with the AOI launcher across 6v/noha. This is source synchronization only, never a runtime dependency on AOI.
 - A shared stack is owned only by the checkout that started its proxy and backend. Other checkouts may hot-attach after port, readiness, and process-identity checks; they must not adopt PID files, restart, or stop foreign processes.
