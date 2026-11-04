@@ -2,7 +2,7 @@
 
 An open-source-ready, **personal-use Android client** for the existing Codex App Server used by Codex Desktop. Chat sessions stay authoritative on the host PC; the phone caches messages and drafts.
 
-**Status (2026-11-04): Stage 1 implementation and local Android packaging verified; device integration is in progress.** The Expo/React Native app, per-host OAuth PKCE gateway, native chat UI, SQLite cache and Codex protocol adapter are implemented. Both real shared App Servers passed read-only `thread/list` and `thread/read`, and the primary host passed an authenticated localhost OAuth-to-gateway relay probe. On 6v, WCM built and verified ARM64 **Debug and standalone Release test APKs**, including APK signing and an embedded Release JS bundle. **Neither APK has been installed on an Android phone yet; mobile OAuth, streaming chat and multi-client behavior remain unverified.** The Release test APK uses a debug signing key and is not production signed. The Gateway is not publicly exposed.
+**Status (2026-11-04): Stage 1 implementation, Android packaging and both host Funnel gateways verified; device interaction remains in progress.** The Expo/React Native app, per-host OAuth PKCE gateway, native chat UI, SQLite cache and Codex protocol adapter are implemented. On 6v, WCM built and verified ARM64 Debug and standalone Release test APKs; the owner reports installing the app on Android. The gateway on **each host** is reachable through independent public HTTPS Tailscale Funnel on port 8443, forwarding only to loopback 48888. Both hosts passed a real **Funnel HTTPS OAuth PKCE → WSS authenticated thread/list and thread/read probe**, with test credentials revoked afterwards. The gateway enforces an explicit RPC method allowlist. **Android browser callback, phone UI state, live mobile turns and multi-client behavior still require device validation.** The Release test APK uses a debug signing key and is not production signed.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ The app does not connect to CCM, AOI, CMP, or ChatGPT Desktop. Each target compu
 
 ## Not implemented yet
 
-The following are **planned**, not yet supported or device-validated: mobile OAuth and authenticated live chat across both hosts; file upload/download/preview (5 MiB/file with individual progress); original mobile URI+SHA-256 attachment tracking; native local notifications; approval and user-question cards; model/effort, permissions and Plan Mode controls; search/unread; global/project AGENTS.md editing; usage/compact state; historical-turn fork; Worktree B, Goal and auxiliary controls. GFM Markdown and native math rendering need tests on a physical Android phone and with long transcripts.
+The following are **planned**, not yet supported or device-validated: Android OAuth browser callback and authenticated phone chat across both hosts; file upload/download/preview (5 MiB/file with individual progress); original mobile URI+SHA-256 attachment tracking; native local notifications; approval and user-question cards; model/effort, permissions and Plan Mode controls; search/unread; global/project AGENTS.md editing; usage/compact state; historical-turn fork; Worktree B, Goal and auxiliary controls. GFM Markdown and native math rendering need tests on a physical Android phone and with long transcripts.
 
 ## Development on Windows
 
@@ -53,18 +53,18 @@ npm.cmd run check
 npm.cmd run build:gateway
 ```
 
-**Gateway (each host independently):** configure the environment variables in [`.env.example`](.env.example) without committing their values. Provide a long random `MOBILE_APPROVAL_SECRET`, the exact externally accessible `MOBILE_PUBLIC_ORIGIN`, and the localhost URL of the existing shared Codex App Server proxy. Run the compiled gateway on localhost:
+**Gateway (each host independently):** the owner-authorized Funnel deployment is now live on both host computers. See [docs/funnel-deployment.md](docs/funnel-deployment.md) for the operational steps and dedicated port layout. The primary host runs the built gateway directly; the second host uses a separately packaged, compiled gateway runtime. Both use independent 256-bit host-specific OAuth approval secrets in private `.env` files. Never commit or share them. To rebuild a gateway after source changes use `npm run build:gateway`, then redeploy with the package script.
 
 ```powershell
 Set-Location -LiteralPath 'C:\path\to\CodexMobileUI'
-$env:MOBILE_PUBLIC_ORIGIN = 'https://your-host.your-tailnet.ts.net'
+$env:MOBILE_PUBLIC_ORIGIN = 'https://your-host.your-tailnet.ts.net:8443'
 $env:MOBILE_APPROVAL_SECRET = '<your-local-random-secret>'
 $env:MOBILE_REDIRECT_URI = 'codexmobileui://oauth'
 $env:CODEX_APP_SERVER_WS = 'ws://127.0.0.1:45789'
 node.exe 'C:\path\to\CodexMobileUI\dist\gateway\main.js'
 ```
 
-The gateway binds **127.0.0.1:48888 only**; configure a dedicated Funnel route after verifying authentication. Do **not** point Funnel directly to the shared Codex service. Do not expose it until the authorization and file/path boundaries have been reviewed against the actual environment. The example above is documentation, not a configured endpoint.
+The gateway binds **127.0.0.1:48888 only**; the two active mobile Funnel routes use HTTPS **8443**, preserving other existing Funnel services. Never point Funnel directly to the shared Codex service. The gateway explicitly restricts native RPC methods, but a permitted `turn/start` may still run privileged host-side Codex tools. The command block above is generic documentation, not a substitute for each host's ignored, generated configuration.
 
 The user adds each computer's HTTPS origin from the Android app, opens a system-browser OAuth PKCE consent page, enters the computer's local authorization secret, and returns to the app. Tokens stay in Android SecureStore. Local state stays in the phone's SQLite database; no app-provided access to other Windows files is enabled in stage 1.
 

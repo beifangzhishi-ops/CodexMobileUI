@@ -10,6 +10,7 @@
 - [x] Module checks, pure protocol tests and OAuth/relay loopback tests.
 - [x] Android development-mode JS bundle exported by Metro (not an APK).
 - [x] Read-only `initialize`, `thread/list`, and `thread/read` verified against both live shared App Servers (primary and second host). Sampled 6v message parts are all readable by the current text parser.
+- [x] Owner-approved public Tailscale Funnel on dedicated 8443 for both hosts, preserving the primary host's other Funnel routes; independent 256-bit secret per gateway. Real public HTTPS PKCE + authenticated WSS `thread/list` and `thread/read` tests passed on both hosts, then test credentials revoked. Non-mobile privileged RPC methods are rejected at Gateway before forwarding.
 - [x] Temporary local OAuth PKCE → authenticated gateway WSS → real 6v shared Codex `thread/list` verified with no persisted gateway setup.
 - [ ] **Mobile OAuth through each host's authenticated gateway** verified on an installed Android device. Native thread reads through the phone are separate from the completed server-side read-only probes.
 - [x] Android ARM64 Debug APK and standalone Release test APK built with WCM; Release `assembleRelease` succeeded (605 tasks). Both were v2-signed and zipaligned; the Release APK contains a 2,952,600-byte JS bundle and 20 ARM64 native libraries. Tests currently use the project's debug signing key.

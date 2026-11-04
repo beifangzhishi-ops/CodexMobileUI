@@ -2,6 +2,7 @@
 // where Node's --test subprocess runner cannot spawn workers.
 import './protocol.test';
 import './thread-api.test';
+import './rpc-policy.test';
 import './storage.test';
 import './oauth.test';
 import './gateway.test';

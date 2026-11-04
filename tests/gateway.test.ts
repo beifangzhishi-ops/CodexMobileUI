@@ -88,6 +88,19 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
     });
     assert.deepEqual(result.result, { success: true });
     assert.match(upstreamMessage, /"method":"initialize"/);
+    const denied = await new Promise<Record<string, unknown>>((accept, reject) => {
+      const timeout = setTimeout(() => reject(new Error('blocked RPC timed out')), 2500);
+      ws.on('message', (bytes) => {
+        const data = JSON.parse(bytes.toString()) as Record<string, unknown>;
+        if (data.id === 18) {
+          clearTimeout(timeout);
+          accept(data);
+        }
+      });
+      ws.send(JSON.stringify({ id: 18, method: 'config/set', params: { dangerous: true } }));
+    });
+    assert.equal((denied.error as { code: number }).code, -32601);
+    assert.match(upstreamMessage, /"method":"initialize"/, 'forbidden RPC never reaches Codex');
   } catch (error) {
     console.error('Gateway integration failure:', error);
     throw error;

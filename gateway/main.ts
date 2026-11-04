@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createHttpHandler } from './http.js';
 import { OAuthStore } from './oauth.js';
+import { permitMobileRpcFrame } from './rpcPolicy.js';
 
 interface Config {
   publicOrigin: string;
@@ -48,6 +49,7 @@ export function createGateway(config: Config) {
       }, 30_000);
       client.on('message', (bytes, binary) => {
         if (!accepted) {
+          if (binary) { client.close(4001, 'invalid authentication'); return; }
           let credentials: { type?: string; accessToken?: string } = {};
           try { credentials = JSON.parse(bytes.toString()) as typeof credentials; }
           catch { client.close(4001, 'invalid authentication'); return; }
@@ -72,6 +74,18 @@ export function createGateway(config: Config) {
         }
         if (!oauth.verify(accessToken)) {
           client.close(4001, 'token expired');
+          return;
+        }
+        const frame = permitMobileRpcFrame(bytes.toString(), binary);
+        if (!frame.allowed) {
+          if (frame.id !== undefined) {
+            client.send(JSON.stringify({
+              id: frame.id,
+              error: { code: -32601, message: 'Method not permitted by mobile gateway' },
+            }));
+          } else {
+            client.close(1008, 'unsupported mobile message');
+          }
           return;
         }
         if (upstream?.readyState === WebSocket.OPEN) upstream.send(bytes, { binary });

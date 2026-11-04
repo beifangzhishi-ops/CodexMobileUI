@@ -23,7 +23,7 @@ The thread list follows native pagination with cursor-loop detection. Unrecogniz
 - Public Funnel routes must terminate at the **authenticated** gateway, not at the app server or model proxy.
 - OAuth credentials apply only to the selected host and do not constitute authority to read arbitrary filesystem paths.
 - Each future endpoint needs host/thread/cwd-level authorization, path canonicalization, upload size enforcement and event correlation.
-- The gateway currently proxies native RPC messages from the authorized owner without a per-method allowlist. This is a personal full-trust capability and must be reviewed before publicly exposing any route; there is no public registration or least-privilege multi-user separation.
+- The gateway now enforces an explicit allowlist for native RPC requests needed by the Stage 1 mobile app. Unknown privileged requests are rejected before reaching the shared App Server. Mobile turn creation can nevertheless cause privileged host-side Codex tool execution, so owner OAuth approval must be treated as highly privileged; there is no public signup or multi-user separation.
 - OAuth approval is local-host-specific; code challenge and redirect URI are exact-match; codes are short-lived and one-time; tokens are stored as hashes on disk.
 - Access/refresh tokens must never occur in URL parameters, logs, Git or reports. Consent secret is local environment input, not committed.
 

@@ -4,7 +4,7 @@ This repository has **no public account registration** and no hosted access serv
 
 Do not place real host names or Funnel URLs, OAuth approval secrets, refresh tokens, access tokens, Code/Codex/CMP credentials, Android signing keys, device backups, private transcripts or Windows file paths into commits or issue reports.
 
-The HTTP gateway listens on loopback only. Its current proxy relays native Codex RPC methods, including potentially powerful filesystem and tool operations, after successful OAuth authentication. **This is highly privileged access. Do not expose the gateway until you have tested and accepted its permission boundary.**
+The HTTP gateway listens on loopback only, behind an independently configured HTTPS Tailscale Funnel on port 8443. Funnel is public to the internet, but unauthenticated WebSocket requests cannot reach the backend. After host-secret approval and OAuth PKCE, an explicit native RPC allowlist permits only the current mobile UI operations: initialize, thread listing/reading/resuming/creation and turn creation. All other client RPC methods are rejected before upstream forwarding. **turn/start can still cause Codex to run privileged tools using the host's own permissions.** Treat a successfully authorized phone as highly privileged. Do not share its approval secret or refresh tokens.
 
 Access-token expiry, one-time PKCE codes, refresh rotation and local token revocation are implemented. These measures do **not** replace endpoint authorization for future file APIs. Recheck filesystem paths, content types, thread scope and size limits on the host.
 
