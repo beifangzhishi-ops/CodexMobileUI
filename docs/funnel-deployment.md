@@ -24,13 +24,41 @@ attempt's 7.8-second window; this does not establish which host the user chose
 on the phone. The updated noha deployment ZIP is prepared but has not yet
 been installed. Never assume a not-yet-deployed host has the newest code.
 
-The primary 6v host runs the source checkout's compiled Gateway. The noha
-host runs a small deployment-only bundle produced by
-scripts/package-gateway-deployment.ps1, under the user's normal projects
-directory. That bundle includes its own AGENTS.md, README.md, built Gateway,
-runtime WebSocket dependency and gateway-only scripts, but no secrets.
-Send it to noha via Tailscale Taildrop and preserve the existing .env/.state
-on subsequent updates.
+**Required two-host repository layout:** 6v uses
+`C:\\Users\\Songjx\\Documents\\ChatGPT\\CodexMobileUI`, and noha uses
+`C:\\Users\\noha\\Documents\\ChatGPT\\CodexMobileUI`. Both must have the
+same complete Git repository and checked-out commit, build their own Gateway
+from source, and maintain independent private `.env` and `.state` files.
+The former runtime-only noha directory
+`C:\\Users\\noha\\Documents\\AAAVitalFile\\CodexMobileGateway` remains
+active until a verified migration. Preserve the existing noha OAuth secrets,
+persisted tokens, and Funnel route, and stop only the Gateway process owned
+by that old directory when cutting over. Never touch the shared App Server,
+Desktop or AOI. Remove the superseded runtime-only deployment after successful
+cutover; do not retain an inactive compatibility launcher.
+
+**Funnel verification (2026-11-05):** CCM's built-in Tailscale exemption was
+confirmed on **both** computers without using Full Access. Each invocation
+contained exactly one standalone Tailscale CLI command, exited 0, and reported
+`trusted_tailscale: true`. Both computers have independent public Funnel
+port 8443 entries routing to their own loopback 48888 Gateway. Independent
+cross-machine HTTPS health requests also returned 200 with the expected Gateway
+health response (owner-verified). The noha Gateway is already running as a
+separate Node service **without a CodexMobileUI source repository**; the newest
+diagnostic logging deployment package is not yet installed there. Preserve that
+distinction: missing source checkout does not mean no deployed Gateway.
+
+When checking Tailscale through CCM, put **only** the following single command
+in its own exec_command call on each Worker:
+
+    tailscale.exe funnel status
+
+Never combine it with `tailscale.exe status`, `tailscale.exe serve status`,
+PowerShell output statements, pipes, or other shell commands in the same
+exec_command. The trusted whitelist is command-shape-sensitive; compound calls
+can return a Windows Tailscale local-service pipe access denial despite healthy
+Funnel configuration. Require `trusted_tailscale: true` and exit code 0.
+Do not use a timed CCM Full Access grant to bypass this command-shape rule.
 
 ## Phone setup
 
