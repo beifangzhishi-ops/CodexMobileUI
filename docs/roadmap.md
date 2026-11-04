@@ -1,5 +1,7 @@
 # Staged implementation and acceptance
 
+**Android keyboard regression (mainline 0.1.3 / versionCode 5):** Add explicit `KeyboardAvoidingView` `behavior="padding"` around the real-chat transcript and composer while retaining Expo Android `resize` settings. This is a source fix plus an automated structural check; only an actual Redmi K80 installation can verify the composer moves above the keyboard, multiline editing, and scroll positioning.
+
 **Scope frozen for first release**. Add capabilities in isolated modules and validate each stage; do not make low-frequency Worktree features a blocker.
 
 ## Stage 1 — real Codex chat loop

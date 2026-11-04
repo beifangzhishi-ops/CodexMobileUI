@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Linking, Pressable, StyleSheet,
+  ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Pressable, StyleSheet,
   Text, TextInput, View,
 } from 'react-native';
 import {
@@ -144,7 +144,8 @@ export function ChatThread({ host, session }: { host: Host; session: CodexSessio
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadPrimitive.Root style={styles.thread}>
+      <KeyboardAvoidingView style={styles.keyboardAvoiding} behavior="padding">
+        <ThreadPrimitive.Root style={styles.thread}>
         <ThreadPrimitive.MessagesFlatList
           style={styles.list}
           contentContainerStyle={styles.listContent}
@@ -158,12 +159,14 @@ export function ChatThread({ host, session }: { host: Host; session: CodexSessio
           {({ message }) => <ChatBubble user={message.role === 'user'} />}
         </ThreadPrimitive.MessagesFlatList>
         <Composer host={host} session={session} />
-      </ThreadPrimitive.Root>
+        </ThreadPrimitive.Root>
+      </KeyboardAvoidingView>
     </AssistantRuntimeProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardAvoiding: { flex: 1 },
   thread: { flex: 1, backgroundColor: '#111820' },
   list: { flex: 1 },
   listContent: { paddingHorizontal: 12, paddingVertical: 18, gap: 16, flexGrow: 1 },

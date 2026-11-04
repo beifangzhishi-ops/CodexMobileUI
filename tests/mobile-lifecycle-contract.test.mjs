@@ -8,12 +8,20 @@ const sharedStop = readFileSync(new URL("../shared-stop.cmd", import.meta.url), 
 const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
 const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
 const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+const chatThread = readFileSync(new URL("../src/ui/ChatThread.tsx", import.meta.url), "utf8");
 const diagnosticsPanel = readFileSync(new URL("../src/diagnostics/DiagnosticsPanel.tsx", import.meta.url), "utf8");
 const diagnosticsExport = readFileSync(new URL("../src/diagnostics/export.ts", import.meta.url), "utf8");
 const diagnosticsJournal = readFileSync(new URL("../src/diagnostics/journal.ts", import.meta.url), "utf8");
 const packageSettings = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
 const androidStableBuild = readFileSync(new URL("../scripts/build-android-stable.ps1", import.meta.url), "utf8");
+
+test("Android real-chat composer stays in a keyboard-avoiding layout", () => {
+  assert.match(chatThread, /KeyboardAvoidingView style=\{styles\.keyboardAvoiding\} behavior="padding"/);
+  assert.match(chatThread, /<KeyboardAvoidingView[\s\S]*<ThreadPrimitive\.MessagesFlatList[\s\S]*<Composer host=\{host\} session=\{session\} \/>[\s\S]*<\/KeyboardAvoidingView>/);
+  assert.match(chatThread, /keyboardAvoiding: \{ flex: 1 \}/);
+  assert.equal(appSettings.expo.android.softwareKeyboardLayoutMode, "resize");
+});
 
 test("starting MobileUI ensures or hot-attaches to the shared App Server before Gateway startup", () => {
   assert.match(launcher, /Invoke-SharedStack "start"\s*\r?\n\s*Start-Gateway/);
@@ -44,7 +52,7 @@ test("mobile OAuth tap creates a fresh request instead of silently disabling its
   assert.doesNotMatch(oauthLogin, /AuthSession\.useAuthRequest\(/);
   assert.doesNotMatch(oauthLogin, /disabled=\{!request/);
   assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
-  assert.equal(appSettings.expo.android.versionCode, 3);
+  assert.ok(Number.isInteger(appSettings.expo.android.versionCode) && appSettings.expo.android.versionCode > 3);
 });
 
 test("Android version metadata is consistent across Expo, npm and lockfile", () => {
