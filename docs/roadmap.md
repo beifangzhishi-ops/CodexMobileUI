@@ -13,6 +13,7 @@
 - [x] Temporary local OAuth PKCE → authenticated gateway WSS → real 6v shared Codex `thread/list` verified with no persisted gateway setup.
 - [ ] **Mobile OAuth through each host's authenticated gateway** verified on an installed Android device. Native thread reads through the phone are separate from the completed server-side read-only probes.
 - [ ] Android APK built/signed, installed on an actual device; OAuth browser callback and secure token storage proven.
+  - 2026-11-04 restricted-CCM build attempt: global JDK/SDK plus project-local `.tmp/gradle-user` and `.tmp/build-temp` got through Expo/React Native Kotlin, Java, resources and DEX tasks to ARM64 CMake/Ninja. Kotlin daemon and Android analytics paths outside the workspace raised permission warnings; Kotlin fallback compilation continued. CMake/Ninja then made no further observable progress for several minutes, so **only the identified build processes were terminated**; the SDK, Gradle caches and intermediate outputs remain. No APK was produced. Retry with a permitted full-access native-build environment and capture task-level CMake diagnostics, without restarting shared App Servers.
 - [ ] Review/resolve remaining moderate Expo CLI/build-chain advisories before a public-facing release or production Funnel route.
 - [ ] Actual thread read/send/streaming/reconnect validated alongside Codex Desktop and AOI.
 - [ ] Native Markdown GFM and LaTeX verified on device, including long transcripts.
