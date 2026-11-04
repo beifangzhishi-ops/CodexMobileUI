@@ -16,6 +16,7 @@
 ## Quality, tests, documentation
 - Before changes, read this AGENTS.md, then README.md and relevant module contracts.
 - Run `npm run check` and appropriate native/manual checks before marking work complete. Tests must never contact private real hosts or use actual OAuth secrets; use ephemeral loopback test servers.
+- Native CMake/Ninja build tests must distinguish toolchain errors from CCM restricted-runner child-process stalls. Compare direct CMake with Ninja under a minimal project-local test, stop only test-owned hanging processes, and request explicit CCM full-access approval before rerunning the actual privileged build. Never alter shared App Servers or vendor C++ solely to work around an unverified sandbox symptom.
 - Maintain README.md and AGENTS.md with actual current behavior. Keep architecture and roadmap docs consistent. Explicitly mark any feature that lacks real-host or Android-device validation.
 - Use stable Android package identity `dev.codexmobileui.app`. Keystores, credentials, local runtime state and per-machine configuration are not tracked.
 - For a Git repository, commit finished verified work. Push to existing configured remote only; never create or publish a public remote without separate authorization, never force push.
