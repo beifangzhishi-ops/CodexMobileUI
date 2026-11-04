@@ -1,6 +1,8 @@
-# Build an ARM64 Android debug APK on Windows with a long-path-aware Ninja.
+# Build a signed ARM64 Android test APK on Windows with a long-path-aware Ninja.
 # Uses the per-user shared Android SDK; does not touch any Codex shared service.
 param(
+    [ValidateSet('Debug', 'Release')]
+    [string]$Variant = 'Release',
     [switch]$UseWorkspaceCache,
     [switch]$RegenerateCMake,
     [switch]$CheckOnly
@@ -36,11 +38,34 @@ $env:JAVA_HOME = $javaHome
 $env:ANDROID_HOME = $sdkRoot
 $env:ANDROID_SDK_ROOT = $sdkRoot
 $env:Path = (Join-Path $javaHome 'bin') + ';' + $env:Path
+if (-not (Test-Path -LiteralPath (Join-Path $javaHome 'bin\javac.exe'))) {
+    throw "JDK 17 is not installed at $javaHome"
+}
+$jdkVersion = (& (Join-Path $javaHome 'bin\javac.exe') -version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $jdkVersion -notmatch '^javac 17\.') {
+    throw "Expected JDK 17 for React Native, got: $jdkVersion"
+}
+$nodeVersion = (& node.exe --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v24\.') {
+    throw "Expected Node.js 24, got: $nodeVersion"
+}
+foreach ($relative in @(
+    'platforms\android-37.0\android.jar',
+    'build-tools\37.0.0\apksigner.bat',
+    'ndk\27.1.12297006\source.properties'
+)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot $relative))) {
+        throw "Required shared Android SDK component is missing: $relative"
+    }
+}
 if ($UseWorkspaceCache) {
     $env:GRADLE_USER_HOME = Join-Path $projectRoot '.tmp\gradle-user'
     $env:TEMP = Join-Path $projectRoot '.tmp\build-temp'
     $env:TMP = $env:TEMP
     New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $env:TEMP | Out-Null
+} else {
+    $sharedGradle = [Environment]::GetEnvironmentVariable('GRADLE_USER_HOME', 'User')
+    if ($sharedGradle) { $env:GRADLE_USER_HOME = $sharedGradle }
 }
 
 $gradlew = Join-Path $projectRoot 'android\gradlew.bat'
@@ -77,8 +102,22 @@ if ($UseWorkspaceCache) {
 }
 if ($CheckOnly) {
     Write-Host "Verified Windows Android build prerequisites: CMake 3.31.6, Ninja $version and Gradle at $gradleCommand"
+    Write-Host "Verified $jdkVersion, Node.js $nodeVersion, API 37, Build Tools 37, and NDK 27.1"
+    Write-Host "Shared Gradle cache: $env:GRADLE_USER_HOME"
+    Write-Host "Selected test APK variant: $Variant"
     return
 }
+$lockFile = Join-Path $projectRoot '.tmp\android-build.lock'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lockFile) | Out-Null
+try {
+    $lockHandle = [System.IO.File]::Open(
+        $lockFile, [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None
+    )
+} catch {
+    throw 'Another CodexMobileUI Android build may be using this directory. Do not start two builds concurrently.'
+}
+try {
 $androidRoot = Join-Path $projectRoot 'android'
 if ($RegenerateCMake) {
     # Reset ONLY generated app-side native build state when switching away
@@ -93,15 +132,40 @@ if ($RegenerateCMake) {
 }
 Push-Location $androidRoot
 try {
-    & $gradleCommand ':app:assembleDebug' '--console=plain' '--no-daemon' '--max-workers=2' `
+    & $gradleCommand ":app:assemble$Variant" '--console=plain' '--no-daemon' '--max-workers=2' `
         '-PreactNativeArchitectures=arm64-v8a' `
         '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6'
     if ($LASTEXITCODE -ne 0) { throw "Android Gradle build failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
 }
-$apk = Join-Path $projectRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
+$variantLower = $Variant.ToLowerInvariant()
+$apk = Join-Path $projectRoot "android\app\build\outputs\apk\$variantLower\app-$variantLower.apk"
 if (-not (Test-Path -LiteralPath $apk)) {
-    throw 'Gradle reported success but no app-debug.apk exists.'
+    throw "Gradle reported success but no $Variant APK exists at $apk"
+}
+$apksigner = Join-Path $sdkRoot 'build-tools\37.0.0\apksigner.bat'
+if (-not (Test-Path -LiteralPath $apksigner)) {
+    throw "APK signing verifier is missing: $apksigner"
+}
+& $apksigner verify --verbose $apk
+if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed for $apk" }
+if ($Variant -eq 'Release') {
+    # Debug builds intentionally omit the JS bundle, but a Release test APK
+    # must run without Expo Metro or a development server.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($apk)
+    try {
+        $bundled = @($archive.Entries | Where-Object { $_.FullName -eq 'assets/index.android.bundle' })
+        if (-not $bundled.Count -or $bundled[0].Length -le 0) {
+            throw 'Release APK does not contain the embedded JavaScript/Hermes bundle.'
+        }
+        Write-Host "Verified self-contained Release JS: $($bundled[0].Length) bytes"
+    } finally { $archive.Dispose() }
+    Write-Warning 'This test Release APK uses the current project debug signing key. It is NOT a production-signed release.'
 }
 Get-Item -LiteralPath $apk | Select-Object FullName,Length,LastWriteTime
+Get-FileHash -LiteralPath $apk -Algorithm SHA256 | Select-Object Hash
+} finally {
+    $lockHandle.Dispose()
+}
