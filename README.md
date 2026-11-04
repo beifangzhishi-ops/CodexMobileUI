@@ -37,6 +37,8 @@ The following are **planned**, not supported by the current build: verified real
 
 **Shared launchers (source added; live Windows behavior unverified):** `Start-CodexMobile.cmd` hot-attaches to an already healthy localhost 45789/45790 shared stack or starts an independently owned copy, then launches this checkout's authenticated Gateway on localhost 48888. `Stop-CodexMobile.cmd` stops only owned processes. The AOI-style Desktop entry `Start-Codex-Shared-Proxy.cmd` and independent `shared-start.cmd` / `shared-stop.cmd` are also included. Read [docs/shared-launcher.md](docs/shared-launcher.md) before use, especially its ownership and network-exposure cautions. The scripts do not call AOI at runtime.
 
+The shared backend is sourced only from the newest complete Codex Desktop runtime; the independent runtime copy is a deployment cache, not a separate kernel version or alternate source.
+
 Requires Node.js 24 and npm. A reusable Windows Android build setup is provided in [docs/windows-android-toolchain.md](docs/windows-android-toolchain.md) and [scripts/setup-android-toolchain.ps1](scripts/setup-android-toolchain.ps1): JDK 17, shared API 36/37 SDK platforms, Build Tools, NDK, CMake, adb and a shared Gradle cache. The tools were installed successfully on the primary Windows development host on 2026-11-04. Android Studio GUI and an emulator are optional for APK packaging. Expo Go alone cannot validate all native dependencies; use a **development build**.
 
 Use absolute paths for commands, substituting the checkout location:

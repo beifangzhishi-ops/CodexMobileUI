@@ -4,6 +4,8 @@ Status: source integration and local automated checks only. No live multi-launch
 
 ## Components
 
+The shared backend kernel has exactly one automatic source family: the newest complete Codex Desktop runtime discovered from the Desktop-managed local cache or the installed Microsoft Store Codex package (ranked by executable modification time). Other installed IDE/CLI runtimes are not considered. A matching version is copied into the checkout's fingerprinted `.runtime/shared` directory for stable independent execution. An already healthy shared App Server remains attached even if a newer Desktop runtime is available, until its owner explicitly stops it.
+
 - `Start-CodexMobile.cmd` starts the shared stack if absent, or hot-attaches to a verified running stack, then starts the local authenticated mobile Gateway.
 - `Stop-CodexMobile.cmd` stops only the Gateway started by this checkout and any shared-stack processes launched by this checkout.
 - `Start-Codex-Shared-Proxy.cmd` retains the AOI-style Desktop + Clash + shared-stack launch entry.
