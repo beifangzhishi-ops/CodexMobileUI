@@ -27,6 +27,7 @@
 
 ## Stage 3 — daily mobile features
 - Host-independent full search and unread; task completion and approval local notifications via Funnel when the app process is running.
+- `@` cross-conversation references (planned, not implemented): search and select other Codex threads from the current host in the composer, preserve their native `threadId` references instead of copying full histories, and support multiple references. Confirm the active App Server's supported read/search capabilities before implementation; fetch referenced content on demand with bounded, paginated long-thread handling. Keep references host-scoped, enforce Gateway RPC allowlisting and authorization, and test unsupported capabilities, missing threads and stale references on Android.
 - Per-file 5 MiB upload limit, unrestricted files per message, independent progress, original Android URI+SHA-256 tracking, CCM-like preview/download **without CCM dependency**.
 - Full and per-project AGENTS.md editor with concurrent edit protection; multi-host reliability and extensive offline recovery.
 

@@ -36,7 +36,7 @@ The app does not connect to CCM, AOI, CMP, or ChatGPT Desktop. Each target compu
 
 ## Not implemented yet
 
-The following are **planned**, not yet supported or device-validated: Android OAuth browser callback and authenticated phone chat across both hosts; file upload/download/preview (5 MiB/file with individual progress); original mobile URI+SHA-256 attachment tracking; native local notifications; approval and user-question cards; model/effort, permissions and Plan Mode controls; search/unread; global/project AGENTS.md editing; usage/compact state; historical-turn fork; Worktree B, Goal and auxiliary controls. GFM Markdown and native math rendering need tests on a physical Android phone and with long transcripts.
+The following are **planned**, not yet supported or device-validated: Android OAuth browser callback and authenticated phone chat across both hosts; file upload/download/preview (5 MiB/file with individual progress); original mobile URI+SHA-256 attachment tracking; native local notifications; approval and user-question cards; model/effort, permissions and Plan Mode controls; search/unread; Stage 3 composer `@` references to other Codex threads (host-scoped picker and on-demand reads, not full-history copying); global/project AGENTS.md editing; usage/compact state; historical-turn fork; Worktree B, Goal and auxiliary controls. GFM Markdown and native math rendering need tests on a physical Android phone and with long transcripts. See [docs/roadmap.md](docs/roadmap.md) for the cross-conversation reference acceptance scope.
 
 ## Development on Windows
 

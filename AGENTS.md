@@ -11,6 +11,7 @@
 - Treat network payloads, model text, file URIs and all external links as untrusted. Never execute remote HTML/script or expose arbitrary Windows paths. Use authenticated HTTPS/WSS with host/thread/resource checks for all new endpoints.
 - Preserve genuine App Server protocol and native messages; when live events are dropped, recover from authoritative `thread/read` rather than blindly replaying text. Correlate by thread/turn/item IDs and keep locally drafted text from silently auto-sending.
 - Keep native history pagination and stream/cache reconciliation in the core modules, not inside Android screen components. Treat malformed server snapshots as a read failure, not a request to clear SQLite; never persist in-progress assistant text as a completed message. Serialize writes of drafts per host/thread.
+- Stage 3 cross-conversation `@` references must use authoritative, host-scoped Codex thread IDs rather than embedding copied histories or creating duplicate conversation state. Verify the active App Server's actual reference/read/search capabilities before implementing the picker or agent integration; support bounded long-thread reads and explicit unavailable/stale-reference errors. Any new Gateway RPC requires authorization checks, allowlisting and tests before Funnel exposure.
 - Review backwards compatibility and any changes to settled architecture with the user before implementing. Remove superseded names and dead files; do not keep inactive compatibility shims by default.
 
 ## Quality, tests, documentation
