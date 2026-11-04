@@ -22,33 +22,41 @@ export function OAuthLogin({
     tokenEndpoint: host.baseUrl + '/oauth/token',
     revocationEndpoint: host.baseUrl + '/oauth/revoke',
   }), [host.baseUrl]);
-  const [request, , promptAsync] = AuthSession.useAuthRequest({
-    clientId: CLIENT_ID,
-    redirectUri: AuthSession.makeRedirectUri({ native: REDIRECT_URI }),
-    responseType: AuthSession.ResponseType.Code,
-    scopes: [],
-    usePKCE: true,
-  }, discovery);
-
-  // Handle exactly the result of the browser invocation the user tapped.
-  // A prop callback changing after render must not cancel a completed code exchange.
+  // Create a fresh request on every tap, rather than waiting for an invisible
+  // preloaded hook request or reusing its PKCE state after a dismissed browser.
   const authorize = async () => {
-    if (!request || !request.codeVerifier || inProgress.current) return;
+    if (inProgress.current) return;
     const startedFor = host.id;
     inProgress.current = true;
     setSaving(true);
     setError(null);
-    setPhase('正在打开浏览器并等待授权…');
+    setPhase('正在创建新的安全授权请求…');
     try {
-      const result = await promptAsync();
+      const request = new AuthSession.AuthRequest({
+        clientId: CLIENT_ID,
+        redirectUri: REDIRECT_URI,
+        responseType: AuthSession.ResponseType.Code,
+        scopes: [],
+        usePKCE: true,
+      });
+      await request.makeAuthUrlAsync(discovery);
+      if (!request.codeVerifier) throw new Error('未能生成安全授权参数，请重新尝试。');
+      if (currentHost.current !== startedFor) return;
+      setPhase('正在打开浏览器，请在网页上输入本机授权密钥…');
+      const result = await request.promptAsync(discovery);
       if (currentHost.current !== startedFor) return;
       if (result.type === 'cancel' || result.type === 'dismiss') {
-        setError('授权未完成。可以重新点击授权，创建新的请求。');
+        setError('浏览器已关闭，授权尚未完成。重新点击即可创建新的授权请求。');
+        return;
+      }
+      if (result.type === 'locked') {
+        setError('系统中还有一个授权浏览器正在运行。请关闭旧授权页，再点击重试。');
         return;
       }
       if (result.type !== 'success') {
-        setError('授权未完成，请重新发起。' +
-          (result.type === 'error' ? ' 浏览器返回了 OAuth 错误。' : ''));
+        setError(result.type === 'error' ?
+          '授权回跳被拒绝，请重新点击授权。' :
+          '浏览器未完成回跳，请关闭授权页后重试。');
         return;
       }
       const code = getAuthorizedCode(result, request.state);
@@ -91,9 +99,11 @@ export function OAuthLogin({
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {saving ? <Text style={styles.subtitle}>{phase}</Text> : null}
       <Pressable
-        disabled={!request || saving}
+        accessibilityRole="button"
+        accessibilityLabel="使用 OAuth 授权"
+        disabled={saving}
         onPress={() => { void authorize(); }}
-        style={[styles.button, (!request || saving) && styles.disabled]}
+        style={[styles.button, saving && styles.disabled]}
       >
         {saving ? <ActivityIndicator color="#162337" /> : <Text style={styles.buttonText}>使用 OAuth 授权</Text>}
       </Pressable>

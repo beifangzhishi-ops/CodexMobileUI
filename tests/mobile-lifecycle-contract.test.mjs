@@ -5,6 +5,8 @@ import test from "node:test";
 const launcher = readFileSync(new URL("../scripts/mobile-shared-launcher.ps1", import.meta.url), "utf8");
 const mobileStop = readFileSync(new URL("../Stop-CodexMobile.cmd", import.meta.url), "utf8");
 const sharedStop = readFileSync(new URL("../shared-stop.cmd", import.meta.url), "utf8");
+const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
+const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
 
 test("starting MobileUI ensures or hot-attaches to the shared App Server before Gateway startup", () => {
   assert.match(launcher, /Invoke-SharedStack "start"\s*\r?\n\s*Start-Gateway/);
@@ -22,4 +24,18 @@ test("normal MobileUI shutdown stops only Gateway, preserving shared backend", (
 
 test("explicit shared-stop remains an independent administrative action", () => {
   assert.match(sharedStop, /shared-stack\.ps1" -Action stop/);
+});
+
+test("mobile OAuth tap creates a fresh request instead of silently disabling its button", () => {
+  assert.match(oauthLogin, /onPress=\{\(\) => \{ void authorize\(\); \}\}/);
+  assert.match(oauthLogin, /new AuthSession\.AuthRequest\(/);
+  assert.match(oauthLogin, /await request\.makeAuthUrlAsync\(discovery\)/);
+  assert.match(oauthLogin, /await request\.promptAsync\(discovery\)/);
+  assert.match(oauthLogin, /getAuthorizedCode\(result, request\.state\)/);
+  assert.match(oauthLogin, /setPhase\('正在创建新的安全授权请求/);
+  assert.match(oauthLogin, /setError\('系统中还有一个授权浏览器/);
+  assert.doesNotMatch(oauthLogin, /AuthSession\.useAuthRequest\(/);
+  assert.doesNotMatch(oauthLogin, /disabled=\{!request/);
+  assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
+  assert.equal(appSettings.expo.android.versionCode, 2);
 });
