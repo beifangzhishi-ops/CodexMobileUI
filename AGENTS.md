@@ -22,6 +22,7 @@
 - For a Git repository, commit finished verified work. Push to existing configured remote only; never create or publish a public remote without separate authorization, never force push.
 
 ## Shared Windows launchers
+- Normal MobileUI stop terminates only this checkout's Gateway. Never call shared-stack stop from MobileUI client shutdown, even when this checkout owns the stack. AOI stop is likewise bridge-only; Desktop closing is UI-only. Shared-stop remains explicitly requested and owner-authorized.
 - Shared backend runtime selection must use only complete Codex Desktop installations and Desktop-managed runtime caches (newest executable modification time); no IDE/CLI alternative source. Preserve fingerprinted independent copies, leave active backends untouched, and keep source selection and tests identical to the AOI launchers.
 - Shared Desktop launchers must stream child shared-stack output as it arrives; TCP proxy probes must be bounded and should not leave misleading progress bars. Preserve distinct runtime/backend/proxy startup phase messages and synchronize those modules with AOI.
 - All shared Desktop launchers use `Global\\CodexSharedDesktop_SingleLaunch` to serialize detecting and starting the unique Desktop instance. If one Desktop exists, a second Desktop must not launch. Desktop closing does not stop the independently owned shared App Server or Gateway.

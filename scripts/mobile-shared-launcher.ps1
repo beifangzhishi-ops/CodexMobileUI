@@ -142,7 +142,7 @@ try {
     if (-not $locked) { throw "Timed out acquiring the Gateway startup lock." }
     if ($Action -eq "stop") {
       Stop-Gateway
-      Invoke-SharedStack "stop"
+      Write-Host "Shared App Server left running for AOI, Desktop and other mobile clients."
     } else {
       Read-GatewayConfiguration
       Invoke-SharedStack "start"

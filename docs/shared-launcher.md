@@ -7,7 +7,7 @@ Status: source integration and local automated checks only. No live multi-launch
 The shared backend kernel has exactly one automatic source family: the newest complete Codex Desktop runtime discovered from the Desktop-managed local cache or the installed Microsoft Store Codex package (ranked by executable modification time). Other installed IDE/CLI runtimes are not considered. A matching version is copied into the checkout's fingerprinted `.runtime/shared` directory for stable independent execution. An already healthy shared App Server remains attached even if a newer Desktop runtime is available, until its owner explicitly stops it.
 
 - `Start-CodexMobile.cmd` starts the shared stack if absent, or hot-attaches to a verified running stack, then starts the local authenticated mobile Gateway.
-- `Stop-CodexMobile.cmd` stops only the Gateway started by this checkout and any shared-stack processes launched by this checkout.
+- `Stop-CodexMobile.cmd` stops **only the Gateway started by this checkout**. Shared 45789/45790 processes stay alive for AOI, Desktop, and other clients, even if this checkout originally started them.
 - `Start-Codex-Shared-Proxy.cmd` retains the AOI-style Desktop + Clash + shared-stack launch entry.
 - `shared-start.cmd` and `shared-stop.cmd` control only the shared stack, subject to process ownership.
 - `scripts/shared-stack.ps1`, `scripts/shared-runtime.js`, `scripts/shared-app-server-proxy.js`, and `scripts/Start-Codex-Shared-Proxy.ps1` are standalone copies of the AOI launch modules. They do **not** load code or settings from AOI at runtime.
@@ -22,9 +22,9 @@ If the ports are busy but the stack cannot be identified as healthy, startup fai
 
 Desktop shared-start failures now preserve the detailed child-script output (action, line and exception) instead of showing only a generic exit code. The presence of an old PID file is not proof of ownership: inspect its process identity and port listeners before a manual stop. No launcher will forcefully reclaim an unverified or unhealthy process.
 
-The Desktop launcher streams child shared-stack output as it happens and probes the Clash TCP port with a 3-second connection timeout. Preparation, backend readiness and proxy readiness have distinct progress lines. These diagnostics require a new launcher invocation; modifying files does not affect an already running script.
+The Desktop launcher uses inherited console output from its child shared-stack PowerShell, not a captured pipeline that a long-lived backend might hold open. It probes the Clash TCP port with a 3-second connection timeout. Preparation, backend readiness and proxy readiness have distinct progress lines. These diagnostics require a new launcher invocation; modifying files does not affect an already running script.
 
-**Operational caution:** stopping an owned stack disconnects all consumers, even ones that hot-attached from other projects. Check running turns before an explicit stop. The launcher does not yet query active turns or implement cross-client approval arbitration.
+**Operational caution:** `shared-stop.cmd` remains an explicit administrative action: stopping an owned stack disconnects all consumers, even ones that hot-attached from other projects. Check running turns before an explicit stop. The launcher does not yet query active turns or implement cross-client approval arbitration. Normal MobileUI, AOI and Desktop shutdowns do not stop the stack.
 
 ## Mobile Gateway
 

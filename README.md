@@ -35,7 +35,9 @@ The following are **planned**, not supported by the current build: verified real
 
 ## Development on Windows
 
-**Shared launchers (source added; live Windows behavior unverified):** `Start-CodexMobile.cmd` hot-attaches to an already healthy localhost 45789/45790 shared stack or starts an independently owned copy, then launches this checkout's authenticated Gateway on localhost 48888. `Stop-CodexMobile.cmd` stops only owned processes. The AOI-style Desktop entry `Start-Codex-Shared-Proxy.cmd` and independent `shared-start.cmd` / `shared-stop.cmd` are also included. Read [docs/shared-launcher.md](docs/shared-launcher.md) before use, especially its ownership and network-exposure cautions. The scripts do not call AOI at runtime.
+**Shared launchers (source added; live Windows behavior unverified):** `Start-CodexMobile.cmd` hot-attaches to an already healthy localhost 45789/45790 shared stack or starts an independently owned copy, then launches this checkout's authenticated Gateway on localhost 48888. `Stop-CodexMobile.cmd` stops only this checkout's Gateway, never the shared stack. The AOI-style Desktop entry `Start-Codex-Shared-Proxy.cmd` and independent administrative `shared-start.cmd` / `shared-stop.cmd` are also included. Read [docs/shared-launcher.md](docs/shared-launcher.md) before use, especially its ownership and network-exposure cautions. The scripts do not call AOI at runtime.
+
+The normal MobileUI stop button/script stops **only its Gateway**; shared App Server 45789/45790 remains available for AOI and Desktop. To explicitly shut down the shared kernel, use the separately named owner-only `shared-stop.cmd` only after confirming other clients are idle.
 
 The shared backend is sourced only from the newest complete Codex Desktop runtime; the independent runtime copy is a deployment cache, not a separate kernel version or alternate source.
 
