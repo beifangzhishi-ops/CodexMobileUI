@@ -66,8 +66,10 @@ Do not use a timed CCM Full Access grant to bypass this command-shape rule.
 3. Choose **OAuth authorization**. The system browser opens the host's
    consent form. Enter that host's local MOBILE_APPROVAL_SECRET from its
    private .env (on the PC; do not publish or send it in chat).
-4. After approval the browser should return to CodexMobileUI using
-   codexmobileui://oauth. Then confirm the actual thread list appears.
+4. After approval the browser displays an **authorization successful** page.
+   Tap **Return to CodexMobileUI** and allow Android to open the app. This
+   explicit tap opens the registered codexmobileui://oauth callback; it is not
+   an automatic browser redirect. Confirm the actual thread list appears.
 5. Repeat the same process for the second host, using its distinct Funnel
    origin **and** distinct approval secret.
 
@@ -104,8 +106,10 @@ public end-to-end probe is **scripts/probe-funnel-auth.cjs**.
 The gateway adopts CCM's two-page flow: the authorization endpoint validates
 PKCE and redirects to the consent page, which carries the validated request
 fields in an HTML form. POST consent revalidates them, shows a useful error
-and the same form when a key is incorrect, and redirects to the registered
-Android callback only after a correct secret. Consent does not rely on a
+and the same form when a key is incorrect. After a correct secret it returns
+a no-store success page containing a single, escaped callback link. The user
+must tap that link to return to Android, avoiding blocked external-scheme
+redirects from a browser POST. Consent does not rely on a
 a server-side page-expiration timer: the owner can enter a key later or after
 a Gateway restart. A created authorization code is valid for ten minutes,
 survives a Gateway restart, and is consumed once after correct PKCE exchange.
@@ -114,8 +118,14 @@ Do not repeat a code exchange blindly when its outcome is uncertain.
 A wrong key means the value does not match that computer's own local
 authorization secret; copy only the value after the assignment sign from that
 host's private configuration. Never send the value in chat or issue reports.
-When the Android browser cannot return to the app, verify the app was built
-with the registered custom URI scheme and use a fresh authorization flow.
+When the Android browser cannot return to the app, first check whether the
+success page and its Return to CodexMobileUI link are shown. Verify the app
+was built with the registered custom URI scheme and use a fresh authorization
+flow if the link cannot open the app. The 2026-11-05 real-device attempt
+reached the primary Gateway and recorded repeated consent_granted events,
+but no /oauth/token or WebSocket activity: the former POST 302 did not
+complete the callback. The explicit-tap flow is integration-tested but still
+awaits real-device validation.
 Only the server-side HTTPS/WSS probe does not validate the Android deep link.
 
 The Gateway's persistent request log is stored in the private ignored

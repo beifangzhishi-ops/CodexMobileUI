@@ -70,6 +70,21 @@ ${hidden}
 </body></html>`;
 }
 
+/** Explicit user gesture avoids Android browsers blocking a POST 302 to a custom app scheme. */
+function approvedPage(callbackUrl: string): string {
+  return `<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>授权成功 · CodexMobileUI</title>
+<style>body{font:16px system-ui;background:#10151e;color:#f7fafc;max-width:440px;margin:12vh auto;padding:24px}
+a{display:block;box-sizing:border-box;width:100%;padding:16px;margin:24px 0;border-radius:12px;
+background:#bed7ff;color:#0b1626;font-weight:bold;text-align:center;text-decoration:none}</style>
+</head><body><h1>授权成功</h1>
+<p>电脑已同意授权。请点击下方按钮返回 CodexMobileUI 完成登录。</p>
+<a class="return-to-app" href="${escapeHtml(callbackUrl)}" rel="noreferrer">返回 CodexMobileUI</a>
+<p>如果手机询问是否打开应用，请选择允许。此授权链接仅供本次登录使用，请勿分享。</p>
+</body></html>`;
+}
+
 const invalidPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>授权请求无效</title></head><body style="font:16px system-ui;background:#10151e;color:#f7fafc;padding:24px">
@@ -173,8 +188,10 @@ export function createHttpHandler(
           return;
         }
         recordAudit('consent_granted');
-        res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
-        res.end();
+        // The browser must navigate via a direct tap. A 302 after a POST can
+        // leave Android Chrome on the consent page instead of opening the app.
+        res.writeHead(200, htmlHeader);
+        res.end(approvedPage(location));
         return;
       }
       if (req.method === 'POST' && url.pathname === '/oauth/token') {

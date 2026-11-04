@@ -13,6 +13,12 @@ const SECRET = 'gateway-test-only-secret-is-long-enough';
 const VERIFIER = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_~';
 const REDIRECT = 'codexmobileui://oauth';
 
+function callbackFromApprovalPage(html: string): URL {
+  const href = /<a class="return-to-app" href="([^"]+)"/.exec(html)?.[1];
+  assert.ok(href, 'approval page must contain an explicit return-to-app link');
+  return new URL(href.replaceAll('&amp;', '&'));
+}
+
 test('CCM-style consent survives delay, supports retry and logs only safe events', async () => {
   const directory = resolve('.tmp', 'consent-retry-' + randomUUID());
   mkdirSync(directory, { recursive: true });
@@ -65,8 +71,20 @@ test('CCM-style consent survives delay, supports retry and logs only safe events
     assert.equal(events[0], 'consent_denied');
     // The same browser form remains valid and testable after a delay.
     const accepted = await postConsent(firstRequest, SECRET);
-    assert.equal(accepted.status, 302);
-    assert.match(accepted.headers.get('location') ?? '', /^codexmobileui:\/\/oauth\?/);
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.headers.get('cache-control'), 'no-store');
+    assert.equal(accepted.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(accepted.headers.get('location'), null);
+    const approvalPage = await accepted.text();
+    assert.match(approvalPage, /授权成功/);
+    assert.match(approvalPage, /返回 CodexMobileUI/);
+    assert.doesNotMatch(approvalPage, new RegExp(SECRET));
+    const callback = callbackFromApprovalPage(approvalPage);
+    assert.equal(callback.origin, 'null');
+    assert.equal(callback.protocol, 'codexmobileui:');
+    assert.equal(callback.host, 'oauth');
+    assert.equal(callback.searchParams.get('state'), firstRequest.get('state'));
+    assert.ok(callback.searchParams.get('code'));
 
     assert.equal(events[1], 'consent_granted');
     const badRequest = new URLSearchParams(firstRequest);
@@ -129,8 +147,8 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
       redirect: 'manual',
       body: new URLSearchParams({ ...Object.fromEntries(authorization), approval_secret: SECRET }),
     });
-    assert.equal(approval.status, 302);
-    const authCode = new URL(approval.headers.get('location')!).searchParams.get('code');
+    assert.equal(approval.status, 200);
+    const authCode = callbackFromApprovalPage(await approval.text()).searchParams.get('code');
     assert.ok(authCode);
     const tokenReply = await fetch(base + '/oauth/token', {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
