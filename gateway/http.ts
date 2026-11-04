@@ -37,7 +37,7 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/** CCM-style form: round-trip validated OAuth request fields, not a short-lived in-memory ID. */
+/** CCM-style form: round-trip escaped and validated OAuth request fields. */
 function consentPage(request: AuthorizationRequest, errorMessage = ''): string {
   const fields = [
     ['client_id', request.clientId],

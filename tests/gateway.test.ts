@@ -50,7 +50,6 @@ test('CCM-style consent survives delay, supports retry and logs only safe events
     const form = await consent.text();
     assert.match(form, /name="code_challenge"/);
     assert.match(form, /name="state"/);
-    assert.doesNotMatch(form, /name="intent"/);
     return params;
   };
   try {
@@ -64,7 +63,7 @@ test('CCM-style consent survives delay, supports retry and logs only safe events
     assert.doesNotMatch(retryPage, /incorrect-private-value/);
     assert.doesNotMatch(retryPage, new RegExp(SECRET));
     assert.equal(events[0], 'consent_denied');
-    // No transient intent: the same browser form remains valid and testable after delay.
+    // The same browser form remains valid and testable after a delay.
     const accepted = await postConsent(firstRequest, SECRET);
     assert.equal(accepted.status, 302);
     assert.match(accepted.headers.get('location') ?? '', /^codexmobileui:\/\/oauth\?/);

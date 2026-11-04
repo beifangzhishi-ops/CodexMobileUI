@@ -77,8 +77,7 @@ export class OAuthStore {
       : {};
   }
 
-  /** CCM-style consent: validate the complete request on both GET and POST.
-   * No transient server-side intent or short approval-page timeout. */
+  /** CCM-style consent: validate the complete request on both GET and POST. */
   validateRequest(params: URLSearchParams): AuthorizationRequest {
     const challenge = params.get('code_challenge') ?? '';
     const state = params.get('state') ?? '';

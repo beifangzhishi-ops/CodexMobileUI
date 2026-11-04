@@ -71,7 +71,7 @@ PKCE and redirects to the consent page, which carries the validated request
 fields in an HTML form. POST consent revalidates them, shows a useful error
 and the same form when a key is incorrect, and redirects to the registered
 Android callback only after a correct secret. Consent does not rely on a
-two-minute process-memory request ID: the owner can enter a key later or after
+a server-side page-expiration timer: the owner can enter a key later or after
 a Gateway restart. A created authorization code is valid for ten minutes,
 survives a Gateway restart, and is consumed once after correct PKCE exchange.
 Do not repeat a code exchange blindly when its outcome is uncertain.
