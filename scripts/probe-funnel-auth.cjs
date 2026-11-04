@@ -46,6 +46,21 @@ async function check() {
       !page.includes('action="/oauth/consent"')) {
     throw new Error('OAuth consent page did not preserve the PKCE request');
   }
+  const wrong = await fetch(origin.origin + '/oauth/consent', {
+    ...withTimeout,
+    method: 'POST',
+    redirect: 'manual',
+    body: new URLSearchParams({
+      ...Object.fromEntries(auth),
+      approval_secret: 'readonly-probe-incorrect-' + randomBytes(16).toString('hex'),
+    }),
+  });
+  const retryPage = await wrong.text();
+  if (wrong.status !== 403 || !retryPage.includes('name="code_challenge"') ||
+      !retryPage.includes('action="/oauth/consent"')) {
+    throw new Error('Public OAuth wrong-key retry form failed');
+  }
+  console.log('public_consent_retry_ok');
   const approved = await fetch(origin.origin + '/oauth/consent', {
     ...withTimeout,
     method: 'POST',
