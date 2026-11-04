@@ -14,6 +14,13 @@ token state. The initial authorization secret is a host-local 256-bit
 cryptographically generated value, never a shared preconfigured password.
 Neither the secret nor the host's real Funnel DNS name belongs in Git.
 
+**OAuth rollout status (2026-11-04):** The updated 6v Gateway has restarted
+successfully. Its actual public Funnel passed the wrong-secret retry form,
+PKCE exchange, authenticated WSS thread list and read-only thread read. The
+noha deployment bundle has been prepared but is not yet installed; its running
+Gateway must not be assumed to use the new consent flow. The Android APK
+containing the updated callback handler has not been built or device-tested.
+
 The primary 6v host runs the source checkout's compiled Gateway. The noha
 host runs a small deployment-only bundle produced by
 scripts/package-gateway-deployment.ps1, under the user's normal projects
