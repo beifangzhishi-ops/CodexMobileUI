@@ -29,7 +29,7 @@ The thread list follows native pagination with cursor-loop detection. Unrecogniz
 
 ## Operational limits today
 
-**Implemented and tested in a loopback mock:** OAuth, local WSS relay, JSON-RPC request forwarding, thread/message data normalization. **Also observed in the actual existing 6v shared App Server:** direct read-only `initialize` + `thread/list` and temporary localhost OAuth PKCE → authenticated gateway WSS → native `thread/list` via `scripts/probe-authenticated-relay.mjs`. **Not yet tested:** Android browser OAuth callback, Android native rendering, live message send/stream, long-running background reconnection, multi-client approval, local notifications, file protocol.
+**Implemented and tested in a loopback mock:** OAuth, local WSS relay, JSON-RPC request forwarding, thread/message data normalization. **Also observed on the two actual shared App Servers:** native read-only `initialize`, `thread/list`, and `thread/read`; sampled messages on the primary host were text-parser compatible. Primary host additionally passed a temporary localhost OAuth PKCE → authenticated gateway WSS → native `thread/list` via `scripts/probe-authenticated-relay.mjs`. **Not yet tested:** Android browser OAuth callback, Android native rendering, live message send/stream, long-running background reconnection, multi-client approval, local notifications, file protocol.
 
 The immediate live validation sequence should be: inspect native App Server compatibility, open a real thread read-only through an authenticated local gateway, verify the Android PKCE callback and cached thread display on an installed device, and only then test sending a turn and streaming/rollback. Reuse the existing shared service without stopping or editing it.
 

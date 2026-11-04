@@ -2,7 +2,7 @@
 
 An open-source-ready, **personal-use Android client** for the existing Codex App Server used by Codex Desktop. Chat sessions stay authoritative on the host PC; the phone caches messages and drafts.
 
-**Status (2026-11-04): Stage 1 implementation in progress.** The Android application, OAuth PKCE flow, per-host gateway, native chat view, SQLite snapshot cache, and protocol tests have been implemented. TypeScript checks and gateway integration tests pass; a development-mode Android JS bundle was generated with Expo Metro. Two **read-only** probes succeeded against the actual 6v shared Codex App Server: direct `thread/list` and a full temporary localhost OAuth PKCE → authenticated WSS gateway → `thread/list` sequence. **No Android APK has been built or tested on a device, no production gateway is deployed, and mobile OAuth/live chat remain unverified.** Do not interpret this as a supported, fully operational client.
+**Status (2026-11-04): Stage 1 implementation in progress.** The Android application, OAuth PKCE flow, per-host gateway, native chat view, SQLite snapshot cache, and protocol tests have been implemented. TypeScript checks and gateway integration tests pass; a development-mode Android JS bundle was generated with Expo Metro. **Read-only native `thread/list` and `thread/read` have now succeeded against both host computers' live shared App Servers**, with schema-only probes showing the sampled message parts are compatible with the current text parser. A separate temporary localhost OAuth PKCE → authenticated WSS gateway → real `thread/list` probe succeeded on the primary host. **No Android APK has yet been verified or tested on a device, no production gateway is deployed, and mobile OAuth/live chat remain unverified.** Do not interpret this as a supported, fully operational client.
 
 ## Architecture
 
@@ -76,7 +76,7 @@ npm.cmd run android
 - `npm run check`: Android TypeScript, gateway TypeScript, unit + local integration tests.
 - `npm run build:gateway`: gateway compilation.
 - `npm run probe:readonly`: sends only `initialize` and `thread/list` to the existing loopback shared App Server; prints no private thread data.
-- `node scripts/probe-thread-snapshot.mjs`: read-only check of `thread/read` on one existing local thread; outputs only structural counts and item-type names. Requires the shared App Server to be running and does not start it.
+- `node scripts/probe-thread-snapshot.mjs`: read-only check of `thread/read` on one existing local thread; outputs only structural counts, safe item/part type names and the number of messages the current parser can render. Requires the shared App Server to be running and does not start it.
 - `npm run probe:authenticated`: after building the gateway, creates a temporary localhost-only OAuth grant and verifies an authenticated `thread/list` across the gateway to the existing shared app server, without changing the shared service or printing conversations.
 - `npm run export:android`: JS bundle export, **not an APK**.
 - Follow [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md), [SECURITY.md](SECURITY.md), and [AGENTS.md](AGENTS.md).

@@ -62,6 +62,8 @@ socket.on('message', (bytes) => {
     const types = {};
     let messages = 0;
     let textMessages = 0;
+    let renderableMessages = 0;
+    const contentTypes = new Set();
     for (const turn of thread.turns) {
       if (!Array.isArray(turn?.items)) continue;
       for (const item of turn.items) {
@@ -70,12 +72,24 @@ socket.on('message', (bytes) => {
         if (kind === 'userMessage' || kind === 'agentMessage') {
           messages += 1;
           if (typeof item.text === 'string' || Array.isArray(item.content)) textMessages += 1;
+          const parts = Array.isArray(item.content) ? item.content : [];
+          for (const part of parts) {
+            const type = typeof part?.type === 'string' &&
+              /^[a-zA-Z_]{1,32}$/.test(part.type) ? part.type : 'other';
+            contentTypes.add(type);
+          }
+          const availableText = typeof item.text === 'string' ? item.text
+            : parts.filter((part) => part?.type === 'text' && typeof part.text === 'string')
+              .map((part) => part.text).join('\n');
+          if (availableText.length) renderableMessages += 1;
         }
       }
     }
     console.log('readonly_snapshot_turn_count=' + thread.turns.length);
     console.log('readonly_snapshot_message_items=' + messages);
     console.log('readonly_snapshot_text_candidates=' + textMessages);
+    console.log('readonly_snapshot_renderable_messages=' + renderableMessages);
+    console.log('readonly_snapshot_content_types=' + [...contentTypes].sort().join(','));
     console.log('readonly_snapshot_item_types=' + Object.keys(types).sort().join(','));
     return finish('readonly_snapshot_read_ok');
   }
