@@ -2,7 +2,8 @@
 # Uses the per-user shared Android SDK; does not touch any Codex shared service.
 param(
     [switch]$UseWorkspaceCache,
-    [switch]$RegenerateCMake
+    [switch]$RegenerateCMake,
+    [switch]$CheckOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +47,38 @@ $gradlew = Join-Path $projectRoot 'android\gradlew.bat'
 if (-not (Test-Path -LiteralPath $gradlew)) {
     throw 'Missing Android project: run expo prebuild for Android first.'
 }
+$gradleCommand = $gradlew
+if ($UseWorkspaceCache) {
+    # Gradle Wrapper would try downloading its distribution into an empty
+    # project-local GRADLE_USER_HOME. Reuse the version installed in the
+    # shared user-wide wrapper directory, but keep project-local dependencies.
+    $properties = Get-Content -LiteralPath (Join-Path $projectRoot 'android\gradle\wrapper\gradle-wrapper.properties') -Raw
+    if ($properties -notmatch 'gradle-([0-9]+(?:\.[0-9]+)+)-bin\.zip') {
+        throw 'Could not determine exact Gradle distribution from gradle-wrapper.properties.'
+    }
+    $gradleVersion = $Matches[1]
+    $sharedGradleHome = [Environment]::GetEnvironmentVariable('GRADLE_USER_HOME', 'User')
+    if (-not $sharedGradleHome) {
+        $sharedGradleHome = Join-Path $env:USERPROFILE '.gradle'
+    }
+    $distributionDir = Join-Path $sharedGradleHome "wrapper\dists\gradle-$gradleVersion-bin"
+    $gradleCommand = $null
+    foreach ($folder in @(Get-ChildItem -LiteralPath $distributionDir -Directory -ErrorAction SilentlyContinue)) {
+        $candidate = Join-Path $folder.FullName "gradle-$gradleVersion\bin\gradle.bat"
+        if (Test-Path -LiteralPath $candidate) {
+            $gradleCommand = $candidate
+            break
+        }
+    }
+    if (-not $gradleCommand) {
+        throw "Shared Gradle $gradleVersion is not installed under $distributionDir. Install it outside the restricted build first."
+    }
+    Write-Host "Using shared Gradle $gradleVersion distribution with project-local dependency cache."
+}
+if ($CheckOnly) {
+    Write-Host "Verified Windows Android build prerequisites: CMake 3.31.6, Ninja $version and Gradle at $gradleCommand"
+    return
+}
 $androidRoot = Join-Path $projectRoot 'android'
 if ($RegenerateCMake) {
     # Reset ONLY generated app-side native build state when switching away
@@ -60,7 +93,7 @@ if ($RegenerateCMake) {
 }
 Push-Location $androidRoot
 try {
-    & $gradlew ':app:assembleDebug' '--console=plain' '--no-daemon' '--max-workers=2' `
+    & $gradleCommand ':app:assembleDebug' '--console=plain' '--no-daemon' '--max-workers=2' `
         '-PreactNativeArchitectures=arm64-v8a' `
         '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6'
     if ($LASTEXITCODE -ne 0) { throw "Android Gradle build failed with exit code $LASTEXITCODE" }
