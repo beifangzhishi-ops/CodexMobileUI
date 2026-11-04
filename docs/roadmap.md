@@ -12,6 +12,7 @@
 - [x] Advance Android versionCode to 4 (0.2.0), beyond the separately built 0.1.2/versionCode 3.
 - [x] Combined source, OAuth, diagnostics, demo and shared-contract automated checks: 57 passing tests.
 - [x] Stable build native-identity guard: verify Gradle namespace/application ID and Kotlin entrypoints against Expo, and mirror only application Java/Kotlin sources in the staged build directory.
+- [x] Stable build autolinking identity guard: selectively invalidate cached RN autolinking configuration and generated Java entrypoint on Android package changes; preserve unrelated native caches.
 - [ ] Android Release APK with embedded JS and visual inspection on a real device (drawer, keyboard resize, scrolling, back button, OAuth callback).
 
 ## Phase 2 — Real Codex chat (requires a separate explicit decision)

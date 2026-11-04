@@ -150,6 +150,23 @@ try {
     $stagedJava = Join-Path $buildRoot 'android\app\src\main\java'
     & robocopy.exe $sourceJava $stagedJava /MIR /R:0 /W:0 /NP /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -gt 7) { throw "Failed to mirror Android application source (robocopy $LASTEXITCODE)." }
+    # RN settings cache is keyed by package manifests, not Gradle application ID.
+    # A native package rename therefore leaves an old autolinking.json and a
+    # generated ReactNativeApplicationEntryPoint referencing the wrong BuildConfig.
+    # Invalidate only those generated artifacts when the app identity changes.
+    $autolinkingJson = Join-Path $buildRoot 'android\build\generated\autolinking\autolinking.json'
+    if (Test-Path -LiteralPath $autolinkingJson) {
+        $cachedAutolinking = Get-Content -LiteralPath $autolinkingJson -Raw | ConvertFrom-Json
+        $cachedPackage = [string]$cachedAutolinking.project.android.packageName
+        if ($cachedPackage -ne $appId) {
+            Write-Host "Refreshing React Native autolinking cache for Android application $appId"
+            Remove-Item -LiteralPath $autolinkingJson -Force
+            $generatedEntryPoint = Join-Path $buildRoot 'android\app\build\generated\autolinking\src\main\java\com\facebook\react\ReactNativeApplicationEntryPoint.java'
+            if (Test-Path -LiteralPath $generatedEntryPoint) {
+                Remove-Item -LiteralPath $generatedEntryPoint -Force
+            }
+        }
+    }
     if (-not $dependenciesCurrent) {
         Write-Host 'Installing dependency lockfile in the persistent build checkout.'
         Push-Location $buildRoot

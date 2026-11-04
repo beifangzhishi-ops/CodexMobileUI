@@ -63,6 +63,9 @@ test("Windows stable Android build uses isolated reusable native caches and veri
   assert.match(androidStableBuild, /Gradle namespace\/applicationId/);
   assert.match(androidStableBuild, /Missing Kotlin entry point/);
   assert.match(androidStableBuild, /robocopy\.exe \$sourceJava \$stagedJava \/MIR/);
+  assert.match(androidStableBuild, /cachedAutolinking\.project\.android\.packageName/);
+  assert.match(androidStableBuild, /Remove-Item -LiteralPath \$autolinkingJson -Force/);
+  assert.match(androidStableBuild, /ReactNativeApplicationEntryPoint\.java/);
   assert.match(androidStableBuild, /node_modules\\expo-modules-autolinking\\build\\index\.js/);
   assert.match(androidStableBuild, /Start-Transcript/);
   assert.match(androidStableBuild, /versionCode=/);
