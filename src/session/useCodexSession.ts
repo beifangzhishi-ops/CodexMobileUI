@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Host } from '../core/host';
 import { CodexTransport } from '../core/transport';
-import { listAllThreads } from '../core/threadApi';
+import { includeLiveThreads, listAllThreads, startLiveThread } from '../core/threadApi';
 import {
   applyNotification, parseThreadSnapshotState, recordOf,
   type ChatMessage, type CodexNotice, type CodexThread,
@@ -48,6 +48,13 @@ export function useCodexSession(host: Host | null): CodexSession {
   const active = useRef<string | null>(null);
   const generation = useRef(0);
   const reconnect = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveThreads = useRef(new Map<string, CodexThread>());
+  const pendingCreate = useRef<Promise<void> | null>(null);
+
+  const reconcileThreadList = useCallback((list: CodexThread[]) => {
+    for (const thread of list) liveThreads.current.delete(thread.id);
+    setThreads(includeLiveThreads(list, liveThreads.current));
+  }, []);
 
   const readThread = useCallback(async (id: string, source?: CodexTransport) => {
     if (!host) return;
@@ -85,6 +92,9 @@ export function useCodexSession(host: Host | null): CodexSession {
     if (active.current !== id || generation.current !== selection) return;
     setMessages(cached);
     const connection = client.current;
+    // Empty new threads are live on this connection but may have no
+    // persisted rollout for thread/resume and thread/read yet.
+    if (liveThreads.current.has(id)) return;
     if (connection?.connected) {
       try {
         await connection.request('thread/resume', { threadId: id });
@@ -107,9 +117,11 @@ export function useCodexSession(host: Host | null): CodexSession {
     if (client.current !== connection) return;
     await storeThreads(host.id, list);
     if (client.current !== connection) return;
-    setThreads(list);
-    if (active.current) await readThread(active.current);
-  }, [host, readThread]);
+    reconcileThreadList(list);
+    if (active.current && !liveThreads.current.has(active.current)) {
+      await readThread(active.current);
+    }
+  }, [host, readThread, reconcileThreadList]);
 
   useEffect(() => {
     const currentHost = host;
@@ -119,6 +131,7 @@ export function useCodexSession(host: Host | null): CodexSession {
     setMessages([]);
     setError(null);
     active.current = null;
+    liveThreads.current.clear();
     setActiveThreadId(null);
     generation.current++;
     if (!currentHost) return;
@@ -135,9 +148,11 @@ export function useCodexSession(host: Host | null): CodexSession {
           if (notice.method === 'turn/started') setRunning(true);
           if (notice.method === 'turn/completed') {
             setRunning(false);
-            void readThread(threadId).catch((e) => {
-              if (alive) setError(errorString(e));
-            });
+            void readThread(threadId).then(() => {
+              if (liveThreads.current.has(threadId)) void refresh().catch((e) => {
+                if (alive) setError(errorString(e));
+              });
+            }).catch((e) => { if (alive) setError(errorString(e)); });
           }
           if (notice.method === 'item/completed' ||
               notice.method === 'item/agentMessage/delta') {
@@ -151,7 +166,7 @@ export function useCodexSession(host: Host | null): CodexSession {
         void listAllThreads(client.current)
           .then((list) => {
             if (!alive) return;
-            setThreads(list);
+            reconcileThreadList(list);
             void storeThreads(currentHost.id, list);
           }).catch(() => undefined);
       }
@@ -191,7 +206,7 @@ export function useCodexSession(host: Host | null): CodexSession {
         const list = await listAllThreads(connection);
         logDiagnostic('session.threadsReceived', { count: list.length });
         if (!alive) return;
-        setThreads(list);
+        reconcileThreadList(list);
         void storeThreads(currentHost.id, list);
         const selected = active.current ?? list[0]?.id ?? null;
         if (selected) {
@@ -243,25 +258,36 @@ export function useCodexSession(host: Host | null): CodexSession {
       client.current?.close();
       client.current = null;
     };
-  }, [host?.id, readThread]);
+  }, [host?.id, readThread, reconcileThreadList, refresh]);
 
-  const createThread = useCallback(async (cwd: string | null) => {
-    logDiagnostic('session.createThreadStarted');
-    const connection = client.current;
-    if (!connection?.connected) throw new Error('当前无法新建会话：电脑离线');
-    const response = await connection.request('thread/start', cwd ? { cwd } : {});
-    const id = recordOf(recordOf(response).thread).id;
-    if (typeof id !== 'string') throw new Error('Codex 未返回新会话 ID');
-    if (client.current !== connection) {
-      throw new Error('会话已在原电脑创建。请切换回原电脑查找，不要重复创建。');
-    }
-    await refresh();
-    if (client.current !== connection) {
-      throw new Error('会话已在原电脑创建。请切换回原电脑查找，不要重复创建。');
-    }
-    await chooseThread(id);
-    logDiagnostic('session.createThreadFinished');
-  }, [refresh, chooseThread]);
+  const createThread = useCallback((cwd: string | null): Promise<void> => {
+    if (pendingCreate.current) return pendingCreate.current;
+    // Rapid duplicate taps must not create multiple invisible empty threads.
+    if (active.current && liveThreads.current.has(active.current)) return Promise.resolve();
+    const task = (async () => {
+      logDiagnostic('session.createThreadStarted');
+      const connection = client.current;
+      if (!connection?.connected) throw new Error('当前无法新建会话：电脑离线');
+      const thread = await startLiveThread(connection, cwd);
+      if (client.current !== connection) {
+        throw new Error('会话已在原电脑创建。请切换回原电脑核对，不要重复创建');
+      }
+      liveThreads.current.set(thread.id, thread);
+      active.current = thread.id;
+      generation.current++;
+      setActiveThreadId(thread.id);
+      setMessages([]);
+      setRunning(false);
+      setError(null);
+      setThreads((previous) => includeLiveThreads(previous, liveThreads.current));
+      logDiagnostic('session.createThreadFinished');
+    })();
+    pendingCreate.current = task;
+    void task.finally(() => {
+      if (pendingCreate.current === task) pendingCreate.current = null;
+    }).catch(() => undefined);
+    return task;
+  }, []);
 
   const send = useCallback(async (text: string) => {
     logDiagnostic('session.sendPressed', { codePresent: Boolean(text.trim()) });

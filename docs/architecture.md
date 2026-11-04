@@ -16,7 +16,7 @@
 5. Mobile receives native Codex events, displays new text and reconciles stable thread/turn/item history on completion. A dropped connection triggers reconnect; committed messages are retrieved from Codex, deduplicated and stored locally.
 6. When offline, already cached messages remain readable and the composer persists a draft. The draft **never automatically sends** after reconnect.
 
-The thread list follows native pagination with cursor-loop detection. Unrecognized `thread/list` or `thread/read` responses fail closed instead of replacing cached history with an empty set. Messages for an unfinished turn are rendered but not written to the confirmed-history cache; a subsequent final snapshot reconciles them. Draft writes are serialized per host+thread so closing a composer promptly or sending successfully cannot allow stale asynchronous saves to overwrite the latest draft.
+The thread list requests `modelProviders: []` to include all model providers recorded by Desktop, rather than silently filtering to the App Server's configured provider. It retains native interactive-source filtering, cursor pagination, and cursor-loop detection. `thread/start` creates a live, potentially not-yet-persisted thread; the client selects it directly on the current connection without premature `thread/resume` or `thread/read`. Repeated taps are coalesced, temporary empty threads stay out of SQLite, and the first completed turn triggers authoritative list/read reconciliation. Unrecognized responses fail closed rather than clearing cache. In-progress messages are never cached as completed turns; unsent drafts remain serialized per host+thread.
 
 ## Trust boundaries
 
@@ -29,9 +29,9 @@ The thread list follows native pagination with cursor-loop detection. Unrecogniz
 
 ## Operational limits today
 
-**Implemented and tested in a loopback mock:** OAuth, local WSS relay, JSON-RPC request forwarding, thread/message data normalization. **Also observed on the two actual shared App Servers:** native read-only `initialize`, `thread/list`, and `thread/read`; sampled messages on the primary host were text-parser compatible. Primary host additionally passed a temporary localhost OAuth PKCE → authenticated gateway WSS → native `thread/list` via `scripts/probe-authenticated-relay.mjs`. **Not yet tested:** Android browser OAuth callback, Android native rendering, live message send/stream, long-running background reconnection, multi-client approval, local notifications, file protocol.
+**Validated (2026-11-05):** Existing native App Server read-only `initialize` / `thread/list` / `thread/read` on both hosts, and real Android 0.1.2 OAuth, WSS, thread reads, `turn/start`, turn completion notifications and post-turn snapshots on 6v. The 6v diagnostic export shows successful real Codex RPC exchanges; it does not prove every text-rendering or keyboard interaction. Read-only all-provider probes returned 181 interactive threads on 6v (versus 2 with the default provider filter) and substantially more on noha. Unit and integration tests cover protocol parsing, gateway relay, authorization and the new listing/new-thread helpers.
 
-The immediate live validation sequence should be: inspect native App Server compatibility, open a real thread read-only through an authenticated local gateway, verify the Android PKCE callback and cached thread display on an installed device, and only then test sending a turn and streaming/rollback. Reuse the existing shared service without stopping or editing it.
+**Not yet device-validated:** The all-provider history and empty-thread business-logic fixes in a fresh APK, noha phone login, long streaming/offline recovery, keyboard focus, multi-client approvals, local notifications and the file protocol. No Gateway changes or upstream App Server changes were required for this correction.
 
 ## Modules
 

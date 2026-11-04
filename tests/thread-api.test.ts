@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listAllThreads, parseThreadPage, type ThreadRpcClient } from '../src/core/threadApi';
+import {
+  includeLiveThreads, listAllThreads, parseThreadPage, startLiveThread, type ThreadRpcClient,
+} from '../src/core/threadApi';
 import type { JsonObject } from '../src/core/protocol';
 
 test('listAllThreads follows native pagination, deduplicates IDs, and retains ordering', async () => {
@@ -24,7 +26,28 @@ test('listAllThreads follows native pagination, deduplicates IDs, and retains or
   assert.deepEqual(all.map((thread) => thread.id), ['recent', 'shared', 'older']);
   assert.equal(all[1].updatedAt, 4, 'keep the first, most recent version');
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0], { limit: 100, sortKey: 'recency_at' });
+  assert.deepEqual(calls[0], { limit: 100, sortKey: 'recency_at', modelProviders: [] });
+});
+
+test('new live thread is selectable before persistence without resume/read', async () => {
+  const calls: string[] = [];
+  const client: ThreadRpcClient = {
+    async request(method, params) {
+      calls.push(method);
+      assert.equal(method, 'thread/start');
+      assert.deepEqual(params, { cwd: 'C:\\Code\\Repo' });
+      return { thread: { id: 'live-1', title: null } };
+    },
+  };
+  const created = await startLiveThread(client, 'C:\\Code\\Repo');
+  assert.equal(created.id, 'live-1');
+  assert.equal(created.cwd, 'C:\\Code\\Repo');
+  assert.deepEqual(calls, ['thread/start']);
+
+  const pending = new Map([[created.id, created]]);
+  assert.deepEqual(includeLiveThreads([{ id: 'old', name: null, cwd: null, updatedAt: 1 }], pending)
+    .map((t) => t.id), ['live-1', 'old']);
+  assert.deepEqual(includeLiveThreads([created], pending).map((t) => t.id), ['live-1']);
 });
 
 test('malformed or looping pages fail rather than overwriting cached history', async () => {

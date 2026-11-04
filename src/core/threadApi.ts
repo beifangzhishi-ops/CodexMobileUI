@@ -1,5 +1,5 @@
 import type { CodexThread, JsonObject } from './protocol';
-import { parseThreadList, recordOf } from './protocol';
+import { normalizeThread, parseThreadList, recordOf } from './protocol';
 
 /** The native Codex RPC surface, independent of React, Android and the gateway. */
 export interface ThreadRpcClient {
@@ -35,7 +35,9 @@ export async function listAllThreads(client: ThreadRpcClient): Promise<CodexThre
   const MAX_PAGES = 100;
   for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber++) {
     const result = await client.request('thread/list', {
-      limit: 100, sortKey: 'recency_at', ...(cursor ? { cursor } : {}),
+      // When omitted, the server filters by its configured model provider.
+      // Desktop history may use multiple provider IDs, even for the same host.
+      limit: 100, sortKey: 'recency_at', modelProviders: [], ...(cursor ? { cursor } : {}),
     });
     const page = parseThreadPage(result);
     for (const thread of page.threads) {
@@ -49,4 +51,23 @@ export async function listAllThreads(client: ThreadRpcClient): Promise<CodexThre
     cursor = page.nextCursor;
   }
   throw new Error('Codex thread/list returned more than 100 pages; keeping cached history');
+}
+
+/** thread/start creates a live thread, which may not be persisted yet. */
+export async function startLiveThread(client: ThreadRpcClient, cwd: string | null): Promise<CodexThread> {
+  const raw = await client.request('thread/start', cwd ? { cwd } : {});
+  const thread = normalizeThread(recordOf(raw).thread);
+  if (!thread) throw new Error('Codex did not confirm the new thread ID; check Desktop before retrying');
+  return { ...thread, cwd: thread.cwd ?? cwd, updatedAt: thread.updatedAt || Date.now() / 1000 };
+}
+
+/** Show temporary live threads without persisting fake entries in SQLite. */
+export function includeLiveThreads(
+  listed: readonly CodexThread[], live: ReadonlyMap<string, CodexThread>,
+): CodexThread[] {
+  const persistedIds = new Set(listed.map((thread) => thread.id));
+  return [
+    ...[...live.values()].filter((thread) => !persistedIds.has(thread.id)).reverse(),
+    ...listed,
+  ];
 }

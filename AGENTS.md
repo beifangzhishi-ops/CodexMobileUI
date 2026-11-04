@@ -7,6 +7,8 @@
 
 ## Architecture and scope
 - Maintain strict modules for `src/core` protocol/transport, `src/session` synchronization and state, `src/storage` SQLite, `src/auth` PKCE/token storage, `src/ui` RN assistant-ui and rendering, `gateway` authentication and local Codex relay, and `tests`.
+- Keep backend/protocol work in `src/core`, `src/session`, `gateway`, and tests. Keyboard focus, text-input interaction, navigation layout, and visual styling belong to the separate frontend/visual workstream. Do not edit presentation components while fixing backend behavior.
+- Request `thread/list` across all model providers (`modelProviders: []`) with native interactive-source filtering and cursor pagination. A new empty thread may be live but not yet persisted: do not immediately `thread/resume` it, and do not save it to durable SQLite history before the server lists it.
 - Never make the app depend on CCM/AOI; they are protocol references only. Do not modify CCM, AOI, the shared Codex proxy, or production authentication services without distinct user approval.
 - Treat network payloads, model text, file URIs and all external links as untrusted. Never execute remote HTML/script or expose arbitrary Windows paths. Use authenticated HTTPS/WSS with host/thread/resource checks for all new endpoints.
 - Preserve genuine App Server protocol and native messages; when live events are dropped, recover from authoritative `thread/read` rather than blindly replaying text. Correlate by thread/turn/item IDs and keep locally drafted text from silently auto-sending.
