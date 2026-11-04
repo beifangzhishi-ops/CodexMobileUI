@@ -12,10 +12,11 @@
 - [x] Read-only `initialize`, `thread/list`, and `thread/read` verified against both live shared App Servers (primary and second host). Sampled 6v message parts are all readable by the current text parser.
 - [x] Owner-approved public Tailscale Funnel on dedicated 8443 for both hosts, preserving the primary host's other Funnel routes; independent 256-bit secret per gateway. Real public HTTPS PKCE + authenticated WSS `thread/list` and `thread/read` tests passed on both hosts, then test credentials revoked. Non-mobile privileged RPC methods are rejected at Gateway before forwarding.
 - [x] Temporary local OAuth PKCE → authenticated gateway WSS → real 6v shared Codex `thread/list` verified with no persisted gateway setup.
-- [ ] **Mobile OAuth through each host's authenticated gateway** verified on an installed Android device. Native thread reads through the phone are separate from the completed server-side read-only probes.
+- [x] **6v Android OAuth login** verified on an installed device: browser callback, code exchange, WebSocket authentication and App Server relay (2026-11-05).
+- [ ] **noha Android OAuth login**, phone thread reads and actual message sending still require device validation.
 - [x] Android ARM64 Debug APK and standalone Release test APK built with WCM; Release `assembleRelease` succeeded (605 tasks). Both were v2-signed and zipaligned; the Release APK contains a 2,952,600-byte JS bundle and 20 ARM64 native libraries. Tests currently use the project's debug signing key.
 - [x] Shared Windows JDK 17, Node.js 24, Gradle 9.4.1, Android API 37, Build Tools 37, NDK 27.1 and CMake 3.31.6 / Ninja 1.12.1 checked; `scripts/build-android-windows.ps1` supports both variants, version validation and single-checkout build locking. Existing build caches are retained for incremental builds.
-- [ ] Actual Android installation, browser OAuth callback, Android SecureStore/SQLite and offline-launch behavior validated on a phone. A production signing key and reproducible version-upgrade policy remain separate acceptance items.
+- [ ] Android installation and 6v OAuth callback passed; verify SecureStore persistence across restart, SQLite/offline launch, phone thread rendering, and live turns. Production signing and version upgrades remain separate acceptance items.
 - [ ] Review/resolve remaining moderate Expo CLI/build-chain advisories before a public-facing release or production Funnel route.
 - [ ] Actual thread read/send/streaming/reconnect validated alongside Codex Desktop and AOI.
 - [ ] Native Markdown GFM and LaTeX verified on device, including long transcripts.

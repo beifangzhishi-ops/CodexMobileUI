@@ -14,14 +14,7 @@ token state. The initial authorization secret is a host-local 256-bit
 cryptographically generated value, never a shared preconfigured password.
 Neither the secret nor the host's real Funnel DNS name belongs in Git.
 
-**OAuth and request-log status (2026-11-05):** Both Gateways now run the current
-source-built Gateway with durable, sanitized request tracing and independently
-respond to HTTPS health checks through their public Funnel endpoints. The 0.1.2
-Android test APK was installed and exported a real-device diagnostic log, in
-which the auth browser returned dismiss without a callback. The then-running
-6v Gateway received no matching /oauth/authorize request in that attempt's
-7.8-second interval; the selected phone host is not established. Phone OAuth,
-deep-link callback and live mobile messaging are not yet device-validated.
+**OAuth and request-log status (2026-11-05):** Both hosts run source-built Gateways with independent public HTTPS health checks and sanitized request journals. The installed Android 0.1.2 app successfully completed a 6v OAuth login through the explicit Return to CodexMobileUI link. The 6v Gateway recorded consent HTTP 200, authorization-code exchange HTTP 200, authenticated WebSocket and upstream readiness. Device validation of phone thread reads, chat turns and noha login remains pending.
 
 **Two-host repository layout:** 6v uses
 `C:\\Users\\Songjx\\Documents\\ChatGPT\\CodexMobileUI`, and noha uses
@@ -126,7 +119,8 @@ reached the primary Gateway and recorded repeated consent_granted events,
 but no /oauth/token or WebSocket activity: the former POST 302 did not
 complete the callback. The explicit-tap flow is integration-tested but still
 awaits real-device validation.
-Only the server-side HTTPS/WSS probe does not validate the Android deep link.
+The separate server-side HTTPS/WSS probe never substitutes for a real
+Android deep-link check; the 6v phone callback was verified on 2026-11-05.
 
 The Gateway's persistent request log is stored in the private ignored
 .state/mobile-gateway-requests.jsonl, with two bounded rotated copies.
