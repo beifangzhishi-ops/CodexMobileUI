@@ -14,39 +14,36 @@ token state. The initial authorization secret is a host-local 256-bit
 cryptographically generated value, never a shared preconfigured password.
 Neither the secret nor the host's real Funnel DNS name belongs in Git.
 
-**OAuth and request-log status (2026-11-05):** The 6v Gateway has been restarted
-with durable, sanitized request tracing, and its HTTPS Funnel health endpoint
-returns 200. The 0.1.2 Android test APK was compiled, signed, uploaded via CCM
-to Quark, installed by the owner and used to export a real-device diagnostic
-log. The observed Android auth attempt returned dismiss without a callback.
-The then-running 6v Gateway showed no /oauth/authorize GET during that
-attempt's 7.8-second window; this does not establish which host the user chose
-on the phone. The updated noha deployment ZIP is prepared but has not yet
-been installed. Never assume a not-yet-deployed host has the newest code.
+**OAuth and request-log status (2026-11-05):** Both Gateways now run the current
+source-built Gateway with durable, sanitized request tracing and independently
+respond to HTTPS health checks through their public Funnel endpoints. The 0.1.2
+Android test APK was installed and exported a real-device diagnostic log, in
+which the auth browser returned dismiss without a callback. The then-running
+6v Gateway received no matching /oauth/authorize request in that attempt's
+7.8-second interval; the selected phone host is not established. Phone OAuth,
+deep-link callback and live mobile messaging are not yet device-validated.
 
-**Required two-host repository layout:** 6v uses
+**Two-host repository layout:** 6v uses
 `C:\\Users\\Songjx\\Documents\\ChatGPT\\CodexMobileUI`, and noha uses
-`C:\\Users\\noha\\Documents\\ChatGPT\\CodexMobileUI`. Both must have the
-same complete Git repository and checked-out commit, build their own Gateway
-from source, and maintain independent private `.env` and `.state` files.
-The former runtime-only noha directory
-`C:\\Users\\noha\\Documents\\AAAVitalFile\\CodexMobileGateway` remains
-active until a verified migration. Preserve the existing noha OAuth secrets,
-persisted tokens, and Funnel route, and stop only the Gateway process owned
-by that old directory when cutting over. Never touch the shared App Server,
-Desktop or AOI. Remove the superseded runtime-only deployment after successful
-cutover; do not retain an inactive compatibility launcher.
+`C:\\Users\\noha\\Documents\\ChatGPT\\CodexMobileUI`. Both have the same
+complete Git repository and checked-out commit. Both compile and run their
+Gateway from the local checkout and maintain independent private `.env`,
+`.state`, dependency and build-cache directories. The noha private OAuth
+configuration and persisted token state were preserved during the migration;
+its independent Gateway was cut over to the current checkout. Never touch
+the shared App Server, Desktop, AOI, or unrelated Funnel mappings.
 
 **Funnel verification (2026-11-05):** CCM's built-in Tailscale exemption was
-confirmed on **both** computers without using Full Access. Each invocation
+confirmed on **both** computers without global Full Access. Each invocation
 contained exactly one standalone Tailscale CLI command, exited 0, and reported
 `trusted_tailscale: true`. Both computers have independent public Funnel
-port 8443 entries routing to their own loopback 48888 Gateway. Independent
-cross-machine HTTPS health requests also returned 200 with the expected Gateway
-health response (owner-verified). The noha Gateway is already running as a
-separate Node service **without a CodexMobileUI source repository**; the newest
-diagnostic logging deployment package is not yet installed there. Preserve that
-distinction: missing source checkout does not mean no deployed Gateway.
+port 8443 entries routing to their own loopback 48888 Gateway. Following noha
+cutover, HTTPS health requests from both 6v and noha to the noha public origin
+returned HTTP 200 and the expected JSON response, and the noha Gateway's
+durable request journal was created. Windows Schannel-based curl.exe HTTPS
+checks under the restricted CCM token can fail with a local credential error;
+Node's HTTPS client was used to verify the same public endpoint without
+disabling TLS validation.
 
 When checking Tailscale through CCM, put **only** the following single command
 in its own exec_command call on each Worker:
@@ -131,15 +128,14 @@ User-Agent and is **not proof of device identity**. No raw URLs, query/form
 data, client IPs, full User-Agent strings, codes, tokens, PKCE values,
 credentials or private host names may enter the journal.
 
-On the 6v source checkout, inspect the last half-hour through:
+On 6v, inspect the last half-hour through:
 
     & 'C:\Users\Songjx\Documents\ChatGPT\CodexMobileUI\scripts\show-gateway-requests.ps1' -Minutes 30 -Filter oauth
 
 Use -Filter android to view UA-classified Android clients, or -Filter all for
-health and WebSocket events. These records are only generated by the updated
-Gateway after restart; historic .out/.err files are not retroactively
-populated. The noha deployment bundle includes the same viewer and writes
-its own independent .state journal after deployment.
+health and WebSocket events. Run the same script in noha's full checkout to
+inspect its own independent .state journal. Historic .out/.err files are not
+retroactively populated by the request-journal implementation.
 
 Funnel is configured in the Tailscale daemon's background mode and can
 survive a daemon restart. The gateway process itself must be running

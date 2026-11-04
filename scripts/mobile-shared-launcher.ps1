@@ -134,7 +134,7 @@ try {
     exit 0
   }
   # Shared stack has its own cross-repository lock. Gateway ownership is separate.
-  $mutex = [System.Threading.Mutex]::new($false, "Global\CodexMobileGateway_48888")
+  $mutex = [System.Threading.Mutex]::new($false, "Global\CodexMobileUI_Gateway_48888")
   $locked = $false
   try {
     try { $locked = $mutex.WaitOne(60000) }
