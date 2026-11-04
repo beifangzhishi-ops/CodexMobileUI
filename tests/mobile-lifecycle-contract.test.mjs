@@ -60,6 +60,9 @@ test("Windows stable Android build uses isolated reusable native caches and veri
   assert.match(androidStableBuild, /Assert-AvailableLock/);
   assert.match(androidStableBuild, /Reusing installed dependencies and incremental Gradle\/CMake caches/);
   assert.match(androidStableBuild, /Get-DependencyLockContent/);
+  assert.match(androidStableBuild, /Gradle namespace\/applicationId/);
+  assert.match(androidStableBuild, /Missing Kotlin entry point/);
+  assert.match(androidStableBuild, /robocopy\.exe \$sourceJava \$stagedJava \/MIR/);
   assert.match(androidStableBuild, /node_modules\\expo-modules-autolinking\\build\\index\.js/);
   assert.match(androidStableBuild, /Start-Transcript/);
   assert.match(androidStableBuild, /versionCode=/);

@@ -49,6 +49,22 @@ $nativeVersion = [regex]::Match($nativeText, '(?m)^\s*versionName\s+"([^"]+)"').
 if ($nativeCode -ne $appCode -or $nativeVersion -ne $appVersion) {
     throw "Gradle native version ($nativeVersion/$nativeCode) differs from app.json ($appVersion/$appCode)."
 }
+$nativeNamespace = [regex]::Match($nativeText, '(?m)^\s*namespace\s+["'']([^"'']+)["'']').Groups[1].Value
+$nativeApplicationId = [regex]::Match($nativeText, '(?m)^\s*applicationId\s+["'']([^"'']+)["'']').Groups[1].Value
+if ($nativeNamespace -ne $appId -or $nativeApplicationId -ne $appId) {
+    throw "Gradle namespace/applicationId ($nativeNamespace/$nativeApplicationId) differs from app.json ($appId)."
+}
+$nativePackagePath = $appId.Replace('.', '\')
+foreach ($name in @('MainActivity.kt', 'MainApplication.kt')) {
+    $kotlinFile = Join-Path $sourceRoot "android\app\src\main\java\$nativePackagePath\$name"
+    if (-not (Test-Path -LiteralPath $kotlinFile)) {
+        throw "Missing Kotlin entry point for $appId`: $name"
+    }
+    $kotlinSource = Get-Content -LiteralPath $kotlinFile -Raw
+    if ($kotlinSource -notmatch ('(?m)^\s*package\s+' + [regex]::Escape($appId) + '\s*$')) {
+        throw "Kotlin package differs from app.json ($appId) in $name."
+    }
+}
 $sourceBuilder = Join-Path $sourceRoot 'scripts\build-android-windows.ps1'
 if ($CheckOnly) {
     & $sourceBuilder -Variant $Variant -CheckOnly
@@ -127,6 +143,13 @@ try {
     Sync-Tree (Join-Path $sourceRoot 'android') (Join-Path $buildRoot 'android') @(
         '.gradle', '.cxx', 'build'
     )
+    # Mirror only the application Java/Kotlin source tree. Its old package paths must
+    # not remain in the staged checkout after an app identity change. This does not
+    # touch Gradle, CMake, dependency caches or any generated build outputs.
+    $sourceJava = Join-Path $sourceRoot 'android\app\src\main\java'
+    $stagedJava = Join-Path $buildRoot 'android\app\src\main\java'
+    & robocopy.exe $sourceJava $stagedJava /MIR /R:0 /W:0 /NP /NFL /NDL /NJH /NJS | Out-Null
+    if ($LASTEXITCODE -gt 7) { throw "Failed to mirror Android application source (robocopy $LASTEXITCODE)." }
     if (-not $dependenciesCurrent) {
         Write-Host 'Installing dependency lockfile in the persistent build checkout.'
         Push-Location $buildRoot
