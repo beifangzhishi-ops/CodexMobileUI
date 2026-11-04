@@ -16,7 +16,8 @@ $cliZip = Join-Path $downloads 'commandlinetools-win-15859902_latest.zip'
 $packages = @(
     'platform-tools', 'platforms;android-37.0', 'platforms;android-36',
     'build-tools;37.0.0', 'build-tools;36.0.0',
-    'ndk;27.1.12297006', 'ndk;28.2.13676358', 'cmake;3.22.1'
+    'ndk;27.1.12297006', 'ndk;28.2.13676358',
+    'cmake;3.22.1', 'cmake;3.31.6'
 )
 New-Item -ItemType Directory -Force -Path $sdkRoot, $downloads | Out-Null
 
