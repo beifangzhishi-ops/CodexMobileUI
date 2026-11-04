@@ -9,11 +9,12 @@
 - Enter and send any nonempty text; the only assistant response is exactly `测试成功`. Double tapping an empty composer cannot send duplicates. No network, token, API key or login is required for test chatting.
 - Drawer footer shows a local placeholder avatar and `测试用户`; tap it to open account settings.
 - The account screen can save HTTPS Funnel host origins and reuse the existing **real OAuth Authorization Code + PKCE** browser flow. Authentication is separate from fake chats: it does **not** connect chat history or invoke Codex.
+- The account screen has a **日志** action for privacy-safe OAuth diagnostics and an Android JSON export. A render-error fallback exposes diagnostic export without storing host identifiers or conversation text.
 - The fake chat state is currently **in memory only**; closing/restarting the app resets sample messages. Real-host SQLite caches and SecureStore OAuth tokens are unrelated and retained.
 
 ## Current verification
 
-- `npm run check`: TypeScript (app + gateway), loopback OAuth/protocol tests, isolated demo reducer tests and shared launcher tests.
+- `npm run check`: TypeScript (app + gateway), loopback OAuth/protocol tests, isolated demo reducer tests, safe diagnostic tests, and shared launcher/build contracts.
 - Android JS export and Release APK / physical-device interaction must be separately validated; TypeScript and mock tests alone are not evidence of a working Android APK or OAuth browser return.
 - Earlier verified gateway/relay functionality remains in the source tree but is **not called by the current Android chat UI**. The native chat integration is deferred until the owner approves the next phase.
 
@@ -34,6 +35,6 @@ No real host address, OAuth consent secret, refresh token, signing material or p
 
 ## Develop and verify
 
-From the project directory on Windows, install the dependencies with `npm ci` if necessary, then run `npm run check`, `npm run export:android` and the native Android build script (`scripts/build-android-windows.ps1`) as appropriate. A standalone test APK must be a Release variant with embedded JS; Debug alone depends on Metro. The test signing key is not a production identity. Compare APK versionCode/versionName with `app.json` before distribution.
+Use the verified stable native packaging entry `scripts/build-android-stable.ps1` from the visual-prototype worktree, with `-BuildRoot C:\Users\Songjx\cmui-build-v011`. It syncs the selected worktree sources to a persistent short-path build checkout, reuses lockfile-matched dependencies and Gradle/CMake caches, and validates the signed APK before copying it to this worktree's ignored `.tmp/android-artifacts`. Do not use a junction pointing to the main checkout's `node_modules`. A standalone test APK must contain embedded JS; Debug needs Metro. The already verified `0.1.1` and `0.1.2` artifacts in the main checkout remain intact.
 
-Current test-app version: **0.2.0 / Android versionCode 3**; application ID: `dev.codexmobileui.app`. The package is a private single-user prototype, **not** a public registration service. Never enable a public Funnel route or change a shared production backend without distinct owner authorization. See [docs/shared-launcher.md](docs/shared-launcher.md) before running the optional shared gateway launchers.
+Current test-app version: **0.2.0 / Android versionCode 4**; application ID: `dev.codexmobileui.app`. The package is a private single-user prototype, **not** a public registration service. Never enable a public Funnel route or change a shared production backend without distinct owner authorization. See [docs/shared-launcher.md](docs/shared-launcher.md) before running the optional shared gateway launchers.

@@ -5,6 +5,8 @@ import * as WebBrowser from 'expo-web-browser';
 import type { Host } from '../core/host';
 import { CLIENT_ID, REDIRECT_URI, storeTokens } from './tokens';
 import { getAuthorizedCode } from './authorizationResult';
+import { classifyDiagnosticError } from '../diagnostics/safe';
+import { logDiagnostic } from '../diagnostics/journal';
 import { palette } from '../ui/theme';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -16,6 +18,7 @@ export function OAuthLogin({
   const [saving, setSaving] = useState(false);
   const [phase, setPhase] = useState('');
   const inProgress = useRef(false);
+  const tapCount = useRef(0);
   const currentHost = useRef(host.id);
   currentHost.current = host.id;
   const discovery = useMemo(() => ({
@@ -26,13 +29,23 @@ export function OAuthLogin({
   // Create a fresh request on every tap, rather than waiting for an invisible
   // preloaded hook request or reusing its PKCE state after a dismissed browser.
   const authorize = async () => {
-    if (inProgress.current) return;
+    const attempt = ++tapCount.current;
+    logDiagnostic('auth.buttonPressed', {
+      attempt, inProgress: inProgress.current, buttonEnabled: !saving,
+    });
+    if (inProgress.current) {
+      logDiagnostic('auth.duplicateBlocked', { attempt });
+      return;
+    }
+    const startedAt = Date.now();
     const startedFor = host.id;
     inProgress.current = true;
     setSaving(true);
     setError(null);
+    logDiagnostic('auth.requestStarted', { attempt });
     setPhase('正在创建新的安全授权请求…');
     try {
+      logDiagnostic('auth.pkceCreating', { attempt });
       const request = new AuthSession.AuthRequest({
         clientId: CLIENT_ID,
         redirectUri: REDIRECT_URI,
@@ -40,11 +53,27 @@ export function OAuthLogin({
         scopes: [],
         usePKCE: true,
       });
+      logDiagnostic('auth.pkceCreated', { attempt, codePresent: Boolean(request.codeVerifier) });
       await request.makeAuthUrlAsync(discovery);
+      logDiagnostic('auth.urlCreated', { attempt, codePresent: Boolean(request.codeVerifier) });
       if (!request.codeVerifier) throw new Error('未能生成安全授权参数，请重新尝试。');
       if (currentHost.current !== startedFor) return;
       setPhase('正在打开浏览器，请在网页上输入本机授权密钥…');
-      const result = await request.promptAsync(discovery);
+      logDiagnostic('auth.browserPromptStarted', { attempt });
+      // Native browser resolves only after redirect/cancel; a pending event
+      // distinguishes a stalled native call from a missed button press.
+      const pendingProbe = setTimeout(() => {
+        logDiagnostic('auth.browserStillPending', { attempt, durationMs: Date.now() - startedAt });
+      }, 15000);
+      let result: AuthSession.AuthSessionResult;
+      try {
+        result = await request.promptAsync(discovery);
+      } finally {
+        clearTimeout(pendingProbe);
+      }
+      logDiagnostic('auth.browserPromptFinished', {
+        attempt, result: result.type, durationMs: Date.now() - startedAt,
+      });
       if (currentHost.current !== startedFor) return;
       if (result.type === 'cancel' || result.type === 'dismiss') {
         setError('浏览器已关闭，授权尚未完成。重新点击即可创建新的授权请求。');
@@ -61,30 +90,44 @@ export function OAuthLogin({
         return;
       }
       const code = getAuthorizedCode(result, request.state);
+      logDiagnostic('auth.callbackValidated', { attempt, codePresent: Boolean(code), stateMatches: Boolean(code) });
       if (!code) throw new Error('OAuth 授权没有返回授权码。');
       setPhase('正在交换授权码…');
+      logDiagnostic('auth.tokenExchangeStarted', { attempt });
       const tokens = await AuthSession.exchangeCodeAsync({
         clientId: CLIENT_ID,
         code,
         redirectUri: request.redirectUri,
         extraParams: { code_verifier: request.codeVerifier },
       }, discovery);
+      logDiagnostic('auth.tokenExchangeFinished', {
+        attempt, codePresent: Boolean(tokens.accessToken && tokens.refreshToken),
+      });
       if (!tokens.refreshToken || !tokens.accessToken) {
         throw new Error('电脑未返回有效的 OAuth 令牌，请重新授权。');
       }
       if (currentHost.current !== startedFor) return;
       setPhase('正在安全保存授权…');
+      logDiagnostic('auth.tokenStorageStarted', { attempt });
       await storeTokens(host, {
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,
         expires_in: tokens.expiresIn ?? 900,
       });
-      if (currentHost.current === startedFor) onConnected();
+      logDiagnostic('auth.tokenStorageFinished', { attempt });
+      if (currentHost.current === startedFor) {
+        logDiagnostic('auth.connected', { attempt, durationMs: Date.now() - startedAt });
+        onConnected();
+      }
     } catch (e: unknown) {
+      logDiagnostic('auth.failed', {
+        attempt, durationMs: Date.now() - startedAt, ...classifyDiagnosticError(e),
+      });
       if (currentHost.current === startedFor) {
         setError(e instanceof Error ? e.message : 'OAuth 授权失败，请重试。');
       }
     } finally {
+      logDiagnostic('auth.attemptFinished', { attempt, durationMs: Date.now() - startedAt });
       inProgress.current = false;
       if (currentHost.current === startedFor) {
         setPhase('');
@@ -102,6 +145,9 @@ export function OAuthLogin({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="使用 OAuth 授权"
+        onPressIn={() => logDiagnostic('auth.pressIn', {
+          buttonEnabled: !saving, inProgress: inProgress.current,
+        })}
         disabled={saving}
         onPress={() => { void authorize(); }}
         style={[styles.button, saving && styles.disabled]}

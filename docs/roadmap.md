@@ -8,6 +8,9 @@
 - [x] Drawer footer with placeholder avatar + `测试用户`, opening the account screen.
 - [x] Reuse existing OAuth PKCE and host management from account screen only; authentication never switches demo messages to real ones.
 - [x] Pure reducer tests and TypeScript checks.
+- [x] Integrate validated short-path stable Windows build entry and existing privacy-safe OAuth diagnostics while keeping fake chats isolated.
+- [x] Advance Android versionCode to 4 (0.2.0), beyond the separately built 0.1.2/versionCode 3.
+- [x] Combined source, OAuth, diagnostics, demo and shared-contract automated checks: 57 passing tests.
 - [ ] Android Release APK with embedded JS and visual inspection on a real device (drawer, keyboard resize, scrolling, back button, OAuth callback).
 
 ## Phase 2 — Real Codex chat (requires a separate explicit decision)

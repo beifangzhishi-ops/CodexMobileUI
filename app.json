@@ -10,7 +10,7 @@
     "android": {
       "package": "dev.codexmobileui.app",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 3
+      "versionCode": 4
     },
     "plugins": [
       "expo-secure-store",

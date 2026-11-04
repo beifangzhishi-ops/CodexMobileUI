@@ -5,6 +5,8 @@ import { clearTokens, hasTokens } from '../auth/tokens';
 import { parseHost, type Host } from '../core/host';
 import { loadHosts, storeHost } from '../storage/database';
 import { palette } from './theme';
+import { logDiagnostic } from '../diagnostics/journal';
+import { classifyDiagnosticError } from '../diagnostics/safe';
 
 export function AccountScreen() {
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -16,11 +18,14 @@ export function AccountScreen() {
 
   useEffect(() => {
     let active = true;
+    logDiagnostic('app.hostLoadStarted');
     void loadHosts().then((result) => {
+      logDiagnostic('app.hostLoadFinished', { count: result.length });
       if (!active) return;
       setHosts(result);
       setSelectedHost(result[0] ?? null);
     }).catch((error: unknown) => {
+      logDiagnostic('app.hostLoadFailed', classifyDiagnosticError(error));
       if (active) Alert.alert('无法读取电脑列表', error instanceof Error ? error.message : String(error));
     }).finally(() => { if (active) setChecking(false); });
     return () => { active = false; };
@@ -29,28 +34,37 @@ export function AccountScreen() {
   useEffect(() => {
     let active = true;
     setAuthorized(false);
+    if (selectedHost) logDiagnostic('app.tokenCheckStarted');
     if (selectedHost) void hasTokens(selectedHost).then((value) => {
+      logDiagnostic('app.tokenCheckFinished', { codePresent: value });
       if (active) setAuthorized(value);
-    }).catch(() => { if (active) setAuthorized(false); });
+    }).catch((error: unknown) => {
+      logDiagnostic('app.tokenCheckFailed', classifyDiagnosticError(error));
+      if (active) setAuthorized(false);
+    });
     return () => { active = false; };
   }, [selectedHost?.id]);
 
   const addHost = async () => {
     if (saving) return;
+    logDiagnostic('app.addHostPressed');
     setSaving(true);
     try {
       const host = parseHost(entry);
       await storeHost(host);
+      logDiagnostic('app.hostAdded');
       setHosts((previous) => previous.some((item) => item.id === host.id) ? previous : [...previous, host]);
       setSelectedHost(host);
       setEntry('');
     } catch (error: unknown) {
+      logDiagnostic('app.addHostFailed', classifyDiagnosticError(error));
       Alert.alert('无法添加电脑', error instanceof Error ? error.message : '请输入 HTTPS 根地址');
     } finally { setSaving(false); }
   };
 
   const reauthorize = () => {
     if (!selectedHost) return;
+    logDiagnostic('auth.reauthorizePressed');
     Alert.alert('重新授权', '将清除当前电脑在本机保存的 OAuth 令牌。', [
       { text: '取消', style: 'cancel' },
       { text: '清除令牌', style: 'destructive', onPress: () => {

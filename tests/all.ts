@@ -6,5 +6,6 @@ import './rpc-policy.test';
 import './storage.test';
 import './oauth.test';
 import './authorization-result.test';
+import './diagnostics.test';
 import './demo-conversations.test';
 import './gateway.test';
