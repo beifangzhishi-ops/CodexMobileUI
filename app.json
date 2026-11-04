@@ -3,14 +3,14 @@
     "name": "CodexMobileUI",
     "slug": "codex-mobile-ui",
     "scheme": "codexmobileui",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "android": {
       "package": "dev.codexmobileui.app",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 2
+      "versionCode": 3
     },
     "plugins": [
       "expo-secure-store",

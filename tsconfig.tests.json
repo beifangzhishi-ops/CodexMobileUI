@@ -5,6 +5,6 @@
     "rootDir": ".",
     "outDir": ".tmp/testdist"
   },
-  "include": ["gateway/**/*.ts", "src/core/protocol.ts", "src/core/threadApi.ts", "src/auth/authorizationResult.ts", "src/storage/writeQueue.ts", "tests/**/*.ts"],
+  "include": ["gateway/**/*.ts", "src/core/protocol.ts", "src/core/threadApi.ts", "src/auth/authorizationResult.ts", "src/diagnostics/safe.ts", "src/storage/writeQueue.ts", "tests/**/*.ts"],
   "exclude": ["node_modules"]
 }

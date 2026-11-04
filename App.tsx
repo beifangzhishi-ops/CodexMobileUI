@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Alert, FlatList, Modal, Pressable, StatusBar,
+  ActivityIndicator, Alert, AppState, FlatList, Linking, Modal, Platform, Pressable, StatusBar,
   StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,9 @@ import { parseHost, type Host } from './src/core/host';
 import { useCodexSession } from './src/session/useCodexSession';
 import { loadHosts, storeHost } from './src/storage/database';
 import { ChatThread } from './src/ui/ChatThread';
+import { DiagnosticsPanel } from './src/diagnostics/DiagnosticsPanel';
+import { logDiagnostic } from './src/diagnostics/journal';
+import { classifyDiagnosticError } from './src/diagnostics/safe';
 
 function MainApp() {
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -18,12 +21,41 @@ function MainApp() {
   const [checking, setChecking] = useState(true);
   const [hostChooser, setHostChooser] = useState(false);
   const [threadChooser, setThreadChooser] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [hostEntry, setHostEntry] = useState('');
   const [project, setProject] = useState<string | null>(null);
   const session = useCodexSession(authorized ? currentHost : null);
 
   useEffect(() => {
+    logDiagnostic('app.started', { platform: Platform.OS, appState: AppState.currentState });
+    const appSubscription = AppState.addEventListener('change', (state) => {
+      logDiagnostic('app.stateChanged', { appState: state });
+    });
+    const linkSubscription = Linking.addEventListener('url', ({ url }) => {
+      // OAuth URLs can contain code/state: never persist any portion of them.
+      logDiagnostic('app.deepLinkReceived', {
+        schemeMatched: url.startsWith('codexmobileui://'),
+      });
+    });
+    void Linking.getInitialURL().then((url) => {
+      logDiagnostic('app.initialLinkChecked', {
+        codePresent: Boolean(url),
+        schemeMatched: Boolean(url?.startsWith('codexmobileui://')),
+      });
+    }).catch((error: unknown) => {
+      logDiagnostic('app.initialLinkFailed', classifyDiagnosticError(error));
+    });
+    return () => {
+      appSubscription.remove();
+      linkSubscription.remove();
+      logDiagnostic('app.unmounted');
+    };
+  }, []);
+
+  useEffect(() => {
+    logDiagnostic('app.hostLoadStarted');
     void loadHosts().then((list) => {
+      logDiagnostic('app.hostLoadFinished', { count: list.length });
       setHosts(list);
       if (list[0]) setCurrentHost(list[0]);
       else setHostChooser(true);
@@ -35,21 +67,30 @@ function MainApp() {
     let alive = true;
     setAuthorized(false);
     if (!currentHost) return;
-    void hasTokens(currentHost).then((yes) => { if (alive) setAuthorized(yes); })
-      .catch(() => { if (alive) setAuthorized(false); });
+    logDiagnostic('app.tokenCheckStarted');
+    void hasTokens(currentHost).then((yes) => {
+      logDiagnostic('app.tokenCheckFinished', { codePresent: yes });
+      if (alive) setAuthorized(yes);
+    }).catch((error: unknown) => {
+      logDiagnostic('app.tokenCheckFailed', classifyDiagnosticError(error));
+      if (alive) setAuthorized(false);
+    });
     return () => { alive = false; };
   }, [currentHost?.id]);
 
   const addHost = useCallback(async () => {
+    logDiagnostic('app.addHostPressed');
     try {
       const host = parseHost(hostEntry);
       await storeHost(host);
+      logDiagnostic('app.hostAdded');
       setHosts((existing) => existing.some((h) => h.id === host.id) ? existing : [...existing, host]);
       setCurrentHost(host);
       setHostChooser(false);
       setHostEntry('');
       setProject(null);
     } catch (e) {
+      logDiagnostic('app.addHostFailed', classifyDiagnosticError(e));
       Alert.alert('电脑地址无效', e instanceof Error ? e.message : '');
     }
   }, [hostEntry]);
@@ -62,7 +103,16 @@ function MainApp() {
   const newThreadCwd = project ?? selected?.cwd ?? projects[0] ?? null;
 
   if (checking) return (
-    <View style={styles.loading}><ActivityIndicator color="#ade5d7" size="large" /></View>
+    <View style={styles.loading}>
+      <ActivityIndicator color="#ade5d7" size="large" />
+      <Pressable accessibilityRole="button" onPress={() => {
+        logDiagnostic('diagnostics.loadingPressed');
+        setDiagnosticsOpen(true);
+      }}>
+        <Text style={styles.headerActionText}>诊断日志</Text>
+      </Pressable>
+      <DiagnosticsPanel visible={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
+    </View>
   );
 
   return (
@@ -72,6 +122,14 @@ function MainApp() {
         <Pressable accessibilityRole="button" onPress={() => setHostChooser(true)} style={styles.hostButton}>
           <Text style={styles.hostName} numberOfLines={1}>{currentHost?.name ?? '选择电脑'} ▾</Text>
           <View style={[styles.statusDot, session.status === 'online' && styles.online]} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="诊断日志"
+          onPressIn={() => logDiagnostic('diagnostics.headerPressIn')}
+          onPress={() => {
+            logDiagnostic('diagnostics.headerPressed');
+            setDiagnosticsOpen(true);
+          }} style={styles.headerAction}>
+          <Text style={styles.headerActionText}>日志</Text>
         </Pressable>
         <Pressable accessibilityRole="button" onPress={() => setThreadChooser(true)} style={styles.headerAction}>
           <Text style={styles.headerActionText}>会话 ☰</Text>
@@ -183,12 +241,46 @@ function MainApp() {
           </View>
         </View>
       </Modal>
+      <DiagnosticsPanel visible={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
     </SafeAreaView>
   );
 }
 
+class AppErrorBoundary extends React.Component<
+  React.PropsWithChildren,
+  { crashed: boolean; diagnosticsOpen: boolean }
+> {
+  state = { crashed: false, diagnosticsOpen: false };
+
+  static getDerivedStateFromError(): { crashed: boolean } {
+    return { crashed: true };
+  }
+
+  componentDidCatch(error: Error): void {
+    // Only the error category is recorded. Never persist error.message or stack.
+    logDiagnostic('app.reactRenderFailed', classifyDiagnosticError(error));
+  }
+
+  render() {
+    if (!this.state.crashed) return this.props.children;
+    return (
+      <View style={styles.loading}>
+        <Text style={styles.error}>应用界面出现异常，可以导出诊断日志排查。</Text>
+        <Pressable accessibilityRole="button" onPress={() => {
+          logDiagnostic('diagnostics.crashScreenPressed');
+          this.setState({ diagnosticsOpen: true });
+        }}>
+          <Text style={styles.headerActionText}>导出诊断日志</Text>
+        </Pressable>
+        <DiagnosticsPanel visible={this.state.diagnosticsOpen}
+          onClose={() => this.setState({ diagnosticsOpen: false })} />
+      </View>
+    );
+  }
+}
+
 export default function App() {
-  return <SafeAreaProvider><MainApp /></SafeAreaProvider>;
+  return <AppErrorBoundary><SafeAreaProvider><MainApp /></SafeAreaProvider></AppErrorBoundary>;
 }
 
 const styles = StyleSheet.create({

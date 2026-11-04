@@ -7,6 +7,10 @@ const mobileStop = readFileSync(new URL("../Stop-CodexMobile.cmd", import.meta.u
 const sharedStop = readFileSync(new URL("../shared-stop.cmd", import.meta.url), "utf8");
 const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
 const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
+const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+const diagnosticsPanel = readFileSync(new URL("../src/diagnostics/DiagnosticsPanel.tsx", import.meta.url), "utf8");
+const diagnosticsExport = readFileSync(new URL("../src/diagnostics/export.ts", import.meta.url), "utf8");
+const diagnosticsJournal = readFileSync(new URL("../src/diagnostics/journal.ts", import.meta.url), "utf8");
 const packageSettings = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
 const androidStableBuild = readFileSync(new URL("../scripts/build-android-stable.ps1", import.meta.url), "utf8");
@@ -40,7 +44,7 @@ test("mobile OAuth tap creates a fresh request instead of silently disabling its
   assert.doesNotMatch(oauthLogin, /AuthSession\.useAuthRequest\(/);
   assert.doesNotMatch(oauthLogin, /disabled=\{!request/);
   assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
-  assert.equal(appSettings.expo.android.versionCode, 2);
+  assert.equal(appSettings.expo.android.versionCode, 3);
 });
 
 test("Android version metadata is consistent across Expo, npm and lockfile", () => {
@@ -61,4 +65,22 @@ test("Windows stable Android build uses isolated reusable native caches and veri
   assert.match(androidStableBuild, /versionCode=/);
   assert.match(androidStableBuild, /certificate SHA-256 digest/);
   assert.match(androidStableBuild, /android-artifacts/);
+});
+
+test("device diagnostics are reachable before authorization and export a persistent JSON file", () => {
+  assert.match(mainApp, /accessibilityLabel="诊断日志"/);
+  assert.match(mainApp, /<DiagnosticsPanel visible=\{diagnosticsOpen\}/);
+  assert.match(mainApp, /logDiagnostic\('app\.deepLinkReceived'/);
+  assert.match(oauthLogin, /onPressIn=\{\(\) => logDiagnostic\('auth\.pressIn'/);
+  assert.match(oauthLogin, /logDiagnostic\('auth\.browserPromptStarted'/);
+  assert.match(oauthLogin, /logDiagnostic\('auth\.browserPromptFinished'/);
+  assert.match(oauthLogin, /logDiagnostic\('auth\.browserStillPending'/);
+  assert.match(diagnosticsPanel, /exportDiagnostics\(\)/);
+  assert.match(diagnosticsPanel, /nativeBuildVersion/);
+  assert.match(mainApp, /componentDidCatch\(error: Error\)/);
+  assert.match(mainApp, /diagnostics\.crashScreenPressed/);
+  assert.match(diagnosticsExport, /new File\(Paths\.cache/);
+  assert.match(diagnosticsExport, /Sharing\.shareAsync\(file\.uri/);
+  assert.match(diagnosticsJournal, /codexmobileui-diagnostics\.db/);
+  assert.match(diagnosticsJournal, /ORDER BY id DESC LIMIT/);
 });

@@ -10,6 +10,8 @@ import { accessToken } from '../auth/tokens';
 import {
   loadMessages, loadThreads, replaceMessages, storeThreads,
 } from '../storage/database';
+import { logDiagnostic } from '../diagnostics/journal';
+import { classifyDiagnosticError } from '../diagnostics/safe';
 
 export type ConnectionStatus = 'offline' | 'connecting' | 'online';
 
@@ -52,8 +54,14 @@ export function useCodexSession(host: Host | null): CodexSession {
     const connection = source ?? client.current;
     if (!connection?.connected) return;
     const sequence = ++generation.current;
+    const startedAt = Date.now();
+    logDiagnostic('session.threadReadStarted');
     const raw = await connection.request('thread/read', { threadId: id, includeTurns: true });
     const snapshot = parseThreadSnapshotState(raw, id);
+    logDiagnostic('session.threadReadFinished', {
+      count: snapshot.messages.length, durationMs: Date.now() - startedAt,
+      inProgress: snapshot.running,
+    });
     if (sequence !== generation.current) return;
     // Never persist partially generated assistant text as finalized history.
     // An active turn becomes authoritative only on a completed snapshot.
@@ -67,11 +75,13 @@ export function useCodexSession(host: Host | null): CodexSession {
 
   const chooseThread = useCallback(async (id: string) => {
     if (!host) return;
+    logDiagnostic('session.threadSelected');
     active.current = id;
     setActiveThreadId(id);
     const selection = ++generation.current;
     setRunning(false);
     const cached = await loadMessages(host.id, id);
+    logDiagnostic('session.cachedMessagesLoaded', { cacheCount: cached.length });
     if (active.current !== id || generation.current !== selection) return;
     setMessages(cached);
     const connection = client.current;
@@ -82,6 +92,7 @@ export function useCodexSession(host: Host | null): CodexSession {
             client.current !== connection) return;
         await readThread(id, connection);
       } catch (e) {
+        logDiagnostic('session.threadResumeFailed', classifyDiagnosticError(e));
         if (client.current === connection) setError(errorString(e));
       }
     }
@@ -90,7 +101,9 @@ export function useCodexSession(host: Host | null): CodexSession {
   const refresh = useCallback(async () => {
     const connection = client.current;
     if (!host || !connection?.connected) return;
+    logDiagnostic('session.refreshStarted');
     const list = await listAllThreads(connection);
+    logDiagnostic('session.refreshFinished', { count: list.length });
     if (client.current !== connection) return;
     await storeThreads(host.id, list);
     if (client.current !== connection) return;
@@ -100,6 +113,7 @@ export function useCodexSession(host: Host | null): CodexSession {
 
   useEffect(() => {
     const currentHost = host;
+    logDiagnostic('session.hostEffectStarted', { codePresent: Boolean(currentHost) });
     setStatus('offline');
     setThreads([]);
     setMessages([]);
@@ -149,6 +163,7 @@ export function useCodexSession(host: Host | null): CodexSession {
       setStatus('offline');
       setRunning(false);
       retry++;
+      logDiagnostic('session.reconnectScheduled', { retry });
       reconnect.current = setTimeout(() => {
         reconnect.current = null;
         void establish();
@@ -158,6 +173,7 @@ export function useCodexSession(host: Host | null): CodexSession {
     const establish = async () => {
       if (!alive) return;
       setStatus('connecting');
+      logDiagnostic('session.connecting');
       try {
         const token = await accessToken(currentHost);
         if (!alive) return;
@@ -170,8 +186,10 @@ export function useCodexSession(host: Host | null): CodexSession {
         if (!alive) return;
         retry = 0;
         setStatus('online');
+        logDiagnostic('session.online');
         setError(null);
         const list = await listAllThreads(connection);
+        logDiagnostic('session.threadsReceived', { count: list.length });
         if (!alive) return;
         setThreads(list);
         void storeThreads(currentHost.id, list);
@@ -183,6 +201,7 @@ export function useCodexSession(host: Host | null): CodexSession {
           await readThread(selected, connection);
         }
       } catch (e) {
+        logDiagnostic('session.connectFailed', classifyDiagnosticError(e));
         if (!alive) return;
         setError(errorString(e));
         if (client.current) client.current.close();
@@ -192,7 +211,9 @@ export function useCodexSession(host: Host | null): CodexSession {
 
     void (async () => {
       try {
+        logDiagnostic('session.cacheLoadStarted');
         const cached = await loadThreads(currentHost.id);
+        logDiagnostic('session.cacheLoadFinished', { cacheCount: cached.length });
         if (!alive) return;
         setThreads(cached);
         if (cached[0]) {
@@ -205,11 +226,15 @@ export function useCodexSession(host: Host | null): CodexSession {
             setMessages(cachedMessages);
           }
         }
-      } catch (e) { if (alive) setError(errorString(e)); }
+      } catch (e) {
+        logDiagnostic('session.cacheLoadFailed', classifyDiagnosticError(e));
+        if (alive) setError(errorString(e));
+      }
       if (alive) await establish();
     })();
 
     return () => {
+      logDiagnostic('session.hostEffectStopped');
       alive = false;
       if (reconnect.current) {
         clearTimeout(reconnect.current);
@@ -221,6 +246,7 @@ export function useCodexSession(host: Host | null): CodexSession {
   }, [host?.id, readThread]);
 
   const createThread = useCallback(async (cwd: string | null) => {
+    logDiagnostic('session.createThreadStarted');
     const connection = client.current;
     if (!connection?.connected) throw new Error('当前无法新建会话：电脑离线');
     const response = await connection.request('thread/start', cwd ? { cwd } : {});
@@ -234,24 +260,29 @@ export function useCodexSession(host: Host | null): CodexSession {
       throw new Error('会话已在原电脑创建。请切换回原电脑查找，不要重复创建。');
     }
     await chooseThread(id);
+    logDiagnostic('session.createThreadFinished');
   }, [refresh, chooseThread]);
 
   const send = useCallback(async (text: string) => {
+    logDiagnostic('session.sendPressed', { codePresent: Boolean(text.trim()) });
     const id = active.current;
     const connection = client.current;
     if (!id || !connection?.connected) throw new Error('离线时只能保存草稿，不会自动发送');
     if (!text.trim()) return;
     setError(null);
     try {
+      logDiagnostic('session.sendStarted');
       await connection.request('turn/start', {
         threadId: id, input: [{ type: 'text', text }],
       });
+      logDiagnostic('session.sendAccepted');
       // A successful RPC only means Codex accepted the turn. Do not read a
       // mid-turn snapshot here: a partially materialized agentMessage could
       // replace live text deltas and make streaming appear frozen. User/agent
       // items arrive over native events; the final turn/completed event then
       // reconciles and persists the authoritative thread snapshot.
     } catch (e) {
+      logDiagnostic('session.sendFailed', classifyDiagnosticError(e));
       setError('发送状态未确认。请先核对电脑端会话，再决定是否重发。' + errorString(e));
       if (client.current === connection) {
         void readThread(id, connection).catch(() => undefined);
