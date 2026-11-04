@@ -31,16 +31,23 @@ try {
     code_challenge_method: 'S256',
     code_challenge: createHash('sha256').update(verifier).digest('base64url'),
   });
-  const consent = await fetch(base + '/oauth/authorize?' + consentParams);
+  const authorizationRedirect = await fetch(base + '/oauth/authorize?' + consentParams, {
+    redirect: 'manual',
+  });
+  if (authorizationRedirect.status !== 302) throw new Error('authorization redirect failed');
+  const consent = await fetch(base + '/oauth/consent?' + consentParams);
   if (!consent.ok) throw new Error('authorization request failed');
-  const intent = (await consent.text()).match(/name="intent" value="([^"]+)"/)?.[1];
-  if (!intent) throw new Error('missing OAuth intent');
-  const approved = await fetch(base + '/oauth/approve', {
+  if (!(await consent.text()).includes('name="code_challenge"')) {
+    throw new Error('missing PKCE consent fields');
+  }
+  const approved = await fetch(base + '/oauth/consent', {
     method: 'POST', redirect: 'manual',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ intent, approval_secret: secret }),
+    body: new URLSearchParams({
+      ...Object.fromEntries(consentParams), approval_secret: secret,
+    }),
   });
-  if (approved.status !== 303) throw new Error('owner OAuth approval rejected');
+  if (approved.status !== 302) throw new Error('owner OAuth approval rejected');
   const code = new URL(approved.headers.get('location')).searchParams.get('code');
   const tokenResponse = await fetch(base + '/oauth/token', {
     method: 'POST',

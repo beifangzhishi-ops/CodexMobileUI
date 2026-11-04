@@ -5,4 +5,5 @@ import './thread-api.test';
 import './rpc-policy.test';
 import './storage.test';
 import './oauth.test';
+import './authorization-result.test';
 import './gateway.test';

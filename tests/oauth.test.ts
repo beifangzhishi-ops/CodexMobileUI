@@ -29,9 +29,9 @@ function setup(now = () => Date.now()) {
 test('PKCE S256 authorization code is one-use and tied to redirect URI', () => {
   const fixture = setup();
   try {
-    const intent = fixture.store.begin(fixture.params);
-    assert.throws(() => fixture.store.approve(intent, 'incorrect'), AuthorizationError);
-    const redirect = new URL(fixture.store.approve(intent, SECRET));
+    const request = fixture.store.validateRequest(fixture.params);
+    assert.throws(() => fixture.store.approve(request, 'incorrect'), AuthorizationError);
+    const redirect = new URL(fixture.store.approve(request, SECRET));
     assert.equal(redirect.searchParams.get('state'), 'random-state-123456');
     const code = redirect.searchParams.get('code')!;
     const pair = fixture.store.exchange(code, VERIFIER, REDIRECT);
@@ -45,7 +45,7 @@ test('PKCE S256 authorization code is one-use and tied to redirect URI', () => {
 test('refresh rotates token and persists opaque token hashes, not raw tokens', () => {
   const fixture = setup();
   try {
-    const code = new URL(fixture.store.approve(fixture.store.begin(fixture.params), SECRET))
+    const code = new URL(fixture.store.approve(fixture.store.validateRequest(fixture.params), SECRET))
       .searchParams.get('code')!;
     const first = fixture.store.exchange(code, VERIFIER, REDIRECT);
     const second = fixture.store.refresh(first.refresh_token);
@@ -62,10 +62,10 @@ test('reject untrusted redirect URI and unauthorized clients', () => {
   const fixture = setup();
   try {
     fixture.params.set('redirect_uri', 'https://attacker.example/steal');
-    assert.throws(() => fixture.store.begin(fixture.params), AuthorizationError);
+    assert.throws(() => fixture.store.validateRequest(fixture.params), AuthorizationError);
     fixture.params.set('redirect_uri', REDIRECT);
     fixture.params.set('client_id', 'unregistered-app');
-    assert.throws(() => fixture.store.begin(fixture.params), AuthorizationError);
+    assert.throws(() => fixture.store.validateRequest(fixture.params), AuthorizationError);
   } finally { fixture.cleanup(); }
 });
 
@@ -73,15 +73,34 @@ test('expired codes and tokens fail closed', () => {
   let time = 1700000000000;
   const fixture = setup(() => time);
   try {
-    const code = new URL(fixture.store.approve(fixture.store.begin(fixture.params), SECRET))
+    const code = new URL(fixture.store.approve(fixture.store.validateRequest(fixture.params), SECRET))
       .searchParams.get('code')!;
-    time += 3 * 60_000;
+    time += 11 * 60_000;
     assert.throws(() => fixture.store.exchange(code, VERIFIER, REDIRECT), AuthorizationError);
-    const nextCode = new URL(fixture.store.approve(fixture.store.begin(fixture.params), SECRET))
+    const nextCode = new URL(fixture.store.approve(fixture.store.validateRequest(fixture.params), SECRET))
       .searchParams.get('code')!;
     const token = fixture.store.exchange(nextCode, VERIFIER, REDIRECT);
     time += 16 * 60_000;
     assert.equal(fixture.store.verify(token.access_token), false);
     assert.ok(fixture.store.refresh(token.refresh_token).access_token);
+  } finally { fixture.cleanup(); }
+});
+
+test('consent can be approved after long delay and after gateway restart', () => {
+  let time = 1700000000000;
+  const fixture = setup(() => time);
+  try {
+    const request = fixture.store.validateRequest(fixture.params);
+    time += 20 * 60_000;
+    const rebooted = new OAuthStore(SECRET, REDIRECT, fixture.file, () => time);
+    const code = new URL(rebooted.approve(request, SECRET)).searchParams.get('code')!;
+    const restartedAgain = new OAuthStore(SECRET, REDIRECT, fixture.file, () => time);
+    assert.throws(() => restartedAgain.exchange(code, 'incorrect-verifier', REDIRECT),
+      (error: unknown) => error instanceof AuthorizationError && error.code === 'invalid_grant');
+    const pair = restartedAgain.exchange(code, VERIFIER, REDIRECT);
+    assert.ok(pair.refresh_token);
+    const afterExchangeRestart = new OAuthStore(SECRET, REDIRECT, fixture.file, () => time);
+    assert.throws(() => afterExchangeRestart.exchange(code, VERIFIER, REDIRECT),
+      (error: unknown) => error instanceof AuthorizationError && error.code === 'invalid_grant');
   } finally { fixture.cleanup(); }
 });

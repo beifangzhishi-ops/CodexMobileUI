@@ -41,17 +41,20 @@ async function check() {
   });
   const consent = await checkedFetch('/oauth/authorize?' + auth.toString());
   const page = await consent.text();
-  const intent = page.match(/name="intent" value="([a-zA-Z0-9_-]+)"/)?.[1];
-  if (!intent) throw new Error('OAuth consent page did not contain an intent');
-  const approved = await fetch(origin.origin + '/oauth/approve', {
+  if (!page.includes('name="code_challenge"') ||
+      !page.includes('name="state"') ||
+      !page.includes('action="/oauth/consent"')) {
+    throw new Error('OAuth consent page did not preserve the PKCE request');
+  }
+  const approved = await fetch(origin.origin + '/oauth/consent', {
     ...withTimeout,
     method: 'POST',
     redirect: 'manual',
     body: new URLSearchParams({
-      intent, approval_secret: config.MOBILE_APPROVAL_SECRET,
+      ...Object.fromEntries(auth), approval_secret: config.MOBILE_APPROVAL_SECRET,
     }),
   });
-  if (approved.status !== 303) throw new Error('Owner OAuth consent was rejected');
+  if (approved.status !== 302) throw new Error('Owner OAuth consent was rejected');
   const callback = new URL(approved.headers.get('location'));
   if (callback.protocol !== 'codexmobileui:' || callback.searchParams.get('state') !== state) {
     throw new Error('OAuth callback URI/state mismatch');

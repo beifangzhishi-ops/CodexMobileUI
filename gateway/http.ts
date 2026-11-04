@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { AuthorizationError, OAuthStore, PUBLIC_CLIENT_ID } from './oauth.js';
+import { AuthorizationError, OAuthStore, PUBLIC_CLIENT_ID, type AuthorizationRequest } from './oauth.js';
 
 const htmlHeader = {
   'Content-Type': 'text/html; charset=utf-8',
@@ -32,7 +32,24 @@ async function body(req: IncomingMessage): Promise<URLSearchParams> {
   return new URLSearchParams(Buffer.concat(parts).toString('utf8'));
 }
 
-const consentPage = (intent: string, errorMessage = '') => `<!doctype html>
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** CCM-style form: round-trip validated OAuth request fields, not a short-lived in-memory ID. */
+function consentPage(request: AuthorizationRequest, errorMessage = ''): string {
+  const fields = [
+    ['client_id', request.clientId],
+    ['redirect_uri', request.redirectUri],
+    ['response_type', 'code'],
+    ['code_challenge', request.challenge],
+    ['code_challenge_method', 'S256'],
+    ['state', request.state],
+  ];
+  const hidden = fields.map(([name, value]) =>
+    `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`).join('');
+  return `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>授权 CodexMobileUI</title>
 <style>body{font:16px system-ui;background:#10151e;color:#f7fafc;max-width:440px;margin:12vh auto;padding:24px}
@@ -42,22 +59,26 @@ input{background:#1d2838;color:white;border:1px solid #65758b}
 .error{color:#ffb1a8;border:1px solid #82534f;padding:12px;border-radius:8px}</style>
 </head><body><h1>授权手机访问 Codex</h1>
 <p>确认正在为自己的手机连接本电脑。授权后手机可读写此机 Codex 会话，请勿在他人设备上授权。</p>
-<form method="POST" action="/oauth/approve">
-<!-- Values are fixed messages authored by the server, never user input. -->
-${errorMessage ? `<p class="error" role="alert">${errorMessage}</p>` : ''}
-<input type="hidden" name="intent" value="${intent}">
+<form method="POST" action="/oauth/consent">
+${errorMessage ? `<p class="error" role="alert">${escapeHtml(errorMessage)}</p>` : ''}
+${hidden}
 <label for="secret">本机网关设置的授权密语</label>
 <input id="secret" name="approval_secret" type="password" autocomplete="off" required>
-<button type="submit">确认授权</button></form></body></html>`;
+<button type="submit">确认授权并返回应用</button></form>
+<p>请使用与本页电脑地址对应的本机授权密钥。授权成功后将返回 CodexMobileUI。</p>
+</body></html>`;
+}
 
-const expiredPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+const invalidPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorization expired</title></head><body style="font:16px system-ui;background:#10151e;color:#f7fafc;padding:24px">
-<h1>授权请求已失效</h1>
-<p>请求已超时或尝试次数达到上限。请关闭此页面，返回 CodexMobileUI 重新点击 OAuth 授权。</p>
+<title>授权请求无效</title></head><body style="font:16px system-ui;background:#10151e;color:#f7fafc;padding:24px">
+<h1>授权请求无效</h1>
+<p>授权参数无效。请关闭此页面，从 CodexMobileUI 重新发起授权。</p>
 </body></html>`;
 
-export type OAuthAuditEvent = 'approval_denied' | 'approval_expired' | 'oauth_invalid_grant';
+export type OAuthAuditEvent =
+  'consent_denied' | 'consent_granted' | 'authorization_invalid' |
+  'oauth_invalid_grant' | 'oauth_token_issued' | 'oauth_token_refreshed';
 
 /** No consent values, URLs, codes, access tokens, refresh tokens or secrets. */
 function defaultAudit(event: OAuthAuditEvent): void {
@@ -71,6 +92,14 @@ export function createHttpHandler(
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       const url = new URL(req.url ?? '/', baseUrl);
+      if (url.pathname.startsWith('/oauth/')) {
+        // CCM-style request trace, intentionally excluding query, body and host.
+        const started = Date.now();
+        res.once('finish', () => {
+          const method = req.method === 'POST' ? 'POST' : req.method === 'GET' ? 'GET' : 'OTHER';
+          console.info(`[mobile-oauth] ${new Date().toISOString()} http ${method} ${url.pathname} status=${res.statusCode} elapsedMs=${Date.now() - started}`);
+        });
+      }
       if (req.method === 'GET' && url.pathname === '/health') {
         send(res, 200, { status: 'ok', name: 'codex-mobile-gateway' });
         return;
@@ -88,45 +117,61 @@ export function createHttpHandler(
         return;
       }
       if (req.method === 'GET' && url.pathname === '/oauth/authorize') {
-        const intent = store.begin(url.searchParams);
-        res.writeHead(200, htmlHeader);
-        res.end(consentPage(intent));
+        const request = store.validateRequest(url.searchParams);
+        const consent = new URL('/oauth/consent', baseUrl);
+        consent.searchParams.set('client_id', request.clientId);
+        consent.searchParams.set('redirect_uri', request.redirectUri);
+        consent.searchParams.set('response_type', 'code');
+        consent.searchParams.set('code_challenge', request.challenge);
+        consent.searchParams.set('code_challenge_method', 'S256');
+        consent.searchParams.set('state', request.state);
+        res.writeHead(302, { Location: consent.toString(), 'Cache-Control': 'no-store' });
+        res.end();
         return;
       }
-      if (req.method === 'POST' && url.pathname === '/oauth/approve') {
-        const data = await body(req);
-        const intent = data.get('intent') ?? '';
+      if (url.pathname === '/oauth/consent' &&
+          (req.method === 'GET' || req.method === 'POST')) {
+        const data = req.method === 'POST' ? await body(req) : url.searchParams;
+        let request: AuthorizationRequest;
+        try {
+          request = store.validateRequest(data);
+        } catch (error) {
+          audit('authorization_invalid');
+          res.writeHead(400, htmlHeader);
+          res.end(invalidPage);
+          return;
+        }
+        if (req.method === 'GET') {
+          res.writeHead(200, htmlHeader);
+          res.end(consentPage(request));
+          return;
+        }
         let location: string;
         try {
-          location = store.approve(intent, data.get('approval_secret') ?? '');
+          location = store.approve(request, data.get('approval_secret') ?? '');
         } catch (error) {
-          if (error instanceof AuthorizationError && error.code === 'access_denied') {
-            audit('approval_denied');
-            res.writeHead(403, htmlHeader);
-            res.end(consentPage(intent, '授权密钥不正确，请只输入本机 MOBILE_APPROVAL_SECRET 等号后的值后重试。'));
-            return;
-          }
-          if (error instanceof AuthorizationError && error.code === 'expired_request') {
-            audit('approval_expired');
-            res.writeHead(400, htmlHeader);
-            res.end(expiredPage);
-            return;
-          }
-          throw error;
+          if (!(error instanceof AuthorizationError) || error.code !== 'access_denied') throw error;
+          audit('consent_denied');
+          res.writeHead(403, htmlHeader);
+          res.end(consentPage(request, '授权密钥不正确，请核对当前电脑对应的密钥并重试。'));
+          return;
         }
-        res.writeHead(303, { Location: location, 'Cache-Control': 'no-store' });
+        audit('consent_granted');
+        res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
         res.end();
         return;
       }
       if (req.method === 'POST' && url.pathname === '/oauth/token') {
         const data = await body(req);
         if (data.get('client_id') !== PUBLIC_CLIENT_ID) throw new AuthorizationError('invalid_client');
-        const tokens = data.get('grant_type') === 'authorization_code'
+        const grantType = data.get('grant_type');
+        const tokens = grantType === 'authorization_code'
           ? store.exchange(data.get('code') ?? '', data.get('code_verifier') ?? '', data.get('redirect_uri') ?? '')
-          : data.get('grant_type') === 'refresh_token'
+          : grantType === 'refresh_token'
             ? store.refresh(data.get('refresh_token') ?? '')
             : null;
         if (!tokens) throw new AuthorizationError('unsupported_grant_type');
+        audit(grantType === 'refresh_token' ? 'oauth_token_refreshed' : 'oauth_token_issued');
         send(res, 200, tokens);
         return;
       }

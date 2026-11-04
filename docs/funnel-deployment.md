@@ -64,6 +64,33 @@ host-private configuration. Do not run it on an existing configured
 host because it will refuse to rotate a real secret. The read-only
 public end-to-end probe is **scripts/probe-funnel-auth.cjs**.
 
+## Authorization and troubleshooting
+
+The gateway adopts CCM's two-page flow: the authorization endpoint validates
+PKCE and redirects to the consent page, which carries the validated request
+fields in an HTML form. POST consent revalidates them, shows a useful error
+and the same form when a key is incorrect, and redirects to the registered
+Android callback only after a correct secret. Consent does not rely on a
+two-minute process-memory request ID: the owner can enter a key later or after
+a Gateway restart. A created authorization code is valid for ten minutes,
+survives a Gateway restart, and is consumed once after correct PKCE exchange.
+Do not repeat a code exchange blindly when its outcome is uncertain.
+
+A wrong key means the value does not match that computer's own local
+authorization secret; copy only the value after the assignment sign from that
+host's private configuration. Never send the value in chat or issue reports.
+When the Android browser cannot return to the app, verify the app was built
+with the registered custom URI scheme and use a fresh authorization flow.
+Only the server-side HTTPS/WSS probe does not validate the Android deep link.
+
+The Gateway records the safe OAuth route name, HTTP status and duration, plus
+fixed event names, all timestamped. It never logs form contents, URL query
+parameters, authorization codes, client tokens or private host names. On 6v
+the process log is kept under the ignored .state directory; noha has an
+independent log. A new Gateway build must be restarted on both hosts to
+activate this behavior, and the Android app must be rebuilt to pick up the
+updated browser-return handler.
+
 Funnel is configured in the Tailscale daemon's background mode and can
 survive a daemon restart. The gateway process itself must be running
 for the route to work; if the computer reboots, start only its Gateway

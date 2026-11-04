@@ -5,14 +5,13 @@ import { dirname } from 'node:path';
 export const PUBLIC_CLIENT_ID = 'codexmobileui-android';
 const ACCESS_MS = 15 * 60_000;
 const REFRESH_MS = 30 * 24 * 60 * 60_000;
-const MAX_PENDING_MS = 2 * 60_000;
+const AUTHORIZATION_CODE_MS = 10 * 60_000;
 
-interface Intent {
+export interface AuthorizationRequest {
+  clientId: typeof PUBLIC_CLIENT_ID;
   redirectUri: string;
   challenge: string;
   state: string;
-  expires: number;
-  attempts: number;
 }
 
 interface Code {
@@ -55,8 +54,8 @@ export class AuthorizationError extends Error {
  * No public signup, shared static bearer secrets, or third-party IdP.
  */
 export class OAuthStore {
-  private pending = new Map<string, Intent>();
-  private codes = new Map<string, Code>();
+  private codes: Record<string, Code>;
+  private readonly codeFile: string;
   private state: StoredState;
 
   constructor(
@@ -72,9 +71,15 @@ export class OAuthStore {
     this.state = existsSync(stateFile)
       ? JSON.parse(readFileSync(stateFile, 'utf8')) as StoredState
       : { access: {}, refresh: {} };
+    this.codeFile = stateFile + '.codes';
+    this.codes = existsSync(this.codeFile)
+      ? JSON.parse(readFileSync(this.codeFile, 'utf8')) as Record<string, Code>
+      : {};
   }
 
-  begin(params: URLSearchParams): string {
+  /** CCM-style consent: validate the complete request on both GET and POST.
+   * No transient server-side intent or short approval-page timeout. */
+  validateRequest(params: URLSearchParams): AuthorizationRequest {
     const challenge = params.get('code_challenge') ?? '';
     const state = params.get('state') ?? '';
     if (params.get('client_id') !== PUBLIC_CLIENT_ID ||
@@ -85,43 +90,36 @@ export class OAuthStore {
         state.length < 8 || state.length > 512) {
       throw new AuthorizationError('invalid_request');
     }
-    this.cleanup();
-    const intentId = random();
-    this.pending.set(intentId, {
-      challenge, state, redirectUri: this.redirectUri,
-      expires: this.now() + MAX_PENDING_MS, attempts: 0,
-    });
-    return intentId;
+    return {
+      clientId: PUBLIC_CLIENT_ID,
+      challenge,
+      state,
+      redirectUri: this.redirectUri,
+    };
   }
 
-  approve(intentId: string, suppliedSecret: string): string {
-    const intent = this.pending.get(intentId);
-    if (!intent || intent.expires < this.now() || intent.attempts >= 5) {
-      this.pending.delete(intentId);
-      throw new AuthorizationError('expired_request');
-    }
-    intent.attempts++;
+  /** Wrong consent does not consume the request or issue an authorization code. */
+  approve(request: AuthorizationRequest, suppliedSecret: string): string {
     const a = Buffer.from(hash(suppliedSecret), 'hex');
     const b = Buffer.from(hash(this.approvalSecret), 'hex');
     if (!timingSafeEqual(a, b)) throw new AuthorizationError('access_denied');
-    this.pending.delete(intentId);
     const code = random();
-    this.codes.set(hash(code), {
-      challenge: intent.challenge,
-      redirectUri: intent.redirectUri,
-      expires: this.now() + MAX_PENDING_MS,
-    });
-    const url = new URL(intent.redirectUri);
+    this.codes[hash(code)] = {
+      challenge: request.challenge,
+      redirectUri: request.redirectUri,
+      expires: this.now() + AUTHORIZATION_CODE_MS,
+    };
+    this.cleanup();
+    this.persistCodes();
+    const url = new URL(request.redirectUri);
     url.searchParams.set('code', code);
-    url.searchParams.set('state', intent.state);
+    url.searchParams.set('state', request.state);
     return url.toString();
   }
 
   exchange(code: string, verifier: string, redirectUri: string): Tokens {
     const id = hash(code);
-    const entry = this.codes.get(id);
-    // One-use code, including invalid verifier attempts.
-    this.codes.delete(id);
+    const entry = this.codes[id];
     const expected = createHash('sha256').update(verifier).digest('base64url');
     if (!entry || entry.expires < this.now() ||
         redirectUri !== entry.redirectUri ||
@@ -129,6 +127,9 @@ export class OAuthStore {
         entry.challenge !== expected) {
       throw new AuthorizationError('invalid_grant');
     }
+    // CCM pattern: only a correctly verified code becomes consumed.
+    delete this.codes[id];
+    this.persistCodes();
     return this.mint(random());
   }
 
@@ -177,12 +178,14 @@ export class OAuthStore {
   }
 
   private cleanup(): void {
-    for (const [id, intent] of this.pending) {
-      if (intent.expires < this.now()) this.pending.delete(id);
+    let codesChanged = false;
+    for (const [id, code] of Object.entries(this.codes)) {
+      if (!code || code.expires < this.now()) {
+        delete this.codes[id];
+        codesChanged = true;
+      }
     }
-    for (const [id, code] of this.codes) {
-      if (code.expires < this.now()) this.codes.delete(id);
-    }
+    if (codesChanged) this.persistCodes();
     for (const bucket of [this.state.access, this.state.refresh]) {
       for (const [id, item] of Object.entries(bucket)) {
         if (item.expires < this.now()) delete bucket[id];
@@ -195,5 +198,12 @@ export class OAuthStore {
     const temp = this.stateFile + '.tmp';
     writeFileSync(temp, JSON.stringify(this.state), { mode: 0o600 });
     renameSync(temp, this.stateFile);
+  }
+
+  private persistCodes(): void {
+    mkdirSync(dirname(this.codeFile), { recursive: true });
+    const temp = this.codeFile + '.tmp';
+    writeFileSync(temp, JSON.stringify(this.codes), { mode: 0o600 });
+    renameSync(temp, this.codeFile);
   }
 }

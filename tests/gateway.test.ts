@@ -13,7 +13,7 @@ const SECRET = 'gateway-test-only-secret-is-long-enough';
 const VERIFIER = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_~';
 const REDIRECT = 'codexmobileui://oauth';
 
-test('incorrect consent key preserves the form for bounded retry and logs only safe events', async () => {
+test('CCM-style consent survives delay, supports retry and logs only safe events', async () => {
   const directory = resolve('.tmp', 'consent-retry-' + randomUUID());
   mkdirSync(directory, { recursive: true });
   const events: OAuthAuditEvent[] = [];
@@ -28,13 +28,13 @@ test('incorrect consent key preserves the form for bounded retry and logs only s
   const address = httpServer.address();
   if (!address || typeof address === 'string') throw new Error('test server did not listen');
   const base = `http://127.0.0.1:${address.port}`;
-  const postConsent = (intent: string, secret: string) => fetch(base + '/oauth/approve', {
+  const postConsent = (params: URLSearchParams, secret: string) => fetch(base + '/oauth/consent', {
     method: 'POST',
     redirect: 'manual',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ intent, approval_secret: secret }),
+    body: new URLSearchParams({ ...Object.fromEntries(params), approval_secret: secret }),
   });
-  const getIntent = async (): Promise<string> => {
+  const getConsent = async (): Promise<URLSearchParams> => {
     const params = new URLSearchParams({
       client_id: PUBLIC_CLIENT_ID,
       redirect_uri: REDIRECT,
@@ -43,39 +43,41 @@ test('incorrect consent key preserves the form for bounded retry and logs only s
       code_challenge_method: 'S256',
       code_challenge: createHash('sha256').update(VERIFIER).digest('base64url'),
     });
-    const consent = await fetch(base + '/oauth/authorize?' + params);
+    const authorize = await fetch(base + '/oauth/authorize?' + params, { redirect: 'manual' });
+    assert.equal(authorize.status, 302);
+    const consent = await fetch(base + '/oauth/consent?' + params);
     assert.equal(consent.status, 200);
-    const intent = (await consent.text()).match(/name="intent" value="([a-zA-Z0-9_-]+)"/)?.[1];
-    assert.ok(intent);
-    return intent;
+    const form = await consent.text();
+    assert.match(form, /name="code_challenge"/);
+    assert.match(form, /name="state"/);
+    assert.doesNotMatch(form, /name="intent"/);
+    return params;
   };
   try {
-    const firstIntent = await getIntent();
-    const denied = await postConsent(firstIntent, 'incorrect-private-value');
+    const firstRequest = await getConsent();
+    const denied = await postConsent(firstRequest, 'incorrect-private-value');
     assert.equal(denied.status, 403);
     const retryPage = await denied.text();
-    assert.match(retryPage, /<form method="POST" action="\/oauth\/approve">/);
+    assert.match(retryPage, /<form method="POST" action="\/oauth\/consent">/);
     assert.match(retryPage, /role="alert"/);
-    assert.ok(retryPage.includes(`name="intent" value="${firstIntent}"`));
+    assert.ok(retryPage.includes(`name="state" value="${firstRequest.get('state')}"`));
     assert.doesNotMatch(retryPage, /incorrect-private-value/);
     assert.doesNotMatch(retryPage, new RegExp(SECRET));
-    assert.equal(events[0], 'approval_denied');
-    const accepted = await postConsent(firstIntent, SECRET);
-    assert.equal(accepted.status, 303);
+    assert.equal(events[0], 'consent_denied');
+    // No transient intent: the same browser form remains valid and testable after delay.
+    const accepted = await postConsent(firstRequest, SECRET);
+    assert.equal(accepted.status, 302);
     assert.match(accepted.headers.get('location') ?? '', /^codexmobileui:\/\/oauth\?/);
 
-    const secondIntent = await getIntent();
-    for (let index = 0; index < 5; index++) {
-      const attempt = await postConsent(secondIntent, 'wrong');
-      assert.equal(attempt.status, 403);
-    }
-    const locked = await postConsent(secondIntent, SECRET);
-    assert.equal(locked.status, 400);
-    const expired = await locked.text();
-    assert.match(expired, /授权请求已失效/);
-    assert.doesNotMatch(expired, /<form method="POST"/);
-    assert.equal(events.at(-1), 'approval_expired');
-    assert.ok(events.every((event) => ['approval_denied', 'approval_expired'].includes(event)));
+    assert.equal(events[1], 'consent_granted');
+    const badRequest = new URLSearchParams(firstRequest);
+    badRequest.set('redirect_uri', 'https://untrusted.example/path');
+    const invalid = await postConsent(badRequest, SECRET);
+    assert.equal(invalid.status, 400);
+    assert.match(await invalid.text(), /授权请求无效/);
+    assert.equal(events.at(-1), 'authorization_invalid');
+    assert.ok(events.every((event) =>
+      ['consent_denied', 'consent_granted', 'authorization_invalid'].includes(event)));
   } finally {
     await new Promise<void>((done) => httpServer.close(() => done()));
     rmSync(directory, { recursive: true, force: true });
@@ -118,16 +120,17 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
       code_challenge_method: 'S256',
       code_challenge: createHash('sha256').update(VERIFIER).digest('base64url'),
     });
-    const consent = await fetch(base + '/oauth/authorize?' + authorization);
+    const authorizationRedirect = await fetch(base + '/oauth/authorize?' + authorization, { redirect: 'manual' });
+    assert.equal(authorizationRedirect.status, 302);
+    const consent = await fetch(base + '/oauth/consent?' + authorization);
     assert.equal(consent.status, 200);
-    const intent = (await consent.text()).match(/name="intent" value="([^"]+)"/)?.[1];
-    assert.ok(intent);
-    const approval = await fetch(base + '/oauth/approve', {
+    assert.match(await consent.text(), /name="code_challenge"/);
+    const approval = await fetch(base + '/oauth/consent', {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       redirect: 'manual',
-      body: new URLSearchParams({ intent, approval_secret: SECRET }),
+      body: new URLSearchParams({ ...Object.fromEntries(authorization), approval_secret: SECRET }),
     });
-    assert.equal(approval.status, 303);
+    assert.equal(approval.status, 302);
     const authCode = new URL(approval.headers.get('location')!).searchParams.get('code');
     assert.ok(authCode);
     const tokenReply = await fetch(base + '/oauth/token', {
