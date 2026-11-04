@@ -68,7 +68,7 @@ npm.cmd run check
 npm.cmd run build:gateway
 ```
 
-**Gateway (each host independently):** the target architecture is two identical full Git checkouts of CodexMobileUI, one on 6v and one on noha, both under their own `Documents\\ChatGPT\\CodexMobileUI`. Both build and run their own Gateway from the same commit, using independent private `.env`, OAuth secrets, and `.state` directories. Existing Funnel HTTPS 8443 routes remain separate. **Migration status:** 6v already has the full repository; noha currently still runs the previously deployed runtime-only Gateway at `Documents\\AAAVitalFile\\CodexMobileGateway`. Do not claim migration is complete until the full checkout, private-state handoff, process ownership and public health tests have been verified.
+**Gateway (each host independently):** the target architecture is two identical full Git checkouts of CodexMobileUI, one on 6v and one on noha, both under their own `Documents\\ChatGPT\\CodexMobileUI`. Both build and run their own Gateway from the same commit, using independent private `.env`, OAuth secrets, and `.state` directories. Existing Funnel HTTPS 8443 routes remain separate. **Migration status (2026-11-04):** both complete Git checkouts exist; noha's private `.env` and OAuth state were copied to its new checkout and its Gateway compiled successfully from source. The old noha Gateway at `Documents\\AAAVitalFile\\CodexMobileGateway` **is still the running instance**: the CCM execution identity received Access Denied attempting to stop its PID 58812. Cutover, new process health, public Funnel verification and old-directory removal remain pending an authorized process stop. Do not claim the runtime migration is complete.
 
 ```powershell
 Set-Location -LiteralPath 'C:\path\to\CodexMobileUI'
