@@ -43,6 +43,10 @@ $nativeFile = Join-Path $sourceRoot 'android\app\build.gradle'
 if (-not (Test-Path -LiteralPath $nativeFile)) {
     throw 'Android native sources are missing. Generate them with Expo prebuild first.'
 }
+# Keep ignored Expo-prebuilt version metadata aligned with app.json, without
+# changing the fixed build command or regenerating Gradle/CMake caches.
+& node.exe (Join-Path $sourceRoot 'scripts\sync-android-native-version.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize Android native version metadata.' }
 $nativeText = Get-Content -LiteralPath $nativeFile -Raw
 $nativeCode = [regex]::Match($nativeText, '(?m)^\s*versionCode\s+(\d+)').Groups[1].Value
 $nativeVersion = [regex]::Match($nativeText, '(?m)^\s*versionName\s+"([^"]+)"').Groups[1].Value
