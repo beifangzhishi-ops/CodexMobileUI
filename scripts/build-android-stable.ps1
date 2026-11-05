@@ -104,7 +104,7 @@ try {
         (Join-Path $stateDir 'stable-build.lock'), 'OpenOrCreate', 'ReadWrite', 'None'
     )
 } catch {
-    throw "Another stable build is already running in $buildRoot."
+    throw "Unable to acquire exclusive stable build lock in ${buildRoot}: $($_.Exception.Message)"
 }
 
 try {
