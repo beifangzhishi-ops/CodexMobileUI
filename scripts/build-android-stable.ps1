@@ -153,7 +153,7 @@ try {
             }
             Write-Host "Synchronizing source into $buildRoot"
             Sync-Tree $sourceRoot $buildRoot @(
-                '.git', '.tmp', '.npm-cache', '.local-home', '.expo', '.expo-shared',
+                '.git', '.worktrees', '.tmp', '.npm-cache', '.local-home', '.expo', '.expo-shared',
                 '.state', '.runtime', 'node_modules', 'android', 'dist', 'coverage'
             )
             Sync-Tree (Join-Path $sourceRoot 'android') (Join-Path $buildRoot 'android') @(

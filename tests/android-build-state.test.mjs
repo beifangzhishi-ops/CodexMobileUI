@@ -29,6 +29,12 @@ test("source fingerprint changes for meaningful sources, but not ignored outputs
   const first = sourceFingerprint(source);
   writeFileSync(join(source, ".tmp", "secret.txt"), "changed ignored fixture");
   assert.equal(sourceFingerprint(source), first);
+  mkdirSync(join(source, ".worktrees", "independent-frontend"), { recursive: true });
+  const independent = join(source, ".worktrees", "independent-frontend", "README.md");
+  writeFileSync(independent, "Frontend branch in progress");
+  assert.equal(sourceFingerprint(source), first, "other Git worktrees must not alter main build provenance");
+  writeFileSync(independent, "Frontend branch updated during main APK build");
+  assert.equal(sourceFingerprint(source), first, "parallel frontend edits must never invalidate active build");
   writeFileSync(join(source, "src", "app.ts"), "export const version = 2;");
   assert.notEqual(sourceFingerprint(source), first);
   const next = sourceFingerprint(source);

@@ -14,7 +14,7 @@ export function sourceFingerprint(sourceRoot) {
   // Hash the files the stable robocopy stages, not just git-tracked files.
   // This includes ignored-but-staged source files and excludes native build caches and secrets.
   const excludedDirs = new Set([
-    ".git", ".tmp", ".npm-cache", ".local-home", ".expo", ".expo-shared",
+    ".git", ".worktrees", ".tmp", ".npm-cache", ".local-home", ".expo", ".expo-shared",
     ".state", ".runtime", "node_modules", "dist", "coverage",
   ]);
   const nativeExcludedDirs = new Set([".gradle", ".cxx", "build"]);
