@@ -76,7 +76,7 @@ function Assert-AvailableLock([string]$Path) {
     try {
         $handle = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
     } catch {
-        throw "Build already running in this checkout: $Path"
+        throw "Unable to acquire nested Android build lock at ${Path}: $($_.Exception.Message)"
     } finally {
         if ($null -ne $handle) { $handle.Dispose() }
     }
@@ -107,99 +107,166 @@ try {
     throw "Unable to acquire exclusive stable build lock in ${buildRoot}: $($_.Exception.Message)"
 }
 
+$stateTool = Join-Path $sourceRoot 'scripts\android-build-state.mjs'
+function Invoke-BuildState([string]$Action, [string[]]$Values) {
+    $output = & node.exe $stateTool $Action @Values
+    if ($LASTEXITCODE -ne 0) {
+        throw "Android build state operation failed: $Action"
+    }
+    return $output
+}
+
 try {
     Assert-AvailableLock (Join-Path $stateDir 'android-build.lock')
-    $sourceLock = Join-Path $sourceRoot 'package-lock.json'
-    $stagedLock = Join-Path $buildRoot 'package-lock.json'
-    $dependenciesCurrent = (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo\package.json')) -and
-        (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo-modules-autolinking\build\index.js')) -and
-        (Test-Path -LiteralPath $stagedLock)
-    if ($dependenciesCurrent) {
-        $dependenciesCurrent = (Get-DependencyLockContent $sourceLock) -ceq
-            (Get-DependencyLockContent $stagedLock)
-    }
-
-    Write-Host "Synchronizing source into $buildRoot"
-    Sync-Tree $sourceRoot $buildRoot @(
-        '.git', '.tmp', '.npm-cache', '.local-home', '.expo', '.expo-shared',
-        '.state', '.runtime', 'node_modules', 'android', 'dist', 'coverage'
-    )
-    Sync-Tree (Join-Path $sourceRoot 'android') (Join-Path $buildRoot 'android') @(
-        '.gradle', '.cxx', 'build'
-    )
-    if (-not $dependenciesCurrent) {
-        Write-Host 'Installing dependency lockfile in the persistent build checkout.'
-        Push-Location $buildRoot
-        try {
-            & npm.cmd ci '--no-audit' '--no-fund' '--prefer-offline'
-            if ($LASTEXITCODE -ne 0) { throw "npm ci failed: $LASTEXITCODE" }
-        } finally { Pop-Location }
-    } else {
-        Write-Host 'Reusing installed dependencies and incremental Gradle/CMake caches.'
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo-modules-autolinking\build\index.js'))) {
-        throw 'Expo Autolinking compiled JavaScript is missing.'
-    }
-
     $logDir = Join-Path $stateDir 'android-build-logs'
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    $logPath = Join-Path $logDir ("$($Variant.ToLowerInvariant())-$(Get-Date -Format 'yyyyMMdd-HHmmss').log")
-    Write-Host "Build transcript: $logPath"
-    $transcribing = $false
-    try {
-        Start-Transcript -LiteralPath $logPath -ErrorAction Stop | Out-Null
-        $transcribing = $true
-        $builder = Join-Path $buildRoot 'scripts\build-android-windows.ps1'
-        if ($RegenerateCMake) {
-            & $builder -Variant $Variant -RegenerateCMake
-        } else {
-            & $builder -Variant $Variant
-        }
-        if (-not $?) { throw 'Gradle build did not complete successfully.' }
-    } finally {
-        if ($transcribing) { Stop-Transcript | Out-Null }
-    }
-
     $lower = $Variant.ToLowerInvariant()
     $apk = Join-Path $buildRoot "android\app\build\outputs\apk\$lower\app-$lower.apk"
-    if (-not (Test-Path -LiteralPath $apk)) { throw 'Gradle returned without an APK.' }
-    $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
-    $aapt = Join-Path $sdk 'build-tools\37.0.0\aapt.exe'
-    $badging = & $aapt dump badging $apk
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect APK metadata.' }
-    $identity = @($badging | Where-Object { $_ -like 'package:*' }) | Select-Object -First 1
-    if (-not $identity -or $identity -notmatch "name='$([regex]::Escape($appId))'" -or
-        $identity -notmatch "versionCode='$appCode'" -or
-        $identity -notmatch "versionName='$([regex]::Escape($appVersion))'") {
-        throw "APK identity/version mismatch: $identity"
-    }
-    $previous = Join-Path $sourceRoot 'android\app\build\outputs\apk\release\app-release.apk'
-    if ($Variant -eq 'Release' -and (Test-Path -LiteralPath $previous)) {
-        $signer = Join-Path $sdk 'build-tools\37.0.0\apksigner.bat'
-        $oldInfo = & $signer verify '--print-certs' $previous
-        if ($LASTEXITCODE -ne 0) { throw 'Previously installed APK signing check failed.' }
-        $newInfo = & $signer verify '--print-certs' $apk
-        if ($LASTEXITCODE -ne 0) { throw 'New APK signing check failed.' }
-        # Android SDK apksigner emits "V2 Signer: certificate SHA-256 digest: ...".
-        # Require a complete digest; empty matches must never count as equal signing keys.
-        $digest = '(?im)^V2 Signer: certificate SHA-256 digest:\s*([a-f0-9]{64})\s*$'
-        $oldHash = [regex]::Match(($oldInfo -join [Environment]::NewLine), $digest).Groups[1].Value
-        $newHash = [regex]::Match(($newInfo -join [Environment]::NewLine), $digest).Groups[1].Value
-        if (-not $oldHash -or $oldHash -ne $newHash) {
-            throw 'New APK signing certificate differs from the installed test APK.'
+    $probe = Invoke-BuildState 'inspect' @($sourceRoot, $buildRoot, $Variant, $appVersion, $appCode, $appId, $apk)
+    # Explicit native graph regeneration must never reuse an interrupted APK.
+    $resuming = (-not $RegenerateCMake) -and ($probe -eq 'RESUME')
+    $tracked = $false
+    try {
+        if ($resuming) {
+            Write-Host 'Recovering a completed APK from the recorded interrupted build; skipping Gradle.'
+            $tracked = $true
+        } else {
+            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+            $logPath = Join-Path $logDir "$lower-$stamp.log"
+            $gradleLog = Join-Path $logDir "$lower-$stamp.gradle.log"
+            Invoke-BuildState 'begin' @(
+                $sourceRoot, $buildRoot, $Variant, $appVersion, $appCode, $appId, $gradleLog
+            ) | Out-Null
+            $tracked = $true
+            $sourceLock = Join-Path $sourceRoot 'package-lock.json'
+            $stagedLock = Join-Path $buildRoot 'package-lock.json'
+            $dependenciesCurrent = (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo\package.json')) -and
+                (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo-modules-autolinking\build\index.js')) -and
+                (Test-Path -LiteralPath $stagedLock)
+            if ($dependenciesCurrent) {
+                $dependenciesCurrent = (Get-DependencyLockContent $sourceLock) -ceq
+                    (Get-DependencyLockContent $stagedLock)
+            }
+            Write-Host "Synchronizing source into $buildRoot"
+            Sync-Tree $sourceRoot $buildRoot @(
+                '.git', '.tmp', '.npm-cache', '.local-home', '.expo', '.expo-shared',
+                '.state', '.runtime', 'node_modules', 'android', 'dist', 'coverage'
+            )
+            Sync-Tree (Join-Path $sourceRoot 'android') (Join-Path $buildRoot 'android') @(
+                '.gradle', '.cxx', 'build'
+            )
+            if (-not $dependenciesCurrent) {
+                Write-Host 'Installing dependency lockfile in the persistent build checkout.'
+                Push-Location $buildRoot
+                try {
+                    & npm.cmd ci '--no-audit' '--no-fund' '--prefer-offline'
+                    if ($LASTEXITCODE -ne 0) { throw "npm ci failed: $LASTEXITCODE" }
+                } finally { Pop-Location }
+            } else {
+                Write-Host 'Reusing installed dependencies and incremental Gradle/CMake caches.'
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo-modules-autolinking\build\index.js'))) {
+                throw 'Expo Autolinking compiled JavaScript is missing.'
+            }
+            # The source fingerprint is checked again before publishing the APK.
+            Invoke-BuildState 'phase' @($buildRoot, 'building') | Out-Null
+            Write-Host "Build transcript: $logPath"
+            Write-Host "Gradle output: $gradleLog"
+            $transcribing = $false
+            try {
+                Start-Transcript -LiteralPath $logPath -ErrorAction Stop | Out-Null
+                $transcribing = $true
+                $builder = Join-Path $buildRoot 'scripts\build-android-windows.ps1'
+                if ($RegenerateCMake) {
+                    & $builder -Variant $Variant -RegenerateCMake -GradleLogPath $gradleLog
+                } else {
+                    & $builder -Variant $Variant -GradleLogPath $gradleLog
+                }
+                if (-not $?) { throw 'Gradle build did not complete successfully.' }
+            } finally {
+                if ($transcribing) { Stop-Transcript | Out-Null }
+            }
+            Invoke-BuildState 'phase' @($buildRoot, 'built') | Out-Null
         }
-        Write-Host 'Signing identity matches the previously installed APK.'
+        Invoke-BuildState 'phase' @($buildRoot, 'verifying') | Out-Null
+        if ((Invoke-BuildState 'source-match' @($sourceRoot, $buildRoot, $Variant, $appVersion, $appCode, $appId)) -ne 'MATCH') {
+            throw 'APK cannot be published because its recorded source or version has changed.'
+        }
+        if ($resuming -and
+            (Invoke-BuildState 'inspect' @($sourceRoot, $buildRoot, $Variant, $appVersion, $appCode, $appId, $apk)) -ne 'RESUME') {
+            throw 'Interrupted build APK is older than its recorded Gradle attempt.'
+        }
+        $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
+        $aapt = Join-Path $sdk 'build-tools\37.0.0\aapt.exe'
+        $badging = & $aapt dump badging $apk
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect APK metadata.' }
+        $identity = @($badging | Where-Object { $_ -like 'package:*' }) | Select-Object -First 1
+        if (-not $identity -or $identity -notmatch "name='$([regex]::Escape($appId))'" -or
+            $identity -notmatch "versionCode='$appCode'" -or
+            $identity -notmatch "versionName='$([regex]::Escape($appVersion))'") {
+            throw "APK identity/version mismatch: $identity"
+        }
+        $signer = Join-Path $sdk 'build-tools\37.0.0\apksigner.bat'
+        $newInfo = & $signer verify '--verbose' '--print-certs' $apk
+        if ($LASTEXITCODE -ne 0) { throw 'New APK signing check failed.' }
+        $digest = '(?im)^V2 Signer: certificate SHA-256 digest:\s*([a-f0-9]{64})\s*$'
+        $newHash = [regex]::Match(($newInfo -join [Environment]::NewLine), $digest).Groups[1].Value
+        if (-not $newHash) { throw 'New APK has no valid V2 signing certificate digest.' }
+        if ($Variant -eq 'Release') {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($apk)
+            try {
+                $bundled = @($archive.Entries | Where-Object { $_.FullName -eq 'assets/index.android.bundle' })
+                if (-not $bundled.Count -or $bundled[0].Length -le 0) {
+                    throw 'Release APK is missing the embedded JavaScript/Hermes bundle.'
+                }
+                $libraries = @($archive.Entries | Where-Object { $_.FullName -match '^lib/[^/]+/[^/]+\.so$' })
+                if (-not $libraries.Count -or @($libraries | Where-Object {
+                    $_.FullName -notmatch '^lib/arm64-v8a/'
+                }).Count) {
+                    throw 'Release APK has no ARM64 native libraries or contains another ABI.'
+                }
+                Write-Host "Embedded Release JavaScript verified: $($bundled[0].Length) bytes"
+            } finally { $archive.Dispose() }
+        }
+        $artifactDir = Join-Path $sourceRoot '.tmp\android-artifacts'
+        New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+        $artifact = Join-Path $artifactDir "CodexMobileUI-$appVersion-$lower-arm64.apk"
+        $previous = Get-ChildItem -LiteralPath $artifactDir -Filter 'CodexMobileUI-*-release-arm64.apk' -File |
+            Where-Object { $_.FullName -ne $artifact } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($Variant -eq 'Release' -and $previous) {
+            $oldInfo = & $signer verify '--print-certs' $previous.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Previous APK signing check failed.' }
+            $oldHash = [regex]::Match(($oldInfo -join [Environment]::NewLine), $digest).Groups[1].Value
+            if (-not $oldHash -or $oldHash -ne $newHash) {
+                throw 'New APK signing certificate differs from the previous APK.'
+            }
+            Write-Host 'Signing identity matches the previous APK.'
+        }
+        $sourceSha = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash
+        $partial = "$artifact.partial"
+        if (Test-Path -LiteralPath $partial) {
+            Remove-Item -LiteralPath $partial -Force
+        }
+        Copy-Item -LiteralPath $apk -Destination $partial -ErrorAction Stop
+        $partialSha = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
+        if ($sourceSha -ne $partialSha) { throw 'APK staging copy SHA-256 mismatch.' }
+        Move-Item -LiteralPath $partial -Destination $artifact -Force
+        $sha = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash
+        if ($sha -ne $sourceSha) { throw 'Published APK SHA-256 mismatch.' }
+        $size = (Get-Item -LiteralPath $artifact).Length
+        Invoke-BuildState 'finish' @($buildRoot, $artifact, $sha, "$size") | Out-Null
+        Write-Host "Verified APK: $artifact"
+        Write-Host "Version $appVersion ($appCode); SHA-256: $sha"
+        [System.IO.File]::WriteAllText($buildRootHint, $buildRoot, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        if ($tracked) {
+            try { Invoke-BuildState 'fail' @($buildRoot, $_.Exception.Message) | Out-Null }
+            catch { Write-Warning 'Unable to persist failed Android build state.' }
+        }
+        throw
     }
-    $artifactDir = Join-Path $sourceRoot '.tmp\android-artifacts'
-    New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
-    $artifact = Join-Path $artifactDir "CodexMobileUI-$appVersion-$lower-arm64.apk"
-    Copy-Item -LiteralPath $apk -Destination $artifact -Force
-    $sha = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash
-    Write-Host "Verified APK: $artifact"
-    Write-Host "Version $appVersion ($appCode); SHA-256: $sha"
-    Write-Host "Build transcript: $logPath"
-    # Keep the same native cache on subsequent invocations without machine-specific tracked paths.
-    [System.IO.File]::WriteAllText($buildRootHint, $buildRoot, (New-Object System.Text.UTF8Encoding($false)))
 } finally {
     $lockHandle.Dispose()
 }

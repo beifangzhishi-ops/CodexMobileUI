@@ -5,7 +5,8 @@ param(
     [string]$Variant = 'Release',
     [switch]$UseWorkspaceCache,
     [switch]$RegenerateCMake,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [string]$GradleLogPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -115,7 +116,7 @@ try {
         [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None
     )
 } catch {
-    throw 'Another CodexMobileUI Android build may be using this directory. Do not start two builds concurrently.'
+    throw "Unable to acquire exclusive Android build lock in ${projectRoot}: $($_.Exception.Message)"
 }
 try {
 $androidRoot = Join-Path $projectRoot 'android'
@@ -132,10 +133,37 @@ if ($RegenerateCMake) {
 }
 Push-Location $androidRoot
 try {
-    & $gradleCommand ":app:assemble$Variant" '--console=plain' '--no-daemon' '--max-workers=2' `
-        '-PreactNativeArchitectures=arm64-v8a' `
-        '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6'
-    if ($LASTEXITCODE -ne 0) { throw "Android Gradle build failed with exit code $LASTEXITCODE" }
+    $gradleArguments = @(
+        ":app:assemble$Variant", '--console=plain', '--no-daemon', '--max-workers=2',
+        '-PreactNativeArchitectures=arm64-v8a',
+        '-Pkotlin.compiler.execution.strategy=in-process', '-Pandroid.cmakeVersion=3.31.6'
+    )
+    if ($GradleLogPath) {
+        # Redirect inside cmd.exe, not through PowerShell's pipeline/Transcript.
+        # Gradle descendants can finish writing the log if their parent shell is interrupted.
+        $logFile = [System.IO.Path]::GetFullPath($GradleLogPath)
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logFile) | Out-Null
+        $launcher = Join-Path $projectRoot '.tmp\android-gradle-command.cmd'
+        $lines = @(
+            '@echo off',
+            ('call "{0}" {1} 1>> "{2}" 2>&1' -f $gradleCommand, ($gradleArguments -join ' '), $logFile),
+            'exit /b %ERRORLEVEL%'
+        )
+        Set-Content -LiteralPath $launcher -Value $lines -Encoding Ascii
+        Write-Host "Full Gradle stdout/stderr: $logFile"
+        try {
+            & cmd.exe '/d' '/c' $launcher
+            $gradleExit = $LASTEXITCODE
+        } finally {
+            Remove-Item -LiteralPath $launcher -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        & $gradleCommand @gradleArguments
+        $gradleExit = $LASTEXITCODE
+    }
+    if ($gradleExit -ne 0) {
+        throw "Android Gradle build failed with exit code $gradleExit; inspect $GradleLogPath"
+    }
 } finally {
     Pop-Location
 }
