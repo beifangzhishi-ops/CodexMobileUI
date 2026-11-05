@@ -1,5 +1,15 @@
 # Staged implementation and acceptance
 
+## Stage 1.5 — delayed sessions and native project synchronization (0.1.4)
+- [x] Local pending conversation with no early `thread/start`; first user send creates exactly one native thread then starts its turn. SQLite pending selection/draft recovery and ambiguous-send guard implemented with tests.
+- [x] `project/list` and `thread.projectId` incorporated as the canonical project catalog; cwd-only fallback for old project classification and an explicit uncategorized group.
+- [x] Projectless first-send requests an isolated cwd from the authenticated Gateway, created through native `fs/createDirectory`, not a new shell command executor.
+- [x] Real thread moves use `thread/metadata/update` and re-read server ownership; mobile rename and a bounded ephemeral automatic-title worker use `thread/name/set`. Move never relocates cwd/files.
+- [x] Two actual shared App Servers verified project listing, project-assigned thread creation and moving with disposable threads; both test threads and native filesystem test directories were deleted.
+- [x] Gateway strict RPC filtering and local unit/integration tests. Full file upload/preview/download UI remains part of Stage 3 for both project and projectless chats.
+- [ ] Install and validate the new 0.1.4 APK on Android (new chat, first-send, project chooser, move, rename, keyboard and restart recovery).
+- [ ] Observe Desktop sidebar after a real user-initiated project move. No conflict was detected in short App Server read-back; Desktop persistence/reversion is still unknown.
+
 **Android keyboard regression (mainline 0.1.3 / versionCode 5):** Add explicit `KeyboardAvoidingView` `behavior="padding"` around the real-chat transcript and composer while retaining Expo Android `resize` settings. This is a source fix plus an automated structural check; only an actual Redmi K80 installation can verify the composer moves above the keyboard, multiline editing, and scroll positioning.
 
 **Scope frozen for first release**. Add capabilities in isolated modules and validate each stage; do not make low-frequency Worktree features a blocker.
@@ -27,7 +37,7 @@
 ## Stage 2 — multi-client behavior
 - Model/effort, permission modes, Plan/default, real approvals and blocking/nonblocking questions.
 - Native pending-request replay and once-only answers across Desktop/AOI/mobile.
-- Stop, steering/queue, compact/context usage, rename, fork at historical turn.
+- Stop, steering/queue, compact/context usage and fork at historical turn. Thread renaming is part of Stage 1.5.
 
 ## Stage 3 — daily mobile features
 - Host-independent full search and unread; task completion and approval local notifications via Funnel when the app process is running.

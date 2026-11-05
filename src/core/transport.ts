@@ -91,7 +91,7 @@ export class CodexTransport {
       await first;
       logDiagnostic('transport.initializeStarted');
       await this.request('initialize', {
-        clientInfo: { name: 'codex_mobile_ui', title: 'CodexMobileUI', version: '0.1.2' },
+        clientInfo: { name: 'codex_mobile_ui', title: 'CodexMobileUI', version: '0.1.4' },
         capabilities: { experimentalApi: true, requiredHumanApproval: true },
       });
       this.notify('initialized', {});

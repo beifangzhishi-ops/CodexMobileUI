@@ -29,13 +29,15 @@ test('listAllThreads follows native pagination, deduplicates IDs, and retains or
   assert.deepEqual(calls[0], { limit: 100, sortKey: 'recency_at', modelProviders: [] });
 });
 
-test('new live thread is selectable before persistence without resume/read', async () => {
+test('native starter returns a live thread and requests bounded projectless permissions', async () => {
   const calls: string[] = [];
   const client: ThreadRpcClient = {
     async request(method, params) {
       calls.push(method);
       assert.equal(method, 'thread/start');
-      assert.deepEqual(params, { cwd: 'C:\\Code\\Repo' });
+      assert.deepEqual(params, {
+        cwd: 'C:\\Code\\Repo', sandbox: 'workspace-write', approvalPolicy: 'on-request',
+      });
       return { thread: { id: 'live-1', title: null } };
     },
   };

@@ -7,6 +7,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { OAuthLogin } from './src/auth/Login';
 import { clearTokens, hasTokens } from './src/auth/tokens';
 import { parseHost, type Host } from './src/core/host';
+import { threadCategory, type CodexProject } from './src/core/projectApi';
 import { useCodexSession } from './src/session/useCodexSession';
 import { loadHosts, storeHost } from './src/storage/database';
 import { ChatThread } from './src/ui/ChatThread';
@@ -23,7 +24,11 @@ function MainApp() {
   const [threadChooser, setThreadChooser] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [hostEntry, setHostEntry] = useState('');
-  const [project, setProject] = useState<string | null>(null);
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [moveTarget, setMoveTarget] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [rootTarget, setRootTarget] = useState<CodexProject | null>(null);
   const session = useCodexSession(authorized ? currentHost : null);
 
   useEffect(() => {
@@ -88,19 +93,43 @@ function MainApp() {
       setCurrentHost(host);
       setHostChooser(false);
       setHostEntry('');
-      setProject(null);
+      setProjectFilter('all');
     } catch (e) {
       logDiagnostic('app.addHostFailed', classifyDiagnosticError(e));
       Alert.alert('电脑地址无效', e instanceof Error ? e.message : '');
     }
   }, [hostEntry]);
 
-  const projects = useMemo(() =>
-    [...new Set(session.threads.map((thread) => thread.cwd).filter((cwd): cwd is string => Boolean(cwd)))],
-  [session.threads]);
-  const visible = session.threads.filter((thread) => project === null || thread.cwd === project);
+  const projects = session.projects;
+  const visible = session.threads.filter((thread) =>
+    projectFilter === 'all' || threadCategory(thread, projects) === projectFilter);
   const selected = session.threads.find((thread) => thread.id === session.activeThreadId);
-  const newThreadCwd = project ?? selected?.cwd ?? projects[0] ?? null;
+  const projectName = projects.find((item) => item.id === session.pending?.projectId)?.name;
+  const beginNew = () => {
+    const target = projects.find((item) => item.id === projectFilter);
+    if (projectFilter === 'all' || projectFilter === 'uncategorized') {
+      Alert.alert('选择新会话归属', '请先选择具体项目，或直接创建无项目会话。', [
+        { text: '取消' },
+        { text: '无项目会话', onPress: () => {
+          setProjectFilter('unassigned');
+          void session.createThread(null, null).then(() => setThreadChooser(false))
+            .catch((e: unknown) => Alert.alert('无法新建', String(e)));
+        } },
+      ]);
+      return;
+    }
+    if (target && target.roots.length > 1) {
+      setRootTarget(target);
+      return;
+    }
+    if (target && target.roots.length === 0) {
+      Alert.alert('无法新建', '该项目没有可用工作目录，请先在桌面端检查项目配置。');
+      return;
+    }
+    void session.createThread(target?.id ?? null, target?.roots[0] ?? null)
+      .then(() => setThreadChooser(false))
+      .catch((e: unknown) => Alert.alert('无法新建', String(e)));
+  };
 
   if (checking) return (
     <View style={styles.loading}>
@@ -137,10 +166,12 @@ function MainApp() {
       </View>
       <View style={styles.subheader}>
         <Text style={styles.threadTitle} numberOfLines={1}>
-          {selected?.name ?? (selected ? '未命名会话' : 'CodexMobileUI')}
+          {session.pending ? '新对话' : (selected?.name ?? (selected ? '未命名会话' : 'CodexMobileUI'))}
         </Text>
         <Text style={styles.cwd} numberOfLines={1}>
-          {selected?.cwd ?? (session.status === 'online' ? '选择或新建会话' : '离线 · 只读缓存 / 本地草稿')}
+          {session.pending ? (session.pending.cwd ?? '无项目 · 独立工作区将在首次发送时创建') +
+            (projectName ? ' · ' + projectName : '') :
+            (selected?.cwd ?? (session.status === 'online' ? '选择或新建会话' : '离线 · 只读缓存 / 本地草稿'))}
         </Text>
       </View>
       {session.error ? <Text style={styles.error} numberOfLines={3}>{session.error}</Text> : null}
@@ -148,15 +179,14 @@ function MainApp() {
         <View style={styles.center}><Text style={styles.empty}>请先添加一台电脑的 HTTPS Funnel 地址。</Text></View>
       ) : !authorized ? (
         <OAuthLogin host={currentHost} onConnected={() => setAuthorized(true)} />
-      ) : session.activeThreadId ? (
-        <ChatThread key={currentHost.id + ':' + session.activeThreadId} host={currentHost} session={session} />
+      ) : session.draftKey ? (
+        <ChatThread key={currentHost.id + ':' + session.draftKey} host={currentHost} session={session} />
       ) : (
         <View style={styles.center}>
           <Text style={styles.empty}>还没有会话，或尚未加载历史列表。</Text>
           <Pressable
             style={styles.primary}
-            disabled={session.status !== 'online'}
-            onPress={() => { void session.createThread(newThreadCwd).catch((e: unknown) => Alert.alert('无法新建', String(e))); }}
+            onPress={beginNew}
           ><Text style={styles.primaryText}>新建 Codex 会话</Text></Pressable>
         </View>
       )}
@@ -170,7 +200,7 @@ function MainApp() {
             </View>
             {hosts.map((host) => (
               <Pressable key={host.id} style={styles.choice} onPress={() => {
-                setCurrentHost(host); setProject(null); setHostChooser(false);
+                setCurrentHost(host); setProjectFilter('all'); setHostChooser(false);
               }}>
                 <Text style={styles.choiceName}>{host.name}</Text>
                 <Text style={styles.choiceHint} numberOfLines={1}>{host.baseUrl}</Text>
@@ -206,14 +236,23 @@ function MainApp() {
               <Pressable onPress={() => setThreadChooser(false)}><Text style={styles.close}>完成</Text></Pressable>
             </View>
             <View style={styles.projectScroll}>
-              <Pressable onPress={() => setProject(null)} style={[styles.projectChip, project === null && styles.activeChip]}>
+              <Pressable onPress={() => setProjectFilter('all')} style={[styles.projectChip, projectFilter === 'all' && styles.activeChip]}>
                 <Text style={styles.chipText}>全部</Text>
               </Pressable>
-              {projects.map((cwd) => (
-                <Pressable key={cwd} style={[styles.projectChip, project === cwd && styles.activeChip]} onPress={() => setProject(cwd)}>
-                  <Text style={styles.chipText} numberOfLines={1}>{cwd.split(/[\\/]/).pop()}</Text>
+              <Pressable onPress={() => setProjectFilter('unassigned')}
+                style={[styles.projectChip, projectFilter === 'unassigned' && styles.activeChip]}>
+                <Text style={styles.chipText}>无项目</Text>
+              </Pressable>
+              {projects.map((item) => (
+                <Pressable key={item.id} style={[styles.projectChip, projectFilter === item.id && styles.activeChip]}
+                  onPress={() => setProjectFilter(item.id)}>
+                  <Text style={styles.chipText} numberOfLines={1}>{item.name}</Text>
                 </Pressable>
               ))}
+              <Pressable onPress={() => setProjectFilter('uncategorized')}
+                style={[styles.projectChip, projectFilter === 'uncategorized' && styles.activeChip]}>
+                <Text style={styles.chipText}>未分类</Text>
+              </Pressable>
             </View>
             <FlatList
               style={styles.threadList}
@@ -221,23 +260,95 @@ function MainApp() {
               keyExtractor={(thread) => thread.id}
               ListEmptyComponent={<Text style={styles.helper}>暂无已记录的会话</Text>}
               renderItem={({ item }) => (
-                <Pressable style={styles.choice} onPress={() => {
-                  void session.chooseThread(item.id);
-                  setThreadChooser(false);
-                }}>
-                  <Text style={styles.choiceName} numberOfLines={1}>{item.name ?? '未命名会话'}</Text>
-                  <Text style={styles.choiceHint} numberOfLines={1}>{item.cwd ?? '无项目'} · {item.id.slice(0, 10)}</Text>
-                </Pressable>
+                <View style={styles.choice}>
+                  <Pressable onPress={() => {
+                    void session.chooseThread(item.id);
+                    setThreadChooser(false);
+                  }}>
+                    <Text style={styles.choiceName} numberOfLines={1}>{item.name ?? '未命名会话'}</Text>
+                    <Text style={styles.choiceHint} numberOfLines={1}>
+                      {item.cwd ?? '无项目'} · {item.id.slice(0, 10)}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.projectScroll}>
+                    <Pressable onPress={() => setMoveTarget(item.id)} style={styles.projectChip}>
+                      <Text style={styles.chipText}>移动到项目</Text>
+                    </Pressable>
+                    <Pressable onPress={() => {
+                      setRenameTarget(item.id);
+                      setRenameValue(item.name ?? '');
+                    }} style={styles.projectChip}>
+                      <Text style={styles.chipText}>重命名</Text>
+                    </Pressable>
+                  </View>
+                </View>
               )}
             />
             <Pressable
               style={[styles.primary, session.status !== 'online' && styles.disabled]}
-              disabled={session.status !== 'online'}
-              onPress={() => {
-                void session.createThread(newThreadCwd).then(() => setThreadChooser(false))
-                  .catch((e: unknown) => Alert.alert('新建失败', String(e)));
-              }}
+              onPress={beginNew}
             ><Text style={styles.primaryText}>＋ 新建会话</Text></Pressable>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={moveTarget !== null} animationType="slide" transparent
+        onRequestClose={() => setMoveTarget(null)}>
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>移动会话到项目</Text>
+              <Pressable onPress={() => setMoveTarget(null)}><Text style={styles.close}>取消</Text></Pressable>
+            </View>
+            <Text style={styles.helper}>仅更新 Codex 项目归属；原工作目录和文件不会移动。</Text>
+            <FlatList style={styles.threadList} data={projects} keyExtractor={(item) => item.id}
+              renderItem={({ item }) => <Pressable style={styles.choice} onPress={() => {
+                if (!moveTarget) return;
+                const id = moveTarget;
+                setMoveTarget(null);
+                void session.moveThread(id, item.id).catch((e: unknown) =>
+                  Alert.alert('移动失败', String(e)));
+              }}><Text style={styles.choiceName}>{item.name}</Text></Pressable>} />
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={rootTarget !== null} animationType="slide" transparent
+        onRequestClose={() => setRootTarget(null)}>
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>选择项目工作目录</Text>
+              <Pressable onPress={() => setRootTarget(null)}><Text style={styles.close}>取消</Text></Pressable>
+            </View>
+            <FlatList style={styles.threadList} data={rootTarget?.roots ?? []}
+              keyExtractor={(item) => item} renderItem={({ item }) => (
+                <Pressable style={styles.choice} onPress={() => {
+                  const target = rootTarget;
+                  if (!target) return;
+                  setRootTarget(null);
+                  void session.createThread(target.id, item).then(() => setThreadChooser(false))
+                    .catch((e: unknown) => Alert.alert('无法新建', String(e)));
+                }}><Text style={styles.choiceName}>{item}</Text></Pressable>
+              )} />
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={renameTarget !== null} animationType="fade" transparent
+        onRequestClose={() => setRenameTarget(null)}>
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>重命名会话</Text>
+              <Pressable onPress={() => setRenameTarget(null)}><Text style={styles.close}>取消</Text></Pressable>
+            </View>
+            <TextInput style={styles.field} value={renameValue} onChangeText={setRenameValue}
+              maxLength={80} placeholder="新标题" placeholderTextColor="#7e8b9b" />
+            <Pressable style={styles.primary} onPress={() => {
+              if (!renameTarget) return;
+              const id = renameTarget;
+              setRenameTarget(null);
+              void session.renameThread(id, renameValue).catch((e: unknown) =>
+                Alert.alert('重命名失败', String(e)));
+            }}><Text style={styles.primaryText}>保存名称</Text></Pressable>
           </View>
         </View>
       </Modal>

@@ -54,11 +54,19 @@ export async function listAllThreads(client: ThreadRpcClient): Promise<CodexThre
 }
 
 /** thread/start creates a live thread, which may not be persisted yet. */
-export async function startLiveThread(client: ThreadRpcClient, cwd: string | null): Promise<CodexThread> {
-  const raw = await client.request('thread/start', cwd ? { cwd } : {});
+export async function startLiveThread(
+  client: ThreadRpcClient, cwd: string, projectId: string | null = null,
+): Promise<CodexThread> {
+  const raw = await client.request('thread/start', {
+    cwd, ...(projectId ? { projectId } : {}),
+    ...(!projectId ? { sandbox: 'workspace-write', approvalPolicy: 'on-request' } : {}),
+  });
   const thread = normalizeThread(recordOf(raw).thread);
   if (!thread) throw new Error('Codex did not confirm the new thread ID; check Desktop before retrying');
-  return { ...thread, cwd: thread.cwd ?? cwd, updatedAt: thread.updatedAt || Date.now() / 1000 };
+  return {
+    ...thread, cwd: thread.cwd ?? cwd,
+    projectId: thread.projectId ?? projectId, updatedAt: thread.updatedAt || Date.now() / 1000,
+  };
 }
 
 /** Show temporary live threads without persisting fake entries in SQLite. */

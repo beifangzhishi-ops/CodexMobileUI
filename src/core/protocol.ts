@@ -8,6 +8,7 @@ export interface CodexThread {
   id: string;
   name: string | null;
   cwd: string | null;
+  projectId?: string | null;
   updatedAt: number;
   turns?: unknown[];
 }
@@ -49,6 +50,7 @@ export function normalizeThread(input: unknown): CodexThread | null {
     id: value.id as string,
     name: optionalString(value.name) ?? optionalString(value.title),
     cwd: optionalString(value.cwd),
+    projectId: optionalString(value.projectId),
     updatedAt: timestamp,
     ...(Array.isArray(value.turns) ? { turns: value.turns } : {}),
   };

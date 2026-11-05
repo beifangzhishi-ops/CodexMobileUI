@@ -46,7 +46,7 @@ function ChatBubble({ user }: { user: boolean }) {
 }
 
 function Composer({ host, session }: { host: Host; session: CodexSession }) {
-  const threadId = session.activeThreadId!;
+  const threadId = session.draftKey!;
   const [draft, setDraft] = useState('');
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -76,7 +76,7 @@ function Composer({ host, session }: { host: Host; session: CodexSession }) {
     if (!draft.trim() || session.status !== 'online' || busy) return;
     setBusy(true);
     try {
-      await session.send(draft.trim());
+      await session.send(draft.trim(), threadId);
       setDraft('');
       await storeDraft(host.id, threadId, '');
     } catch {
@@ -132,8 +132,8 @@ export function ChatThread({ host, session }: { host: Host; session: CodexSessio
   const onNew = useCallback(async (message: AppendMessage) => {
     const text = message.content.filter((part) => part.type === 'text')
       .map((part) => part.text).join('\n');
-    if (text) await session.send(text);
-  }, [session.send]);
+    if (text) await session.send(text, session.draftKey);
+  }, [session.send, session.draftKey]);
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage: (message: ThreadMessageLike) => message,

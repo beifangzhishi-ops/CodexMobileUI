@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { createHttpHandler } from './http.js';
 import { OAuthStore } from './oauth.js';
 import { permitMobileRpcFrame } from './rpcPolicy.js';
+import { validateWorkspaceMetadata, workspacePath } from './workspace.js';
 import {
   classifyGatewayClient, classifyGatewayRoute, createGatewayJournal,
   type GatewayTrace,
@@ -66,6 +67,38 @@ export function createGateway(config: Config) {
     wss.handleUpgrade(req, socket, head, (client) => {
       logWs('ws.upgraded');
       let upstream: WebSocket | undefined;
+      let nextInternalId = 1_000_000_000;
+      const internalRequests = new Map<number, {
+        resolve: (result: unknown) => void;
+        reject: (error: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }>();
+      const requestInternal = (method: string, params: Record<string, unknown>) =>
+        new Promise<unknown>((resolve, reject) => {
+          if (upstream?.readyState !== WebSocket.OPEN) {
+            reject(new Error('Codex App Server 未连接'));
+            return;
+          }
+          const id = nextInternalId++;
+          const timer = setTimeout(() => {
+            internalRequests.delete(id);
+            reject(new Error('原生目录准备超时'));
+          }, 20_000);
+          internalRequests.set(id, { resolve, reject, timer });
+          upstream.send(JSON.stringify({ id, method, params }), (error) => {
+            if (!error) return;
+            clearTimeout(timer);
+            internalRequests.delete(id);
+            reject(new Error('原生目录请求发送失败'));
+          });
+        });
+      const rejectInternal = () => {
+        for (const pending of internalRequests.values()) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error('原生目录连接已断开'));
+        }
+        internalRequests.clear();
+      };
       let accessToken = '';
       let accepted = false;
       const authTimer = setTimeout(() => client.close(4001, 'auth timeout'), 10_000);
@@ -102,9 +135,28 @@ export function createGateway(config: Config) {
             client.send(JSON.stringify({ type: 'ready' }));
           });
           upstream.on('message', (message, isBinary) => {
+            if (!isBinary) {
+              try {
+                const response = JSON.parse(message.toString()) as {
+                  id?: number; result?: unknown; error?: { code?: number };
+                };
+                const pending = typeof response.id === 'number'
+                  ? internalRequests.get(response.id) : undefined;
+                if (pending) {
+                  clearTimeout(pending.timer);
+                  internalRequests.delete(response.id!);
+                  if (response.error) pending.reject(new Error('原生目录操作失败'));
+                  else pending.resolve(response.result);
+                  return;
+                }
+              } catch { /* Unrelated upstream notification: forward unchanged. */ }
+            }
             if (client.readyState === WebSocket.OPEN) client.send(message, { binary: isBinary });
           });
-          upstream.on('close', () => client.close(1011, 'upstream closed'));
+          upstream.on('close', () => {
+            rejectInternal();
+            client.close(1011, 'upstream closed');
+          });
           upstream.on('error', () => {
             logWs('ws.upstreamFailed');
             client.close(1011, 'upstream unavailable');
@@ -114,6 +166,40 @@ export function createGateway(config: Config) {
         if (!oauth.verify(accessToken)) {
           client.close(4001, 'token expired');
           return;
+        }
+        // The mobile client never gets to choose a Windows absolute path.
+        // This narrowly scoped gateway operation uses native App Server fs RPCs.
+        if (!binary) {
+          try {
+            const operation = JSON.parse(bytes.toString()) as {
+              id?: unknown; method?: string; params?: { draftId?: unknown };
+            };
+            if (operation.method === 'workspace/prepare') {
+              const id = operation.id;
+              const sendResult = (payload: Record<string, unknown>) => {
+                if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ id, ...payload }));
+              };
+              if (!Number.isSafeInteger(id) || Number(id) < 0 || Number(id) >= 1_000_000_000 ||
+                  !operation.params || Object.keys(operation.params).length !== 1) {
+                if (typeof id === 'number') sendResult({
+                  error: { code: -32602, message: 'Invalid workspace request' },
+                });
+                return;
+              }
+              void (async () => {
+                try {
+                  const path = workspacePath(operation.params!.draftId);
+                  await requestInternal('fs/createDirectory', { path, recursive: true });
+                  const metadata = await requestInternal('fs/getMetadata', { path });
+                  if (!validateWorkspaceMetadata(metadata)) throw new Error('工作区目录不可用');
+                  sendResult({ result: { cwd: path } });
+                } catch {
+                  sendResult({ error: { code: -32603, message: '无法准备独立工作区' } });
+                }
+              })();
+              return;
+            }
+          } catch { /* Regular policy check rejects malformed JSON. */ }
         }
         const frame = permitMobileRpcFrame(bytes.toString(), binary);
         if (!frame.allowed) {
@@ -133,6 +219,7 @@ export function createGateway(config: Config) {
         logWs('ws.closed', { closeCode });
         clearTimeout(authTimer);
         clearInterval(expiryPoll);
+        rejectInternal();
         if (upstream && upstream.readyState !== WebSocket.CLOSED) upstream.close();
       });
       client.on('error', () => upstream?.terminate());

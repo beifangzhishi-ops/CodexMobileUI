@@ -115,8 +115,12 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
   backend.on('connection', (ws) => {
     ws.on('message', (data) => {
       upstreamMessage = data.toString();
-      const request = JSON.parse(upstreamMessage) as { id: number };
-      ws.send(JSON.stringify({ id: request.id, result: { success: true } }));
+      const request = JSON.parse(upstreamMessage) as { id: number; method: string };
+      ws.send(JSON.stringify({
+        id: request.id,
+        result: request.method === 'fs/getMetadata'
+          ? { isDirectory: true, isSymlink: false } : { success: true },
+      }));
     });
   });
   const gateway = createGateway({
@@ -192,6 +196,34 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
     });
     assert.equal((denied.error as { code: number }).code, -32601);
     assert.match(upstreamMessage, /"method":"initialize"/, 'forbidden RPC never reaches Codex');
+    const draftId = Date.now() + '-abcdef0123456789abcdef01';
+    const prepared = await new Promise<Record<string, unknown>>((accept, reject) => {
+      const timeout = setTimeout(() => reject(new Error('workspace prepare timed out')), 2500);
+      ws.on('message', (bytes) => {
+        const response = JSON.parse(bytes.toString()) as Record<string, unknown>;
+        if (response.id === 19) {
+          clearTimeout(timeout);
+          accept(response);
+        }
+      });
+      ws.send(JSON.stringify({ id: 19, method: 'workspace/prepare', params: { draftId } }));
+    });
+    assert.equal(typeof (prepared.result as { cwd?: string }).cwd, 'string');
+    assert.match((prepared.result as { cwd: string }).cwd, /Codex[\\/]MobileUI/);
+    assert.match(upstreamMessage, /"method":"fs\/getMetadata"/,
+      'native App Server should handle the actual filesystem operation');
+    const invalid = await new Promise<Record<string, unknown>>((accept, reject) => {
+      const timeout = setTimeout(() => reject(new Error('invalid workspace request timed out')), 2500);
+      ws.on('message', (bytes) => {
+        const response = JSON.parse(bytes.toString()) as Record<string, unknown>;
+        if (response.id === 20) {
+          clearTimeout(timeout);
+          accept(response);
+        }
+      });
+      ws.send(JSON.stringify({ id: 20, method: 'workspace/prepare', params: { draftId: '../outside' } }));
+    });
+    assert.equal((invalid.error as { code: number }).code, -32603);
   } catch (error) {
     console.error('Gateway integration failure:', error);
     throw error;

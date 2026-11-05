@@ -13,7 +13,7 @@ test('normalize threads without inventing a project or name', () => {
   ] });
   assert.equal(threads.length, 2);
   assert.deepEqual(threads[0], {
-    id: 'thr-1', name: 'Chapter 3', cwd: 'C:\\Project\\Thesis', updatedAt: 42,
+    id: 'thr-1', name: 'Chapter 3', cwd: 'C:\\Project\\Thesis', updatedAt: 42, projectId: null,
   });
   assert.equal(normalizeThread({ name: 'missing id' }), null);
   assert.equal(threads[1].cwd, null);

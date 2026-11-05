@@ -23,3 +23,33 @@ test('Funnel gateway rejects privileged native operations and crafted JSON-RPC',
   assert.equal(permitMobileRpcFrame('{"id":1,"method":"thread/list","error":{}}', false).allowed, false);
   assert.equal(permitMobileRpcFrame('{"method":"thread/list"}', false).allowed, false);
 });
+
+test('project reading, thread moving and naming allow only narrow validated parameters', () => {
+  const allowed = [
+    ['project/list', { limit: 100 }],
+    ['project/read', { projectId: 'project-a' }],
+    ['thread/metadata/update', { threadId: 'thread-one', projectId: 'project-two' }],
+    ['thread/name/set', { threadId: 'thread-one', name: '重命名会话' }],
+  ] as const;
+  for (const [method, params] of allowed) {
+    assert.equal(permitMobileRpcFrame(JSON.stringify({ id: 8, method, params }), false).allowed,
+      true, method);
+  }
+  const blocked = [
+    ['project/list', { limit: 1_000_000 }],
+    ['project/read', {}],
+    ['thread/metadata/update', { threadId: 't', projectId: 'x', gitInfo: { branch: 'main' } }],
+    ['thread/metadata/update', { threadId: 't', projectId: null }],
+    ['thread/name/set', { threadId: 't', name: 'a\nb' }],
+    ['thread/name/set', { threadId: 't', name: 'a'.repeat(81) }],
+    ['fs/createDirectory', { path: 'C:\\Windows', recursive: true }],
+    ['workspace/prepare', { draftId: 'anything' }],
+  ] as const;
+  for (const [method, params] of blocked) {
+    assert.equal(permitMobileRpcFrame(JSON.stringify({ id: 9, method, params }), false).allowed,
+      false, method);
+  }
+  assert.equal(permitMobileRpcFrame(JSON.stringify({
+    id: 1_000_000_000, method: 'thread/list', params: {},
+  }), false).allowed, false);
+});
