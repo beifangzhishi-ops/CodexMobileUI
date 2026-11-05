@@ -1,24 +1,27 @@
 {
   "expo": {
-    "name": "CodexMobileUI",
-    "slug": "codex-mobile-ui",
-    "scheme": "codexmobileui",
-    "version": "0.2.0",
+    "name": "CodexMobile 视觉版",
+    "slug": "codexmobile-visual",
+    "version": "0.3.0",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "android": {
-      "package": "dev.codexmobileui.app",
+      "package": "dev.codexmobileui.visual",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 4
+      "versionCode": 1,
+      "allowBackup": false,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      }
     },
     "plugins": [
       "expo-secure-store",
       "expo-sqlite",
-      "expo-web-browser"
-    ],
-    "extra": {
-      "apiClientId": "codexmobileui-android"
-    }
+      "expo-web-browser",
+      "expo-speech-recognition"
+    ]
   }
 }

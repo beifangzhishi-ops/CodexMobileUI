@@ -28,12 +28,12 @@ if ($buildRoot.Equals($sourceRoot.TrimEnd('\'), [System.StringComparison]::Ordin
     throw 'The persistent Android build directory must be outside the source checkout.'
 }
 
-$app = Get-Content -LiteralPath (Join-Path $sourceRoot 'app.json') -Raw | ConvertFrom-Json
+$app = Get-Content -LiteralPath (Join-Path $sourceRoot 'app.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $package = Get-Content -LiteralPath (Join-Path $sourceRoot 'package.json') -Raw | ConvertFrom-Json
 $appVersion = [string]$app.expo.version
 $appCode = [string]$app.expo.android.versionCode
 $appId = [string]$app.expo.android.package
-if (-not $appVersion -or $appCode -notmatch '^\d+$' -or $appId -ne 'dev.codexmobileui.app') {
+if (-not $appVersion -or $appCode -notmatch '^\d+$' -or $appId -ne 'dev.codexmobileui.visual') {
     throw 'Invalid native app identity/version in app.json.'
 }
 if ([string]$package.version -ne $appVersion) {

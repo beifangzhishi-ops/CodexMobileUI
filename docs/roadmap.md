@@ -1,34 +1,28 @@
-# CodexMobileUI staged roadmap
+# CodexMobile 独立视觉版进度与验收
 
-## Phase 1 — ChatGPT Android visual and interaction prototype (current branch)
+## 已实现的本地交互代码
 
-- [x] Standalone worktree and isolated Expo/assistant-ui native layout: header, chat transcript, composer, left drawer.
-- [x] Three permanent local test conversations, plus unlimited additional local conversations; per-chat message/draft separation.
-- [x] Any nonempty prompt receives the literal local reply `测试成功`. Never connect Codex or request an API key for demo chat.
-- [x] Drawer footer with placeholder avatar + `测试用户`, opening the account screen.
-- [x] Reuse existing OAuth PKCE and host management from account screen only; authentication never switches demo messages to real ones.
-- [x] Pure reducer tests and TypeScript checks.
-- [x] Integrate validated short-path stable Windows build entry and existing privacy-safe OAuth diagnostics while keeping fake chats isolated.
-- [x] Advance Android versionCode to 4 (0.2.0), beyond the separately built 0.1.2/versionCode 3.
-- [x] Combined source, OAuth, diagnostics, demo and shared-contract automated checks: 57 passing tests.
-- [x] Stable build native-identity guard: verify Gradle namespace/application ID and Kotlin entrypoints against Expo, and mirror only application Java/Kotlin sources in the staged build directory.
-- [x] Stable build autolinking identity guard: selectively invalidate cached RN autolinking configuration and generated Java entrypoint on Android package changes; preserve unrelated native caches.
-- [ ] Android Release APK with embedded JS and visual inspection on a real device (drawer, keyboard resize, scrolling, back button, OAuth callback).
+- [x] 独立 Android 包名、应用图标源与生成脚本。
+- [x] 深色聊天页、固定导航、输入工具栏、模型列表和权限浮层（本地演示）。
+- [x] 左侧固定半透明首尾控制区，中间项目、任务和最近聊天统一滚动。
+- [x] 五个项目首屏、项目逐项展开/收起、项目内五条子对话/全部展开。
+- [x] 最近对话首十条、每次加载更多十条、筛选包含项目内对话。
+- [x] 右侧运行中/未读标记，空闲/已读不标记；项目行不显示完成勾。
+- [x] 项目及聊天长按菜单，重命名、置顶、删除等本地动作。
+- [x] 头像下电脑管理、演示连接网页、全局/项目规则纯文本编辑和全屏模式。
+- [x] 视觉版独立 SQLite 本地持久化、删除项目时保留子聊天。
+- [x] Android 系统识别听写接口调用、取消/停止/确认转为可编辑草稿。
 
-## Phase 2 — Real Codex chat (requires a separate explicit decision)
+## 验证与交付
 
-The original gateway, OAuth, protocol, SQLite and reconciliation adapters are retained but currently **not mounted** in the Android chat. Their previous loopback tests and gateway probes do not validate a working Android chat on a phone. When integration is requested, replace demo-thread IDs with authoritative native host-scoped IDs, and validate connected reads, streaming turns, reconnection and offline drafts on device. Never migrate fake demo messages into real Codex sessions implicitly.
+- [ ] 完整 `npm run check`、图标边框像素检查、Android Release 稳定构建核验。
+- [ ] 验证 APK 包名、版本、签名、嵌入 JS、图标及完整 SHA-256。
+- [ ] 通过 CCM 上传夸克并验证 FINISH/100%/文件字节数。
+- [ ] 红米 K80 键盘避让：输入栏随 IME 升起，换行输入、菜单浮层、规则全屏编辑、返回键。
+- [ ] 红米 K80 系统语音服务/中文转写/离线支持能力，麦克风授权与错误降级。
+- [ ] 检验长列表、多项目展开、最近对话 0/10/11/20/21 条分页、未读跨列表一致性。
+- [ ] 检验视觉版与 OAuth 主线 App 同时安装且数据与深链互不干扰。
 
-## Phase 3 — Multi-client and daily-use features (planned)
+## 不在此阶段实现
 
-- Model/effort, permissions, Plan Mode, approvals and native questions; stop, steering, compact/context usage.
-- Host-scoped cross-conversation `@` references with native thread IDs and bounded on-demand reads; verify server capabilities and authorize any new gateway RPC before exposing it.
-- Search, unread, local notifications while running, per-file upload/preview/download with size enforcement, Android URI+hash tracking.
-- Global/project AGENTS.md editing, concurrency handling, reliability and privacy review.
-
-## Phase 4 — Advanced operations (planned)
-
-- Desktop-managed worktrees and safe branching capabilities subject to the real server API; no fabricated Git diff state.
-- Optional auxiliary tools and deeper offline/power/reconnect diagnostics.
-
-No Firebase Cloud Messaging dependency is assumed. Any future in-app local notification requires that an event reach the running mobile process. No staging item implies automatic permission to expose a new public service.
+真实 Codex App Server 项目同步、OAuth、真实模型执行、审批授权、任务调度、实时语音聊天、远程电脑自动重连。以上仅保留前端展示与扩展边界。

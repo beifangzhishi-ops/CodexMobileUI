@@ -1,135 +1,165 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { OAuthLogin } from '../auth/Login';
-import { clearTokens, hasTokens } from '../auth/tokens';
-import { parseHost, type Host } from '../core/host';
-import { loadHosts, storeHost } from '../storage/database';
-import { palette } from './theme';
-import { logDiagnostic } from '../diagnostics/journal';
-import { classifyDiagnosticError } from '../diagnostics/safe';
+import React, { useRef, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { DemoHost } from '../demo/conversations';
 
-export function AccountScreen() {
-  const [hosts, setHosts] = useState<Host[]>([]);
-  const [selectedHost, setSelectedHost] = useState<Host | null>(null);
-  const [authorized, setAuthorized] = useState(false);
-  const [checking, setChecking] = useState(true);
-  const [entry, setEntry] = useState('');
-  const [saving, setSaving] = useState(false);
+type Props = {
+  hosts: readonly DemoHost[];
+  selectedHostId: string | null;
+  globalRules: string;
+  onSelectHost: (id: string) => void;
+  onRenameHost: (id: string, name: string) => void;
+  onRemoveHost: (id: string) => void;
+  onConnect: () => void;
+  onRulesChange: (text: string) => void;
+  onExpandRules: () => void;
+};
 
-  useEffect(() => {
-    let active = true;
-    logDiagnostic('app.hostLoadStarted');
-    void loadHosts().then((result) => {
-      logDiagnostic('app.hostLoadFinished', { count: result.length });
-      if (!active) return;
-      setHosts(result);
-      setSelectedHost(result[0] ?? null);
-    }).catch((error: unknown) => {
-      logDiagnostic('app.hostLoadFailed', classifyDiagnosticError(error));
-      if (active) Alert.alert('无法读取电脑列表', error instanceof Error ? error.message : String(error));
-    }).finally(() => { if (active) setChecking(false); });
-    return () => { active = false; };
-  }, []);
+export function AccountScreen({
+  hosts, selectedHostId, globalRules, onSelectHost, onRenameHost, onRemoveHost,
+  onConnect, onRulesChange, onExpandRules,
+}: Props) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState('');
+  const consumedLongPress = useRef<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    setAuthorized(false);
-    if (selectedHost) logDiagnostic('app.tokenCheckStarted');
-    if (selectedHost) void hasTokens(selectedHost).then((value) => {
-      logDiagnostic('app.tokenCheckFinished', { codePresent: value });
-      if (active) setAuthorized(value);
-    }).catch((error: unknown) => {
-      logDiagnostic('app.tokenCheckFailed', classifyDiagnosticError(error));
-      if (active) setAuthorized(false);
-    });
-    return () => { active = false; };
-  }, [selectedHost?.id]);
-
-  const addHost = async () => {
-    if (saving) return;
-    logDiagnostic('app.addHostPressed');
-    setSaving(true);
-    try {
-      const host = parseHost(entry);
-      await storeHost(host);
-      logDiagnostic('app.hostAdded');
-      setHosts((previous) => previous.some((item) => item.id === host.id) ? previous : [...previous, host]);
-      setSelectedHost(host);
-      setEntry('');
-    } catch (error: unknown) {
-      logDiagnostic('app.addHostFailed', classifyDiagnosticError(error));
-      Alert.alert('无法添加电脑', error instanceof Error ? error.message : '请输入 HTTPS 根地址');
-    } finally { setSaving(false); }
-  };
-
-  const reauthorize = () => {
-    if (!selectedHost) return;
-    logDiagnostic('auth.reauthorizePressed');
-    Alert.alert('重新授权', '将清除当前电脑在本机保存的 OAuth 令牌。', [
+  const showMenu = (host: DemoHost) => {
+    Alert.alert(host.name, '本地视觉演示电脑（未连接真实 Codex）', [
+      { text: '重命名', onPress: () => { setRenamingId(host.id); setRenameText(host.name); } },
+      { text: '重新连接', onPress: () =>
+        Alert.alert('演示连接', '请通过“连接新的电脑”添加演示电脑；本视觉版尚不连接真实电脑。') },
+      { text: '断开连接', style: 'destructive', onPress: () => onRemoveHost(host.id) },
       { text: '取消', style: 'cancel' },
-      { text: '清除令牌', style: 'destructive', onPress: () => {
-        void clearTokens(selectedHost).then(() => setAuthorized(false))
-          .catch((error: unknown) => Alert.alert('清除失败', String(error)));
-      } },
     ]);
   };
 
-  return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
-    <View style={styles.avatar}><Text style={styles.avatarText}>测</Text></View>
-    <Text style={styles.name}>测试用户</Text>
-    <Text style={styles.description}>聊天界面处于本地测试模式。OAuth 认证是独立功能，不会连接真实 Codex 聊天。</Text>
-    <View style={styles.divider} />
-    <Text style={styles.section}>电脑连接</Text>
-    <Text style={styles.description}>选择已保存的电脑，或输入 HTTPS Funnel 根地址。仅点击授权按钮后才打开系统浏览器。</Text>
-    {checking ? <ActivityIndicator color={palette.text} /> : hosts.map((host) => (
-      <Pressable
-        key={host.id}
+  return <ScrollView style={styles.root} contentContainerStyle={styles.content}
+    keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+    <Text style={styles.sectionLabel}>电脑</Text>
+    <View style={styles.group}>
+      {hosts.map((host) => <Pressable key={host.id}
         accessibilityRole="button"
-        accessibilityState={{ selected: selectedHost?.id === host.id }}
-        onPress={() => setSelectedHost(host)}
-        style={[styles.host, selectedHost?.id === host.id && styles.activeHost]}
-      >
-        <Text style={styles.hostName}>{host.name}</Text>
-        <Text style={styles.hostUrl} numberOfLines={1}>{host.baseUrl}</Text>
+        accessibilityLabel={host.name}
+        accessibilityState={{ selected: selectedHostId === host.id }}
+        onPress={() => {
+          if (consumedLongPress.current === host.id) {
+            consumedLongPress.current = null;
+            return;
+          }
+          onSelectHost(host.id);
+        }}
+        onLongPress={() => {
+          consumedLongPress.current = host.id;
+          showMenu(host);
+        }}
+        onPressOut={() => {
+          if (consumedLongPress.current !== host.id) return;
+          setTimeout(() => {
+            if (consumedLongPress.current === host.id) consumedLongPress.current = null;
+          }, 500);
+        }}
+        delayLongPress={450}
+        style={styles.hostRow}>
+        <Text style={styles.hostGlyph}>▣</Text>
+        <View style={styles.hostBody}>
+          <Text style={styles.hostName}>{host.name}</Text>
+          <Text style={styles.hostSubtitle}>本地演示 · 未连接真实电脑</Text>
+        </View>
+        {selectedHostId === host.id && <Text style={styles.selectedHost}>✓</Text>}
+      </Pressable>)}
+      <Pressable onPress={onConnect} accessibilityRole="button"
+        accessibilityLabel="连接新的电脑" style={styles.connectRow}>
+        <Text style={styles.plus}>＋</Text>
+        <Text style={styles.connectText}>连接新的电脑</Text>
       </Pressable>
-    ))}
-    <TextInput
-      accessibilityLabel="电脑 HTTPS 根地址"
-      style={styles.field}
-      value={entry}
-      onChangeText={setEntry}
-      placeholder="https://your-host.ts.net"
-      placeholderTextColor={palette.subtle}
-      autoCapitalize="none"
-      autoCorrect={false}
-      keyboardType="url"
-    />
-    <Pressable accessibilityRole="button" onPress={() => { void addHost(); }} disabled={saving || !entry.trim()} style={[styles.add, (saving || !entry.trim()) && styles.disabled]}>
-      <Text style={styles.addText}>{saving ? '正在保存…' : '添加电脑'}</Text>
-    </Pressable>
-    {selectedHost ? (
-      authorized ? <View style={styles.authStatus}>
-        <Text style={styles.authorized}>✓ 已授权：{selectedHost.name}</Text>
-        <Pressable accessibilityRole="button" onPress={reauthorize}><Text style={styles.reauthorize}>清除令牌并重新授权</Text></Pressable>
-      </View> : <OAuthLogin key={selectedHost.id} host={selectedHost} onConnected={() => setAuthorized(true)} />
-    ) : <Text style={styles.description}>添加电脑地址后即可开始 OAuth 授权。</Text>}
+    </View>
+    <View style={styles.rulesHeading}>
+      <Text style={styles.sectionLabel}>全局规则</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="最大化全局规则"
+        onPress={onExpandRules} style={styles.expandTouch}>
+        <Text style={styles.expandGlyph}>⛶</Text>
+      </Pressable>
+    </View>
+    <View style={styles.rulesContainer}>
+      <TextInput
+        accessibilityLabel="全局规则纯文本"
+        value={globalRules}
+        onChangeText={onRulesChange}
+        multiline
+        textAlignVertical="top"
+        scrollEnabled
+        autoCapitalize="none"
+        placeholder="输入全局规则。支持换行和纯文本，不渲染 Markdown。"
+        placeholderTextColor="#828282"
+        style={styles.rulesText}
+      />
+    </View>
+    <Text style={styles.note}>规则保存在视觉版手机本地，不会发送到电脑。</Text>
+    {renamingId && <View style={styles.renameLayer}>
+      <Text style={styles.renameTitle}>重命名电脑</Text>
+      <TextInput autoFocus value={renameText} onChangeText={setRenameText}
+        style={styles.renameInput} accessibilityLabel="电脑名称" />
+      <View style={styles.renameButtons}>
+        <Pressable onPress={() => setRenamingId(null)}><Text style={styles.secondary}>取消</Text></Pressable>
+        <Pressable onPress={() => { onRenameHost(renamingId, renameText); setRenamingId(null); }}>
+          <Text style={styles.primary}>确定</Text>
+        </Pressable>
+      </View>
+    </View>}
   </ScrollView>;
 }
 
+export function FullRulesEditor({
+  title, text, onChange, onDone,
+}: { title: string; text: string; onChange: (value: string) => void; onDone: () => void }) {
+  return <View style={styles.editorRoot}>
+    <View style={styles.editorHeader}>
+      <Text style={styles.editorTitle}>{title}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="完成编辑"
+        onPress={onDone}><Text style={styles.primary}>完成</Text></Pressable>
+    </View>
+    <TextInput
+      accessibilityLabel={title}
+      autoFocus
+      multiline
+      textAlignVertical="top"
+      autoCapitalize="none"
+      value={text}
+      onChangeText={onChange}
+      placeholder="输入纯文本规则"
+      placeholderTextColor="#808080"
+      style={styles.fullText}
+    />
+  </View>;
+}
+
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: 20, paddingVertical: 24, paddingBottom: 70, gap: 14 },
-  avatar: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#5d7c70', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: palette.white, fontSize: 30, fontWeight: '600' },
-  name: { color: palette.text, fontWeight: '600', fontSize: 23 },
-  description: { fontSize: 14, color: palette.subtle, lineHeight: 21 },
-  divider: { height: 1, backgroundColor: palette.outline, marginVertical: 12 },
-  section: { color: palette.text, fontWeight: '600', fontSize: 18 },
-  host: { backgroundColor: palette.surface, borderRadius: 14, padding: 15, borderWidth: 1, borderColor: 'transparent', gap: 5 },
-  activeHost: { borderColor: palette.green }, hostName: { fontSize: 15, color: palette.text },
-  hostUrl: { fontSize: 12, color: palette.subtle },
-  field: { backgroundColor: palette.surface, color: palette.text, fontSize: 15, paddingHorizontal: 15, height: 52, borderRadius: 13 },
-  add: { borderRadius: 14, backgroundColor: palette.white, height: 46, alignItems: 'center', justifyContent: 'center' },
-  disabled: { opacity: 0.45 }, addText: { color: palette.canvas, fontWeight: '700' },
-  authStatus: { paddingVertical: 16, gap: 12 }, authorized: { color: palette.green, fontSize: 15 },
-  reauthorize: { color: palette.text, textDecorationLine: 'underline', paddingVertical: 8 },
+  root: { flex: 1, backgroundColor: '#000' },
+  content: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 48 },
+  sectionLabel: { color: '#eeeeee', fontSize: 16, fontWeight: '600', marginBottom: 12 },
+  group: { backgroundColor: '#272727', borderRadius: 19, overflow: 'hidden' },
+  hostRow: { minHeight: 68, paddingHorizontal: 17, flexDirection: 'row', alignItems: 'center', gap: 13,
+    borderBottomColor: '#3a3a3a', borderBottomWidth: StyleSheet.hairlineWidth },
+  hostGlyph: { fontSize: 25, color: '#ddd' },
+  hostBody: { flex: 1 },
+  hostName: { fontSize: 15, color: '#f4f4f4', fontWeight: '600' },
+  hostSubtitle: { fontSize: 11, marginTop: 5, color: '#9e9e9e' },
+  selectedHost: { fontSize: 20, color: '#8cb3ff' },
+  connectRow: { paddingHorizontal: 15, minHeight: 57, flexDirection: 'row', alignItems: 'center', gap: 15 },
+  plus: { fontSize: 25, color: '#ddd' }, connectText: { fontSize: 15, color: '#eee' },
+  rulesHeading: { marginTop: 28, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  expandTouch: { width: 46, height: 43, alignItems: 'center', justifyContent: 'center' },
+  expandGlyph: { color: '#ddd', fontSize: 25 },
+  rulesContainer: { backgroundColor: '#272727', borderRadius: 21, minHeight: 220, padding: 16 },
+  rulesText: { color: '#f4f4f4', fontSize: 15, lineHeight: 23, minHeight: 188, padding: 0 },
+  note: { color: '#898989', fontSize: 12, paddingHorizontal: 6, marginTop: 12 },
+  renameLayer: { marginTop: 18, backgroundColor: '#303030', borderRadius: 16, padding: 17 },
+  renameTitle: { color: '#fff', fontSize: 16, marginBottom: 12 },
+  renameInput: { height: 47, paddingHorizontal: 12, color: '#fff', backgroundColor: '#222', borderRadius: 10 },
+  renameButtons: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 18, gap: 28 },
+  secondary: { color: '#ddd', fontSize: 15 }, primary: { color: '#94b9ff', fontSize: 15, fontWeight: '600' },
+  editorRoot: { flex: 1, backgroundColor: '#000', paddingHorizontal: 16 },
+  editorHeader: { height: 53, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  editorTitle: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  fullText: { flex: 1, color: '#f0f0f0', fontSize: 16, lineHeight: 24, backgroundColor: '#252525',
+    borderRadius: 18, paddingHorizontal: 18, paddingVertical: 15, marginBottom: 12 },
 });

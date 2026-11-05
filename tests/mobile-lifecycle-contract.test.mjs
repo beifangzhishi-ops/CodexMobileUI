@@ -5,7 +5,6 @@ import test from "node:test";
 const launcher = readFileSync(new URL("../scripts/mobile-shared-launcher.ps1", import.meta.url), "utf8");
 const mobileStop = readFileSync(new URL("../Stop-CodexMobile.cmd", import.meta.url), "utf8");
 const sharedStop = readFileSync(new URL("../shared-stop.cmd", import.meta.url), "utf8");
-const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
 const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
 const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
 const diagnosticsPanel = readFileSync(new URL("../src/diagnostics/DiagnosticsPanel.tsx", import.meta.url), "utf8");
@@ -33,18 +32,15 @@ test("explicit shared-stop remains an independent administrative action", () => 
   assert.match(sharedStop, /shared-stack\.ps1" -Action stop/);
 });
 
-test("mobile OAuth tap creates a fresh request instead of silently disabling its button", () => {
-  assert.match(oauthLogin, /onPress=\{\(\) => \{ void authorize\(\); \}\}/);
-  assert.match(oauthLogin, /new AuthSession\.AuthRequest\(/);
-  assert.match(oauthLogin, /await request\.makeAuthUrlAsync\(discovery\)/);
-  assert.match(oauthLogin, /await request\.promptAsync\(discovery\)/);
-  assert.match(oauthLogin, /getAuthorizedCode\(result, request\.state\)/);
-  assert.match(oauthLogin, /setPhase\('正在创建新的安全授权请求/);
-  assert.match(oauthLogin, /setError\('系统中还有一个授权浏览器/);
-  assert.doesNotMatch(oauthLogin, /AuthSession\.useAuthRequest\(/);
-  assert.doesNotMatch(oauthLogin, /disabled=\{!request/);
-  assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
+test("visual app has independent Android package, no OAuth login and an offline connection test", () => {
+  assert.equal(appSettings.expo.android.package, "dev.codexmobileui.visual");
   assert.ok(Number.isInteger(appSettings.expo.android.versionCode) && appSettings.expo.android.versionCode > 0);
+  assert.notEqual(appSettings.expo.scheme, "codexmobileui");
+  assert.match(mainApp, /const CONNECTION_TEST_HTML/);
+  assert.match(mainApp, /source=\{\{ html: CONNECTION_TEST_HTML \}\}/);
+  assert.match(mainApp, /loadVisualState\(\)/);
+  assert.match(mainApp, /persistVisualState\(demo\)/);
+  assert.doesNotMatch(mainApp, /<Login|<OAuthLogin|<CodexSession/);
 });
 
 test("Android version metadata is consistent across Expo, npm and lockfile", () => {
@@ -73,14 +69,11 @@ test("Windows stable Android build uses isolated reusable native caches and veri
   assert.match(androidStableBuild, /android-artifacts/);
 });
 
-test("device diagnostics are reachable before authorization and export a persistent JSON file", () => {
+test("device diagnostics remain available in the offline visual edition", () => {
   assert.match(mainApp, /accessibilityLabel="诊断日志"/);
   assert.match(mainApp, /<DiagnosticsPanel visible=\{diagnosticsOpen\}/);
-  assert.match(mainApp, /logDiagnostic\('app\.deepLinkReceived'/);
-  assert.match(oauthLogin, /onPressIn=\{\(\) => logDiagnostic\('auth\.pressIn'/);
-  assert.match(oauthLogin, /logDiagnostic\('auth\.browserPromptStarted'/);
-  assert.match(oauthLogin, /logDiagnostic\('auth\.browserPromptFinished'/);
-  assert.match(oauthLogin, /logDiagnostic\('auth\.browserStillPending'/);
+  assert.match(mainApp, /logDiagnostic\('app\.started'/);
+  assert.doesNotMatch(mainApp, /logDiagnostic\('app\.deepLinkReceived'/);
   assert.match(diagnosticsPanel, /exportDiagnostics\(\)/);
   assert.match(diagnosticsPanel, /nativeBuildVersion/);
   assert.match(mainApp, /componentDidCatch\(error: Error\)/);

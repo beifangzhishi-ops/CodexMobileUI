@@ -1,6 +1,6 @@
 {
   "name": "codex-mobile-ui",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:gateway": "tsc --noEmit -p tsconfig.gateway.json",
     "test": "tsc -p tsconfig.tests.json && node .tmp/testdist/tests/all.js",
-    "test:shared": "node --test --test-isolation=none tests/shared-runtime.test.js tests/shared-app-server-proxy.test.js tests/shared-launcher-contract.test.js tests/mobile-lifecycle-contract.test.mjs",
+    "test:shared": "node --test --test-isolation=none tests/shared-runtime.test.js tests/shared-app-server-proxy.test.js tests/shared-launcher-contract.test.js tests/mobile-lifecycle-contract.test.mjs tests/visual-ui-contract.test.mjs",
     "check": "npm run typecheck && npm run typecheck:gateway && npm run test && npm run test:shared",
     "export:android": "expo export --platform android"
   },
@@ -26,12 +26,14 @@
     "expo-file-system": "~58.0.13",
     "expo-secure-store": "~58.0.2",
     "expo-sharing": "~58.0.22",
+    "expo-speech-recognition": "^58.0.1",
     "expo-sqlite": "~58.0.15",
     "expo-web-browser": "~58.0.7",
     "react": "19.3.0",
     "react-native": "0.88.1",
     "react-native-enriched-markdown": "^1.1.1",
     "react-native-safe-area-context": "~5.10.1",
+    "react-native-webview": "^14.0.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {
