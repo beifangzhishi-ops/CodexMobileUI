@@ -7,6 +7,7 @@
 - [x] Real thread moves use `thread/metadata/update` and re-read server ownership; mobile rename and a bounded ephemeral automatic-title worker use `thread/name/set`. Move never relocates cwd/files.
 - [x] Two actual shared App Servers verified project listing, project-assigned thread creation and moving with disposable threads; both test threads and native filesystem test directories were deleted.
 - [x] Gateway strict RPC filtering and local unit/integration tests. Full file upload/preview/download UI remains part of Stage 3 for both project and projectless chats.
+- [x] 0.1.4 ARM64 standalone Release APK built and verified (versionCode 6, v2 signature, embedded JS, ARM64 libraries, SHA-256). Quark upload finished at 100% with matching file size. Both 6v/noha Gateways deployed and healthy.
 - [ ] Install and validate the new 0.1.4 APK on Android (new chat, first-send, project chooser, move, rename, keyboard and restart recovery).
 - [ ] Observe Desktop sidebar after a real user-initiated project move. No conflict was detected in short App Server read-back; Desktop persistence/reversion is still unknown.
 
