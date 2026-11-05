@@ -9,6 +9,8 @@ const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../src/demo/conversations.ts', import.meta.url), 'utf8');
 const persistence = readFileSync(new URL('../src/demo/persistence.ts', import.meta.url), 'utf8');
 const config = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8'));
+const nativeBuilder = readFileSync(new URL('../scripts/build-android-windows.ps1', import.meta.url), 'utf8');
+const stableBuilder = readFileSync(new URL('../scripts/build-android-stable.ps1', import.meta.url), 'utf8');
 
 test('sidebar has independent project, project-thread and recent-thread limits', () => {
   assert.match(sidebar, /sortedProjects\.slice\(0, 5\)/);
@@ -56,4 +58,19 @@ test('offline machine page and separate SQLite state do not touch OAuth or real 
   assert.equal(config.expo.android.package, 'dev.codexmobileui.visual');
   assert.equal(config.expo.icon, './assets/icon.png');
   assert.equal(config.expo.android.adaptiveIcon.backgroundColor, '#000000');
+});
+
+test('native Android Release build writes independent Gradle log and checks exit code', () => {
+  assert.match(nativeBuilder, /gradle-\$\(\$Variant\.ToLowerInvariant\(\)\)-output\.log/);
+  assert.match(nativeBuilder, /2>&1 \| Tee-Object -FilePath \$gradleOutput/);
+  assert.match(nativeBuilder, /\$gradleExitCode = \$LASTEXITCODE/);
+  assert.match(nativeBuilder, /if \(\$gradleExitCode -ne 0\)/);
+  assert.match(nativeBuilder, /if \(\$Variant -eq 'Release'\)/);
+  assert.match(nativeBuilder, /android\\app\\debug\.keystore/);
+  assert.match(nativeBuilder, /-alias androiddebugkey -keyalg RSA/);
+  assert.match(nativeBuilder, /if \(-not \(Test-Path -LiteralPath \$testKeystore\)\)/);
+});
+
+test('visual APK artifact filename cannot be confused with the OAuth mainline', () => {
+  assert.match(stableBuilder, /CodexMobile-visual-\$appVersion-\$lower-arm64\.apk/);
 });

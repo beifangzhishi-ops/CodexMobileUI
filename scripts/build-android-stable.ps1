@@ -232,7 +232,7 @@ try {
     }
     $artifactDir = Join-Path $sourceRoot '.tmp\android-artifacts'
     New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
-    $artifact = Join-Path $artifactDir "CodexMobileUI-$appVersion-$lower-arm64.apk"
+    $artifact = Join-Path $artifactDir "CodexMobile-visual-$appVersion-$lower-arm64.apk"
     Copy-Item -LiteralPath $apk -Destination $artifact -Force
     $sha = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash
     Write-Host "Verified APK: $artifact"

@@ -119,6 +119,33 @@ try {
 }
 try {
 $androidRoot = Join-Path $projectRoot 'android'
+if ($Variant -eq 'Release') {
+    # This independent visual APK uses an independent *test-only* signing
+    # identity. The stable staging checkout preserves this ignored file across
+    # builds; never copy the installed OAuth application's signing key.
+    $testKeystore = Join-Path $projectRoot 'android\app\debug.keystore'
+    if (-not (Test-Path -LiteralPath $testKeystore)) {
+        $keytool = Join-Path $javaHome 'bin\keytool.exe'
+        if (-not (Test-Path -LiteralPath $keytool)) {
+            throw "JDK keytool is missing: $keytool"
+        }
+        Write-Host 'Creating isolated visual-edition test signing key in the staged Android checkout.'
+        $priorErrorAction = $ErrorActionPreference
+        $keytoolExitCode = -1
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $keytool -genkeypair -keystore $testKeystore -storetype JKS `
+                -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 `
+                -storepass android -keypass android -dname 'CN=Android Debug,O=Android,C=US' -noprompt
+            $keytoolExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $priorErrorAction
+        }
+        if ($keytoolExitCode -ne 0 -or -not (Test-Path -LiteralPath $testKeystore)) {
+            throw 'Unable to create the isolated visual-edition test signing key.'
+        }
+    }
+}
 if ($RegenerateCMake) {
     # Reset ONLY generated app-side native build state when switching away
     # from SDK CMake 3.22.1/Ninja 1.10.2. Never delete source or the SDK.
@@ -132,10 +159,33 @@ if ($RegenerateCMake) {
 }
 Push-Location $androidRoot
 try {
-    & $gradleCommand ":app:assemble$Variant" '--console=plain' '--no-daemon' '--max-workers=2' `
-        '-PreactNativeArchitectures=arm64-v8a' `
-        '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6'
-    if ($LASTEXITCODE -ne 0) { throw "Android Gradle build failed with exit code $LASTEXITCODE" }
+    # Start-Transcript does not reliably record native Gradle stdout/stderr when
+    # the CCM shell session ends. Capture it in an ignored, independently
+    # inspectable file so a failed or interrupted build leaves real evidence.
+    $gradleOutput = Join-Path $projectRoot ".tmp\gradle-$($Variant.ToLowerInvariant())-output.log"
+    Write-Host "Full Gradle output: $gradleOutput"
+    $previousErrorAction = $ErrorActionPreference
+    $gradleExitCode = -1
+    try {
+        # Windows PowerShell 5.1 can promote external stderr to error records.
+        # It must not abort before Gradle's real exit code is recorded.
+        $ErrorActionPreference = 'Continue'
+        & $gradleCommand ":app:assemble$Variant" '--console=plain' '--no-daemon' '--max-workers=2' `
+            '-PreactNativeArchitectures=arm64-v8a' `
+            '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6' `
+            2>&1 | Tee-Object -FilePath $gradleOutput | Out-Null
+        $gradleExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    Write-Host "Gradle exit code: $gradleExitCode"
+    if (Test-Path -LiteralPath $gradleOutput) {
+        Write-Host 'Gradle output tail:'
+        Get-Content -LiteralPath $gradleOutput -Tail 50
+    }
+    if ($gradleExitCode -ne 0) {
+        throw "Android Gradle build failed with exit code $gradleExitCode; full output: $gradleOutput"
+    }
 } finally {
     Pop-Location
 }

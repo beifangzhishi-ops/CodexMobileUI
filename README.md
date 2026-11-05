@@ -36,11 +36,16 @@
 项目原生目录通过 Expo prebuild 由 `app.json` 生成。稳定 Release 打包入口是
 `scripts/build-android-stable.ps1`，使用**视觉版专用**的独立短路径构建目录，避免占用原 OAuth 构建缓存。检查 Expo/Gradle/Kotlin 包名、签名、APK 身份与嵌入的 JS。
 本地测试 APK 使用测试签名，**不代表生产签名**。
+首次 Release 编译在视觉版独立构建目录创建其专属测试签名文件，后续编译复用，以确保安装更新可用；此文件不入库，也不会复用原 OAuth 应用签名。
+
+Gradle 的完整标准输出和错误输出会写到独立构建目录的
+`.tmp/gradle-release-output.log`（不纳入 Git）；即使 CCM 终端会话中断，也应从该文件获取实际编译结果，而不是只看 PowerShell Transcript 或构建锁。
 
 ## 验证情况
 
 - TypeScript 与本地 reducer/协议测试均可由 `npm run check` 执行。
 - 红米 K80 真机上的键盘避让、录音服务、项目列表滚动位置、WebView 页面和 Android 返回键尚未验证；**代码检查或 APK 编译成功均不能代替实机验证**。
 - 编译/上传结果以实际 CCM 构建核验为准；不使用先前采用主线包名的旧视觉 APK。
+- 2026-11-05 已成功生成 `CodexMobile-visual-0.3.0-release-arm64.apk`：Android 包名 `dev.codexmobileui.visual`、versionCode 1；构建脚本确认 APK v2 签名有效且内嵌 JS Bundle（2,933,136 字节）。使用专属测试签名，文件 SHA-256 是 `BA33A9B5BDDF3AC495424FBEADC4D2C43CD4D9C1616BFA8956F7FAF845ADC3F6`，APK 共 38,486,033 字节。CCM 夸克上传到「上传文件」，回报 `FINISH`、100%，远端大小与本地一致；这不等于红米 K80 实机功能已通过验收。
 
 项目开发规则见 `AGENTS.md`，验收清单见 `docs/roadmap.md`。
