@@ -22,7 +22,7 @@
 - Keep `.env`, `.state`, `.runtime`, keys, logs and actual `CODEX_HOME` out of Git, private per host. Preserve existing secrets and Funnel mappings.
 - The dedicated backend must not be exposed on any public port. Only the authenticated loopback Gateway may be exposed via the owner's HTTPS 8443 Funnel. Do not alter unrelated routes.
 - CCM Tailscale allowlist requires exactly one standalone `tailscale.exe` command per `exec_command`, with no shell wrapper, pipes, redirections or other commands. Confirm `trusted_tailscale: true` and exit code 0.
-- Backend startup fails closed if port 45891 belongs to an unknown listener or an owned backend is unhealthy. Backend shutdown requires validation of process name, executable cache path, command line and owned PID file.
+- Backend startup fails closed if port 45891 belongs to an unknown listener or an owned backend is unhealthy. Require process name, exact private executable layout, owned PID file, listener PID and a bounded PID-file-to-process-start timestamp; when WMI is accessible, also require the matching command line. Under CCM WMI denial, use the verified listener/PID/birth-time fallback, never trust the PID file alone. Gateway follows the analogous rules.
 - Runtime discovery verifies complete companion files and fingerprints independent copies. Runtime upgrades happen only at a deliberate restart.
 - Proxy settings are inherited from the user's environment or system proxy into the child process. Never modify User/Machine environment settings.
 - Interactive Codex authentication inside the dedicated home is separate from Gateway OAuth on the Android phone. Both are needed for model turns.

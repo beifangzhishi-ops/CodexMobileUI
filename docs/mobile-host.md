@@ -40,8 +40,10 @@ Startup and stop validate the PID-file owner, executable path beneath `.runtime\
 
 The backend inherits `CODEX_HOME` and detected proxy settings as *process environment*, without changing global Windows settings. Runtime copies are immutable and per-fingerprint; never clean a copy used by an active backend.
 
+Under CCM's restricted Windows token, CIM/WMI process-command-line and TCP ownership queries may return access denied. Startup, status and shutdown must then require the exact stored PID, a verified private executable layout, a single loopback listener owned by that PID, and a PID-file timestamp no more than 60 seconds after process creation. If any element is missing or inconsistent, report the instance as unowned; never adopt or stop it. Gateway uses the analogous PID, executable and loopback-listener checks.
+
 A system policy that blocks process inspection, startup, or writing the private data home must surface an approval/error. Never bypass that restriction by killing other services or mutating the user's normal Desktop profile.
 
 ## Validation status
 
-Source and automated tests alone do not establish a live successful deployment. Track separately: launcher syntax, real Windows backend startup, private-home creation, authentication, native RPC, Gateway relay, public Funnel, Android installation and real model turns. Until the complete chain passes, keep the user's working Desktop environment intact.
+On 6v, real backend startup, ownership, private-home creation, native read-only RPC and temporary OAuth relay have passed. Native Codex account authentication is still absent; no model turn has been tested. On noha, the private backend has not yet been started. Neither existing Gateway has been repointed, and neither Funnel nor Desktop has been changed. Track these remaining gates separately from automated tests: private login, model request, safe Gateway cutover, both-host ownership/stop/restart, public Funnel, Android installation and real conversation turns.

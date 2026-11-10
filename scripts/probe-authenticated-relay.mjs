@@ -1,6 +1,6 @@
 /**
  * Read-only, on-host smoke test of the *complete* local OAuth + relay path
- * against an already-running shared Codex App Server. Never logs secrets
+ * against the dedicated MobileUI Codex App Server. Never logs secrets
  * or any thread IDs, paths, names, or transcript content.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -47,8 +47,17 @@ try {
       ...Object.fromEntries(consentParams), approval_secret: secret,
     }),
   });
-  if (approved.status !== 302) throw new Error('owner OAuth approval rejected');
-  const code = new URL(approved.headers.get('location')).searchParams.get('code');
+  if (approved.status !== 200) throw new Error('owner OAuth approval rejected');
+  const approvedHtml = await approved.text();
+  const callbackHref = /<a class="return-to-app" href="([^"]+)"/.exec(approvedHtml)?.[1];
+  if (!callbackHref) throw new Error('OAuth callback link missing');
+  const callback = new URL(callbackHref.replaceAll('&amp;', '&'));
+  if (callback.protocol !== 'codexmobileui:' || callback.host !== 'oauth' ||
+      callback.searchParams.get('state') !== consentParams.get('state')) {
+    throw new Error('OAuth callback is invalid');
+  }
+  const code = callback.searchParams.get('code');
+  if (!code) throw new Error('OAuth callback code missing');
   const tokenResponse = await fetch(base + '/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -95,7 +104,7 @@ try {
     socket.once('error', (error) => finish(null, error));
     socket.once('close', () => finish(null, new Error('gateway connection closed')));
   });
-  if (result) console.log('authenticated_shared_thread_list_ok');
+  if (result) console.log('authenticated_private_thread_list_ok');
 } catch (error) {
   console.error('authenticated_shared_probe_failed:' +
     (error instanceof Error ? error.message : 'unknown'));

@@ -7,8 +7,11 @@
 - [x] Private persistent `CODEX_HOME=%LOCALAPPDATA%\CodexMobileUI\CodexHome`. No copying user profile, projects, sessions or credentials; no Desktop lifecycle control.
 - [x] Android conversation caches receive a distinct profile namespace without deleting old local data.
 - [x] Removed defunct compatibility launcher/proxy source and replaced source contracts; documentation updated.
-- [ ] Real native backend startup, new-home creation, process ownership, clean shutdown and restart tested on both Windows hosts.
-- [ ] Dedicated Codex authentication into the empty home, native `initialize`, `thread/list`, `project/list` and model turn successfully tested.
+- [x] 6v private App Server started from a fingerprinted runtime copy; independent data home created; owner and readiness checks passed under restricted CCM.
+- [x] 6v native initialize, project/list and thread/list: private counts 0 projects, 0 threads; account/read reports no private model login.
+- [x] 6v temporary isolated OAuth PKCE Gateway authenticated and forwarded thread/list to the private backend without touching the installed Gateway or Funnel.
+- [ ] noha private backend startup and both hosts' clean shutdown/restart/ownership checks.
+- [ ] Dedicated Codex account authentication into the empty home and a successful, explicitly approved real model turn on each host.
 - [ ] Private Gateway `.env` switched safely and OAuth/WSS relaying verified with the new backend. Do not alter Funnel or unrelated running services until backend validated.
 - [ ] New Android build with private cache scope installed and tested. Previous 0.1.4 APK is not proof of the new topology.
 - [ ] Explicitly test concurrent normal Desktop work and MobileUI, verifying data-home and writer-lock separation.

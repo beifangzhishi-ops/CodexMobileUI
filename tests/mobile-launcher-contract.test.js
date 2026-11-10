@@ -39,15 +39,27 @@ test("launcher stops only verified processes owned by MobileUI", () => {
   assert.match(appServer, /Get-ListeningPid/);
   assert.match(appServer, /GetFullPath\(\$runtimeRoot\)/);
   assert.match(appServer, /Global\\CodexMobileUI_AppServer_45891/);
+  assert.match(appServer, /Get-ListeningPid\) -ne \$id/);
+  assert.match(appServer, /LastWriteTimeUtc/);
+  assert.match(appServer, /TotalSeconds/);
+  assert.match(appServer, /0x80041003/);
   assert.match(mobileLauncher, /Invoke-HostService \$gatewayScript 'stop'/);
   assert.match(mobileLauncher, /Invoke-HostService \$backendScript 'stop'/);
   assert.doesNotMatch(mobileLauncher, /hot.attach/i);
 });
 
+test("Gateway ownership also checks loopback PID and birth time if CIM access is denied", () => {
+  assert.match(gateway, /Get-ListeningGatewayPid/);
+  assert.match(gateway, /LastWriteTimeUtc/);
+  assert.match(gateway, /TotalSeconds/);
+  assert.match(gateway, /0x80041003/);
+  assert.match(gateway, /Get-Command node.exe/);
+});
+
 test("independent Codex sign-in uses the dedicated home without copying another profile", () => {
   assert.match(appServer, /& \$kernel login --device-auth/);
   assert.ok(existsSync(new URL("../Login-CodexMobile.cmd", import.meta.url)));
-  assert.doesNotMatch(appServer, /auth\.json|\\.codex|Copy-Item/i);
+  assert.doesNotMatch(appServer, /auth\.json|Join-Path\s+\$env:USERPROFILE\s+['"]\.codex|Copy-Item/i);
 });
 
 test("launcher commands resolve only this application's backend and Gateway", () => {

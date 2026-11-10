@@ -2,12 +2,13 @@
 
 Personal Android front end for a **dedicated Codex App Server** running on a Windows host. The Android app uses native Codex thread/turn/project RPCs through a narrowly allowlisted OAuth PKCE Gateway; SQLite holds local caches and unsent drafts.
 
-## Current status (2026-11-10; development target 0.1.5 / Android versionCode 7)
+## Current status (2026-11-11; development target 0.1.5 / Android versionCode 7)
 
 - The Windows host source now implements an independently managed App Server and a private `CODEX_HOME`. It draws executables from the installed Codex Desktop runtime but **does not launch the Desktop app or share its live process**.
 - Default private data home: `%LOCALAPPDATA%\CodexMobileUI\CodexHome`. The everyday Desktop profile `%USERPROFILE%\.codex` is untouched. No existing sessions, projects, configuration or model credentials are copied.
 - Direct native backend: `ws://127.0.0.1:45891`, Gateway: `127.0.0.1:48888`, owner-authorized HTTPS Funnel: port `8443` -> Gateway. Backend is loopback-only.
-- Windows scripts, mobile cache scope and documentation were updated for this isolated deployment. **Real Windows start/login, host-side inference, cutover of existing Gateways and physical Android validation are still separate acceptance steps**. Existing Gateway processes and normal Desktop data remain undisturbed until verified.
+- On **6v**, the private App Server has started from the independently copied kernel. The restricted-host owner check and /readyz both return true; native initialize, thread/list and project/list succeed and report an empty isolated catalog (0 conversations, 0 projects). A temporary OAuth Gateway successfully authenticated and relayed thread/list to this private backend. Native account/read reports **not signed in**. The noha private backend and live Funnel Gateways have not been switched.
+- Windows scripts, mobile cache scope and documentation are updated. **Native login, real model turns, both-host deployment, Android packaging and physical-device acceptance remain pending.** No everyday Desktop data/processes or public Funnel routes were modified.
 - Last previously verified distributed artifact: `CodexMobileUI-0.1.4-release-arm64.apk` (versionCode 6, test signing certificate; 30,016,839 bytes; SHA-256 `98B44344894AE65B2F42DB6B4114CD8B2CE4983DE04069C87BE5A38AC1353178`), uploaded to Quark with FINISH/100%. **That prior APK does not include the new isolated-client cache namespace or current host-launcher changes**.
 
 ## Architecture
@@ -46,7 +47,8 @@ Not yet device-validated: the current first-send/project/move/title flows, priva
 - `Stop-CodexMobile.cmd`: stop only MobileUI's owned Gateway/backend.
 - `Login-CodexMobile.cmd`: separate native Codex login into the private data home.
 - `scripts/mobile-launcher.ps1`: explicit start/stop/status orchestration.
-- `scripts/mobile-app-server.ps1`: private backend ownership, runtime selection and health.
+- `scripts/mobile-app-server.ps1`: private backend ownership, runtime selection and health. Under restricted CCM, ownership requires private kernel path + PID file birth time + verified loopback listener instead of unavailable WMI command-line inspection.
+- `scripts/probe-private-backend.mjs` / `npm.cmd run probe:private`: read-only local initialize, project/thread counts and native account-presence check without displaying user records.
 - `scripts/gateway-only.ps1`: authenticated Gateway lifecycle. Its private `.env` must specify `CODEX_APP_SERVER_WS=ws://127.0.0.1:45891` before a new Gateway is started.
 - `scripts/build-android-stable.ps1`: fixed Android build entry with version/signature/bundle checks and reusable Gradle/CMake caches.
 

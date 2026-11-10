@@ -27,13 +27,14 @@ function Read-OwnerPid {
 function Get-ListeningPid {
   try {
     $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 45891 -ErrorAction Stop)
-    if ($listeners.Count -ne 1) { return 0 }
+    if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1') { return 0 }
     return [int]$listeners[0].OwningProcess
   } catch {
     $ids = @()
     foreach ($line in @(netstat -ano 2>$null)) {
-      if ($line -match '127\.0\.0\.1:45891\s+.*LISTENING\s+([0-9]+)') {
-        $ids += [int]$Matches[1]
+      if ($line -match '^\s*TCP\s+(\S+:45891)\s+\S+\s+LISTENING\s+([0-9]+)\s*$') {
+        if ($Matches[1] -ne '127.0.0.1:45891') { return 0 }
+        $ids += [int]$Matches[2]
       }
     }
     if ($ids.Count -ne 1) { return 0 }
@@ -49,12 +50,26 @@ function Get-OwnedBackend {
   $actual = [string]$p.Path
   $prefix = [IO.Path]::GetFullPath($runtimeRoot).TrimEnd([char]92) + [char]92
   if (-not $actual.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $null }
-  $details = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $id) -ErrorAction SilentlyContinue
-  if (-not $details) { return $null }
-  $cmd = [string]$details.CommandLine
-  if ($cmd -notmatch 'app-server' -or
-      $cmd.IndexOf($listenUrl, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
-    return $null
+  $relative = $actual.Substring($prefix.Length)
+  if ($relative -notmatch '^[a-f0-9]{64}\\codex\.exe$') { return $null }
+  try {
+    $details = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $id) -ErrorAction Stop
+    if (-not $details) { return $null }
+    $cmd = [string]$details.CommandLine
+    if ($cmd -notmatch 'app-server' -or
+        $cmd.IndexOf($listenUrl, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+      return $null
+    }
+  } catch {
+    # CCM's restricted token denies WMI. Never use PID-file presence alone:
+    # require the exact private runtime layout, loopback listener belonging
+    # to this PID, and a PID record written immediately after process launch.
+    if ([string]$_.FullyQualifiedErrorId -notmatch '0x80041003|AccessDenied|Unauthorized') { return $null }
+    if ((Get-ListeningPid) -ne $id) { return $null }
+    $created = (Get-Item -LiteralPath $pidFile -ErrorAction Stop).LastWriteTimeUtc
+    $started = $p.StartTime.ToUniversalTime()
+    $seconds = ($created - $started).TotalSeconds
+    if ($seconds -lt 0 -or $seconds -gt 60) { return $null }
   }
   return $p
 }

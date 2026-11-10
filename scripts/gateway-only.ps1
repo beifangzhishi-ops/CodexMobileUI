@@ -13,16 +13,48 @@ $state = Join-Path $root '.state'
 $pidFile = Join-Path $state 'mobile-gateway.pid'
 $port = 48888
 
+function Get-ListeningGatewayPid {
+    try {
+        $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
+        if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1') { return 0 }
+        return [int]$listeners[0].OwningProcess
+    } catch {
+        $pids = @()
+        foreach ($line in @(netstat -ano 2>$null)) {
+            if ($line -match '^\s*TCP\s+(\S+:48888)\s+\S+\s+LISTENING\s+([0-9]+)\s*$') {
+                if ($Matches[1] -ne '127.0.0.1:48888') { return 0 }
+                $pids += [int]$Matches[2]
+            }
+        }
+        if ($pids.Count -ne 1) { return 0 }
+        return $pids[0]
+    }
+}
+
 function Get-OwnedGateway {
     if (-not (Test-Path -LiteralPath $pidFile)) { return $null }
     $idText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
     if ($idText -notmatch '^\d+$') { return $null }
     $candidate = Get-Process -Id ([int]$idText) -ErrorAction SilentlyContinue
     if (-not $candidate -or $candidate.ProcessName -ne 'node') { return $null }
-    $details = Get-CimInstance Win32_Process -Filter "ProcessId=$idText" -ErrorAction SilentlyContinue
-    if (-not $details -or
-        [string]$details.CommandLine -notmatch [regex]::Escape($gateway)) {
-        return $null
+    try {
+        $nodeExecutable = (Get-Command node.exe -ErrorAction Stop).Source
+        if (-not [string]::Equals([string]$candidate.Path, [string]$nodeExecutable, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+        $details = Get-CimInstance Win32_Process -Filter "ProcessId=$idText" -ErrorAction Stop
+        if (-not $details -or [string]$details.CommandLine -notmatch [regex]::Escape($gateway)) {
+            return $null
+        }
+    } catch {
+        # Restricted CCM cannot query WMI; fail closed unless an exact PID,
+        # loopback listener, Node executable and fresh owner PID file agree.
+        if ([string]$_.FullyQualifiedErrorId -notmatch '0x80041003|AccessDenied|Unauthorized') { return $null }
+        if (-not $nodeExecutable -or
+            -not [string]::Equals([string]$candidate.Path, [string]$nodeExecutable, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+        if ((Get-ListeningGatewayPid) -ne [int]$idText) { return $null }
+        $recorded = (Get-Item -LiteralPath $pidFile -ErrorAction Stop).LastWriteTimeUtc
+        $started = $candidate.StartTime.ToUniversalTime()
+        $seconds = ($recorded - $started).TotalSeconds
+        if ($seconds -lt 0 -or $seconds -gt 60) { return $null }
     }
     return $candidate
 }
@@ -87,7 +119,7 @@ if (Get-OwnedGateway) {
 if (Test-GatewayHealth) {
     throw 'Gateway port is occupied by an unknown process; refusing to adopt.'
 }
-if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+if (Get-ListeningGatewayPid) {
     throw 'Gateway port is in use; refusing to overwrite its owner.'
 }
 if (-not (Test-Path -LiteralPath $gateway)) {

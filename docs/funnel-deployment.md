@@ -13,7 +13,7 @@ Android HTTPS/WSS :8443 -> Tailscale Funnel
 
 Only the Gateway is eligible for public Funnel routing. The native App Server is always loopback-only. Do not change unrelated existing Funnel port mappings, Windows proxy settings or any other client processes. The Gateway and native backend are separately managed; see [mobile-host.md](mobile-host.md).
 
-**Rollout boundary (2026-11-10):** host source now targets the private native endpoint. The previous running Gateway may still use its existing private configuration until the new backend is authenticated, healthy and explicitly switched. Neither a source update nor an HTTP health response is proof that the live Funnel route is sending to the new backend.
+**Rollout boundary (2026-11-11):** 6v's private native backend is healthy and a temporary OAuth Gateway has completed authenticated thread/list forwarding; the private Codex account is not yet signed in. The installed Gateway retains its original private configuration and is not yet pointed to the private backend. Neither source changes nor temporary local OAuth verification prove live Funnel routing to the new backend.
 
 ## Local private configuration
 

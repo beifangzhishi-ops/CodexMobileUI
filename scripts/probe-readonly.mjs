@@ -1,5 +1,5 @@
 /**
- * On-host read-only interoperability probe for an ALREADY running shared
+ * On-host read-only interoperability probe for an ALREADY running dedicated
  * Codex App Server. Sends only initialize/initialized/thread/list.
  * Prints status, never thread names, paths, IDs, tokens, or conversation text.
  */
@@ -8,7 +8,7 @@ import WebSocket from 'ws';
 const address = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45891';
 const url = new URL(address);
 if (url.protocol !== 'ws:' || !['127.0.0.1', 'localhost'].includes(url.hostname)) {
-  console.error('Probe allows only a local, non-public shared Codex WS address');
+  console.error('Probe allows only a local, non-public MobileUI Codex WS address');
   process.exitCode = 1;
 } else {
   const socket = new WebSocket(address, { handshakeTimeout: 3000 });

@@ -9,6 +9,7 @@
     "gateway": "node dist/gateway/main.js",
     "build:gateway": "tsc -p tsconfig.gateway-build.json",
     "probe:readonly": "node scripts/probe-readonly.mjs",
+    "probe:private": "node scripts/probe-private-backend.mjs",
     "probe:authenticated": "node scripts/probe-authenticated-relay.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:gateway": "tsc --noEmit -p tsconfig.gateway.json",
