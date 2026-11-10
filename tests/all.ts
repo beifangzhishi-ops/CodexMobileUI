@@ -8,6 +8,7 @@ import './title-generator.test';
 import './workspace.test';
 import './rpc-policy.test';
 import './storage.test';
+import './profile.test';
 import './oauth.test';
 import './authorization-result.test';
 import './diagnostics.test';

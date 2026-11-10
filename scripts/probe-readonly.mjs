@@ -5,7 +5,7 @@
  */
 import WebSocket from 'ws';
 
-const address = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45789';
+const address = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45891';
 const url = new URL(address);
 if (url.protocol !== 'ws:' || !['127.0.0.1', 'localhost'].includes(url.hostname)) {
   console.error('Probe allows only a local, non-public shared Codex WS address');

@@ -48,29 +48,11 @@ export async function listAllProjects(client: ThreadRpcClient): Promise<CodexPro
   throw new Error('project/list 超出分页上限');
 }
 
-export function normalizedPath(value: string): string {
-  return value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
-}
-
-/** Explicit server assignments override path-based legacy classification. */
-export function threadProjectId(
-  thread: CodexThread, projects: readonly CodexProject[], explicitlyUnassigned = false,
-): string | null {
-  if (thread.projectId) return thread.projectId;
-  if (explicitlyUnassigned) return null;
-  const cwd = thread.cwd ? normalizedPath(thread.cwd) : '';
-  if (!cwd) return null;
-  const roots = projects.flatMap((project) =>
-    project.roots.map((root) => ({ id: project.id, root: normalizedPath(root) })))
-    .filter((entry) => entry.root && (cwd === entry.root || cwd.startsWith(entry.root + '/')))
-    .sort((a, b) => b.root.length - a.root.length);
-  return roots[0]?.id ?? null;
-}
-
-export function threadCategory(thread: CodexThread, projects: readonly CodexProject[]): string {
+/** Only native assignments count as projects in the independent profile. */
+export function threadCategory(thread: CodexThread): string {
   if (thread.projectId) return thread.projectId;
   if (thread.cwd && /[\\/]Documents[\\/]Codex[\\/]MobileUI[\\/]\d{4}-\d\d-\d\d[\\/][\d-]+[a-f\d]{16,40}$/i.test(thread.cwd)) {
     return 'unassigned';
   }
-  return threadProjectId(thread, projects) ?? 'uncategorized';
+  return 'uncategorized';
 }

@@ -16,6 +16,7 @@ import {
   type PendingSelectionRecord,
 } from '../storage/database';
 import { createPendingSelection, pendingDraftKey, sendFirstTurn } from './firstSend';
+import { isolatedHostCacheKey } from '../storage/profile';
 import { generateAutoTitle } from './titleGenerator';
 import { logDiagnostic } from '../diagnostics/journal';
 import { classifyDiagnosticError } from '../diagnostics/safe';
@@ -75,7 +76,7 @@ export function useCodexSession(host: Host | null): CodexSession {
       const expected = moved.current.get(thread.id);
       if (expected !== undefined && thread.projectId !== expected) {
         moved.current.delete(thread.id);
-        setError('会话项目归属被其他客户端修改：请在 Codex Desktop 检查并刷新');
+        setError('会话项目归属已变化：请刷新 MobileUI 项目列表核对当前状态');
       }
     }
     setThreads(includeLiveThreads(list, liveThreads.current));
@@ -94,7 +95,7 @@ export function useCodexSession(host: Host | null): CodexSession {
       inProgress: snapshot.running,
     });
     if (client.current !== connection) return;
-    if (!snapshot.running) await replaceMessages(host.id, id, snapshot.messages);
+    if (!snapshot.running) await replaceMessages(isolatedHostCacheKey(host.id), id, snapshot.messages);
     if (selection === generation.current && active.current === id) {
       setMessages(snapshot.messages);
       setRunning(snapshot.running);
@@ -108,12 +109,12 @@ export function useCodexSession(host: Host | null): CodexSession {
     const oldPending = pendingRef.current;
     pendingRef.current = null;
     setPending(null);
-    if (oldPending) void clearPendingSelection(host.id, oldPending.id);
+    if (oldPending) void clearPendingSelection(isolatedHostCacheKey(host.id), oldPending.id);
     active.current = id;
     setActiveThreadId(id);
     const selection = ++generation.current;
     setRunning(false);
-    const cached = await loadMessages(host.id, id);
+    const cached = await loadMessages(isolatedHostCacheKey(host.id), id);
     logDiagnostic('session.cachedMessagesLoaded', { cacheCount: cached.length });
     if (selection !== generation.current || active.current !== id) return;
     setMessages(cached);
@@ -143,25 +144,25 @@ export function useCodexSession(host: Host | null): CodexSession {
     if (!host || client.current !== connection || naming.current.has(threadId)) return;
     naming.current.add(threadId);
     try {
-      const job = (await listTitleJobs(host.id)).find((row) => row.threadId === threadId);
+      const job = (await listTitleJobs(isolatedHostCacheKey(host.id))).find((row) => row.threadId === threadId);
       if (!job || manualNames.current.has(threadId)) return;
       const raw = recordOf(await connection.request('thread/read', {
         threadId, includeTurns: true,
       }));
       const thread = recordOf(raw.thread);
       if (thread.name) {
-        await removeTitleJob(host.id, threadId);
+        await removeTitleJob(isolatedHostCacheKey(host.id), threadId);
         return;
       }
       const snapshot = parseThreadSnapshotState(raw, threadId);
       if (snapshot.running || !snapshot.messages.some((m) => m.role === 'assistant')) return;
-      if (!await claimTitleJob(host.id, threadId)) return;
+      if (!await claimTitleJob(isolatedHostCacheKey(host.id), threadId)) return;
       const response = snapshot.messages.filter((m) => m.role === 'assistant').at(-1)?.text ?? '';
       const title = await generateAutoTitle(
         connection, threadId, job.cwd, job.firstMessage, response,
         () => client.current === connection && !manualNames.current.has(threadId),
       );
-      if (title) await removeTitleJob(host.id, threadId);
+      if (title) await removeTitleJob(isolatedHostCacheKey(host.id), threadId);
     } catch {
       // The bounded local job persists for a later retry without blocking chat.
     } finally {
@@ -175,16 +176,16 @@ export function useCodexSession(host: Host | null): CodexSession {
     logDiagnostic('session.refreshStarted');
     const list = await listAllThreads(connection);
     if (client.current !== connection) return;
-    await storeThreads(host.id, list);
+    await storeThreads(isolatedHostCacheKey(host.id), list);
     if (client.current !== connection) return;
     reconcileThreads(list);
     logDiagnostic('session.refreshFinished', { count: list.length });
-    try { await fetchProjects(connection, host.id); }
+    try { await fetchProjects(connection, isolatedHostCacheKey(host.id)); }
     catch (e) { if (client.current === connection) setError('项目同步失败：' + errorString(e)); }
     if (active.current && !liveThreads.current.has(active.current)) {
       await readThread(active.current, connection);
     }
-    for (const job of await listTitleJobs(host.id)) {
+    for (const job of await listTitleJobs(isolatedHostCacheKey(host.id))) {
       void maybeName(job.threadId, connection);
     }
   }, [host, reconcileThreads, fetchProjects, readThread, maybeName]);
@@ -236,14 +237,14 @@ export function useCodexSession(host: Host | null): CodexSession {
           void listAllThreads(connection).then((list) => {
             if (!alive || client.current !== connection) return;
             reconcileThreads(list);
-            void storeThreads(currentHost.id, list);
+            void storeThreads(isolatedHostCacheKey(currentHost.id), list);
           }).catch(() => undefined);
         }
       }
       if (notice.method.startsWith('project/')) {
         const connection = client.current;
         if (connection?.connected) {
-          void fetchProjects(connection, currentHost.id).catch(() => undefined);
+          void fetchProjects(connection, isolatedHostCacheKey(currentHost.id)).catch(() => undefined);
         }
       }
     };
@@ -282,10 +283,10 @@ export function useCodexSession(host: Host | null): CodexSession {
         if (!alive || client.current !== connection) return;
         logDiagnostic('session.threadsReceived', { count: list.length });
         reconcileThreads(list);
-        void storeThreads(currentHost.id, list);
-        try { await fetchProjects(connection, currentHost.id); }
+        void storeThreads(isolatedHostCacheKey(currentHost.id), list);
+        try { await fetchProjects(connection, isolatedHostCacheKey(currentHost.id)); }
         catch (e) { if (alive) setError('项目同步失败：' + errorString(e)); }
-        for (const job of await listTitleJobs(currentHost.id)) {
+        for (const job of await listTitleJobs(isolatedHostCacheKey(currentHost.id))) {
           void maybeName(job.threadId, connection);
         }
         const selected = pendingRef.current ? null : (active.current ?? list[0]?.id ?? null);
@@ -309,12 +310,12 @@ export function useCodexSession(host: Host | null): CodexSession {
     void (async () => {
       try {
         logDiagnostic('session.cacheLoadStarted');
-        const cached = await loadThreads(currentHost.id);
+        const cached = await loadThreads(isolatedHostCacheKey(currentHost.id));
         if (!alive) return;
         logDiagnostic('session.cacheLoadFinished', { cacheCount: cached.length });
         setThreads(cached);
-        setProjects(await loadProjects(currentHost.id));
-        const saved = await loadPendingSelection(currentHost.id);
+        setProjects(await loadProjects(isolatedHostCacheKey(currentHost.id)));
+        const saved = await loadPendingSelection(isolatedHostCacheKey(currentHost.id));
         if (!alive) return;
         if (saved && !active.current && !pendingRef.current) {
           pendingRef.current = saved;
@@ -324,7 +325,7 @@ export function useCodexSession(host: Host | null): CodexSession {
           active.current = id;
           setActiveThreadId(id);
           const select = ++generation.current;
-          const cachedMessages = await loadMessages(currentHost.id, id);
+          const cachedMessages = await loadMessages(isolatedHostCacheKey(currentHost.id), id);
           if (alive && active.current === id && select === generation.current) {
             setMessages(cachedMessages);
           }
@@ -361,7 +362,7 @@ export function useCodexSession(host: Host | null): CodexSession {
     setRunning(false);
     setError(null);
     uncertainCreation.current = null;
-    await savePendingSelection(host.id, selection);
+    await savePendingSelection(isolatedHostCacheKey(host.id), selection);
     logDiagnostic('session.createThreadFinished');
   }, [host]);
 
@@ -383,11 +384,11 @@ export function useCodexSession(host: Host | null): CodexSession {
       let attemptedCreate = false;
       logDiagnostic('session.sendStarted');
       const promote = async (thread: CodexThread, accepted: boolean) => {
-        await storeDraft(host.id, thread.id, accepted ? '' : text).catch(() => undefined);
-        void clearPendingSelection(host.id, selection?.id);
-        if (selection) void clearDraft(host.id, pendingDraftKey(selection));
+        await storeDraft(isolatedHostCacheKey(host.id), thread.id, accepted ? '' : text).catch(() => undefined);
+        void clearPendingSelection(isolatedHostCacheKey(host.id), selection?.id);
+        if (selection) void clearDraft(isolatedHostCacheKey(host.id), pendingDraftKey(selection));
         if (client.current !== connection || pendingRef.current?.id !== selection?.id) {
-          await storeThreads(host.id, [thread]);
+          await storeThreads(isolatedHostCacheKey(host.id), [thread]);
           return;
         }
         pendingRef.current = null;
@@ -408,17 +409,17 @@ export function useCodexSession(host: Host | null): CodexSession {
           await sendFirstTurn(connection, selection, text, async (thread) => {
             created.value = thread;
             // The callback is before turn/start; preserve the ID even on failure.
-            await storeDraft(host.id, thread.id, text).catch(() => undefined);
+            await storeDraft(isolatedHostCacheKey(host.id), thread.id, text).catch(() => undefined);
             if (client.current === connection && pendingRef.current?.id === selection.id) {
               active.current = thread.id;
             }
           }, async () => {
             attemptedCreate = true;
             // No automatic second thread even if the app dies in this window.
-            await markPendingCreationAttempt(host.id, selection.id);
+            await markPendingCreationAttempt(isolatedHostCacheKey(host.id), selection.id);
           });
           if (created.value) {
-            await enqueueTitleJob(host.id, created.value.id, created.value.cwd ?? '', text).catch(() => undefined);
+            await enqueueTitleJob(isolatedHostCacheKey(host.id), created.value.id, created.value.cwd ?? '', text).catch(() => undefined);
             await promote(created.value, true);
             void maybeName(created.value.id, connection);
           }

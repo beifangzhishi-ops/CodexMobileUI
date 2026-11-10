@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { requiredFiles, readRuntime, selectRuntime, prepareRuntime, runtimeStatus } from "../scripts/shared-runtime.js";
+import { requiredFiles, readRuntime, selectRuntime, prepareRuntime, runtimeStatus } from "../scripts/mobile-runtime.js";
 
 function fixture(t) {
-  const tempParent = path.resolve(".state", "shared-runtime-tests");
+  const tempParent = path.resolve(".state", "mobile-runtime-tests");
   fs.mkdirSync(tempParent, { recursive: true });
   const root = fs.mkdtempSync(path.join(tempParent, "runtime-"));
   t.after(() => {

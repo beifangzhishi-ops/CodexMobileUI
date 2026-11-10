@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listAllProjects, threadCategory, threadProjectId } from '../src/core/projectApi';
+import { listAllProjects, threadCategory } from '../src/core/projectApi';
 import type { CodexThread } from '../src/core/protocol';
 
 test('project/list paginates and preserves native IDs, names, order and roots', async () => {
@@ -27,18 +27,13 @@ test('project/list paginates and preserves native IDs, names, order and roots', 
   assert.deepEqual(projects[0].roots, ['C:\\Work\\Alpha']);
 });
 
-test('project membership prefers native projectId and otherwise longest cwd root', () => {
-  const projects = [
-    { id: 'root', name: 'Root', roots: ['C:\\Work'], position: 0 },
-    { id: 'nested', name: 'Nested', roots: ['C:\\Work\\Nested'], position: 1 },
-  ];
-  const legacy: CodexThread = {
-    id: 'old', name: null, cwd: 'c:/work/nested/src', updatedAt: 4, projectId: null,
+test('project membership uses only explicit native IDs in the private home', () => {
+  const thread: CodexThread = {
+    id: 'fresh', name: null, cwd: 'C:\\Work\\Nested', updatedAt: 4, projectId: null,
   };
-  assert.equal(threadProjectId(legacy, projects), 'nested');
-  assert.equal(threadProjectId({ ...legacy, projectId: 'root' }, projects), 'root');
-  assert.equal(threadCategory({ ...legacy, cwd: 'C:\\WorkOutside' }, projects), 'uncategorized');
-  assert.equal(threadCategory({ ...legacy, cwd: 'C:\\Users\\Sam\\Documents\\Codex\\MobileUI\\2026-11-05\\1762320000000-1234567890abcdef' }, projects), 'unassigned');
+  assert.equal(threadCategory(thread), 'uncategorized');
+  assert.equal(threadCategory({ ...thread, projectId: 'project-id' }), 'project-id');
+  assert.equal(threadCategory({ ...thread, cwd: 'C:\\Users\\Sam\\Documents\\Codex\\MobileUI\\2026-11-05\\1762320000000-1234567890abcdef' }), 'unassigned');
 });
 
 test('malformed project pages do not silently erase project listings', async () => {

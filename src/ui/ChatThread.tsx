@@ -12,6 +12,7 @@ import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import type { Host } from '../core/host';
 import type { CodexSession } from '../session/useCodexSession';
 import { loadDraft, storeDraft } from '../storage/database';
+import { isolatedHostCacheKey } from '../storage/profile';
 
 function Markdown({ source }: { source: string }) {
   return (
@@ -54,7 +55,7 @@ function Composer({ host, session }: { host: Host; session: CodexSession }) {
   useEffect(() => {
     let alive = true;
     setReady(false);
-    void loadDraft(host.id, threadId).then((value) => {
+    void loadDraft(isolatedHostCacheKey(host.id), threadId).then((value) => {
       if (alive) { setDraft(value); setReady(true); }
     }).catch((e: unknown) => {
       if (alive) Alert.alert('无法读取本地草稿', e instanceof Error ? e.message : '');
@@ -67,7 +68,7 @@ function Composer({ host, session }: { host: Host; session: CodexSession }) {
     setDraft(value);
     // Write through while editing: closing the thread immediately must not
     // discard the last characters of a draft or ever queue an automatic send.
-    void storeDraft(host.id, threadId, value).catch(() => {
+    void storeDraft(isolatedHostCacheKey(host.id), threadId, value).catch(() => {
       Alert.alert('草稿保存失败', '这段文字仍在输入框中，请不要退出应用。');
     });
   }, [host.id, threadId]);
@@ -78,7 +79,7 @@ function Composer({ host, session }: { host: Host; session: CodexSession }) {
     try {
       await session.send(draft.trim(), threadId);
       setDraft('');
-      await storeDraft(host.id, threadId, '');
+      await storeDraft(isolatedHostCacheKey(host.id), threadId, '');
     } catch {
       // An unacknowledged turn may already have executed. Keep the draft.
       Alert.alert('发送状态不明确', '请先核对电脑端会话，避免重复发送。');

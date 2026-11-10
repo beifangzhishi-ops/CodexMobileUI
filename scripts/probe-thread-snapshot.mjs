@@ -5,7 +5,7 @@
  */
 import WebSocket from 'ws';
 
-const target = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45789';
+const target = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45891';
 const url = new URL(target);
 if (url.protocol !== 'ws:' || !['localhost', '127.0.0.1'].includes(url.hostname)) {
   throw new Error('Read-only probe only permits the local shared Codex App Server');

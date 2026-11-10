@@ -27,7 +27,7 @@ const text = [
   'MOBILE_APPROVAL_SECRET=' + secret,
   'MOBILE_REDIRECT_URI=codexmobileui://oauth',
   'MOBILE_GATEWAY_PORT=48888',
-  'CODEX_APP_SERVER_WS=ws://127.0.0.1:45789',
+  'CODEX_APP_SERVER_WS=ws://127.0.0.1:45891',
   '',
 ].join('\n');
 writeFileSync(target, text, { mode: 0o600 });

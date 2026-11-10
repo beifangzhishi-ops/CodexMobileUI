@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const launcher = readFileSync(new URL("../scripts/mobile-shared-launcher.ps1", import.meta.url), "utf8");
+const launcher = readFileSync(new URL("../scripts/mobile-launcher.ps1", import.meta.url), "utf8");
 const mobileStop = readFileSync(new URL("../Stop-CodexMobile.cmd", import.meta.url), "utf8");
-const sharedStop = readFileSync(new URL("../shared-stop.cmd", import.meta.url), "utf8");
+const backend = readFileSync(new URL("../scripts/mobile-app-server.ps1", import.meta.url), "utf8");
 const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
 const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
 const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
@@ -23,22 +23,21 @@ test("Android real-chat composer stays in a keyboard-avoiding layout", () => {
   assert.equal(appSettings.expo.android.softwareKeyboardLayoutMode, "resize");
 });
 
-test("starting MobileUI ensures or hot-attaches to the shared App Server before Gateway startup", () => {
-  assert.match(launcher, /Invoke-SharedStack "start"\s*\r?\n\s*Start-Gateway/);
-  assert.match(launcher, /function Start-Gateway/);
+test("starting MobileUI starts the dedicated backend before Gateway", () => {
+  assert.match(launcher, /Invoke-HostService \$backendScript 'start'/);
+  assert.match(launcher, /Invoke-HostService \$gatewayScript 'start'/);
+  assert.ok(launcher.indexOf("Invoke-HostService $backendScript 'start'") <
+    launcher.indexOf("Invoke-HostService $gatewayScript 'start'"));
+  assert.match(backend, /CODEX_HOME = \$homeRoot/);
 });
 
-test("normal MobileUI shutdown stops only Gateway, preserving shared backend", () => {
-  const stopBranch = launcher.match(/if \(\$Action -eq "stop"\) \{([\s\S]*?)\}\s*else\s*\{/);
-  assert.ok(stopBranch, "MobileUI launcher must have a dedicated stop branch");
-  assert.match(stopBranch[1], /Stop-Gateway/);
-  assert.doesNotMatch(stopBranch[1], /Invoke-SharedStack|Stop-Stack/);
-  assert.match(mobileStop, /mobile-shared-launcher\.ps1" -Action stop/);
-  assert.doesNotMatch(mobileStop, /shared-stack\.ps1|shared-stop\.cmd/);
-});
-
-test("explicit shared-stop remains an independent administrative action", () => {
-  assert.match(sharedStop, /shared-stack\.ps1" -Action stop/);
+test("normal MobileUI shutdown stops its own Gateway then its own App Server", () => {
+  assert.match(launcher, /Invoke-HostService \$gatewayScript 'stop'/);
+  assert.match(launcher, /Invoke-HostService \$backendScript 'stop'/);
+  assert.ok(launcher.indexOf("Invoke-HostService $gatewayScript 'stop'") <
+    launcher.indexOf("Invoke-HostService $backendScript 'stop'"));
+  assert.match(mobileStop, /mobile-launcher\.ps1" -Action stop/);
+  assert.doesNotMatch(launcher, /hot.attach/i);
 });
 
 test("mobile OAuth tap creates a fresh request instead of silently disabling its button", () => {

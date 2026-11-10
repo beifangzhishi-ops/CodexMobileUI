@@ -1,5 +1,5 @@
-# Mobile HTTPS gateway lifecycle. Does not start, stop or reconfigure the
-# independently owned shared Codex App Server or desktop/AOI launchers.
+# Mobile HTTPS gateway lifecycle. Backend lifecycle is managed independently
+# by the MobileUI-owned local App Server launcher.
 param(
     [ValidateSet('start', 'status', 'stop')]
     [string]$Action = 'start'
@@ -56,10 +56,10 @@ function Import-GatewayEnv {
         $env:MOBILE_APPROVAL_SECRET.StartsWith('replace-')) {
         throw 'Generate a private random mobile authorization secret of at least 32 characters.'
     }
-    if ($env:CODEX_APP_SERVER_WS -ne 'ws://127.0.0.1:45789' -or
+    if ($env:CODEX_APP_SERVER_WS -ne 'ws://127.0.0.1:45891' -or
         $env:MOBILE_GATEWAY_PORT -ne '48888' -or
         $env:MOBILE_REDIRECT_URI -ne 'codexmobileui://oauth') {
-        throw 'Unexpected mobile gateway upstream, port or OAuth redirect configuration.'
+        throw 'Unexpected dedicated MobileUI upstream, port or OAuth redirect configuration.'
     }
 }
 

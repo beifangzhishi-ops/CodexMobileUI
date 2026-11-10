@@ -16,7 +16,7 @@ const verifier = randomBytes(48).toString('base64url');
 const redirectUri = 'codexmobileui://oauth';
 const gateway = createGateway({
   publicOrigin: 'https://localhost.invalid',
-  upstream: process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45789',
+  upstream: process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45891',
   secret, redirectUri, listenPort: 0,
   stateFile: resolve(directory, 'auth.json'),
 });

@@ -22,7 +22,10 @@ interface Config {
 function configuration(): Config {
   const secret = process.env.MOBILE_APPROVAL_SECRET ?? '';
   const publicOrigin = process.env.MOBILE_PUBLIC_ORIGIN ?? '';
-  const upstream = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45789';
+  const upstream = process.env.CODEX_APP_SERVER_WS ?? 'ws://127.0.0.1:45891';
+  if (upstream !== 'ws://127.0.0.1:45891') {
+    throw new Error('MobileUI Gateway requires its dedicated local App Server');
+  }
   if (!/^https:\/\//.test(publicOrigin)) throw new Error('MOBILE_PUBLIC_ORIGIN 必须是 Funnel HTTPS Origin');
   const u = new URL(upstream);
   if (u.protocol !== 'ws:' || !['127.0.0.1', 'localhost'].includes(u.hostname)) {

@@ -102,7 +102,7 @@ function MainApp() {
 
   const projects = session.projects;
   const visible = session.threads.filter((thread) =>
-    projectFilter === 'all' || threadCategory(thread, projects) === projectFilter);
+    projectFilter === 'all' || threadCategory(thread) === projectFilter);
   const selected = session.threads.find((thread) => thread.id === session.activeThreadId);
   const projectName = projects.find((item) => item.id === session.pending?.projectId)?.name;
   const beginNew = () => {

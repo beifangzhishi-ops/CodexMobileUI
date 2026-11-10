@@ -7,7 +7,7 @@ if not exist "%SHELL%" (
   echo PowerShell is required.
   exit /b 1
 )
-"%SHELL%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\mobile-shared-launcher.ps1" -Action start
+"%SHELL%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\mobile-launcher.ps1" -Action start
 set "RESULT=%ERRORLEVEL%"
 if not "%RESULT%"=="0" pause
 exit /b %RESULT%
