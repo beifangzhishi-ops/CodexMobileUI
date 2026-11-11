@@ -1,5 +1,12 @@
 # CodexMobile 视觉版
 
+## 电脑端视觉编辑环境（依赖已安装，界面尚未接入）
+
+- 6v 已配置 Android Studio 与 `Medium_Phone_API_37.0` 虚拟手机，ADB 可以识别 `emulator-5554` 且 Android 启动完成。
+- 已加入仅用于开发的 Storybook 10.6.7、React Native Storybook 10.7.1、Lite UI 10.7.1 和 Controls 10.7.1；`esbuild` 0.28.2 命令可运行。安装过程中 CCM 对单条 npm 命令授予所需权限，没有设置全局永久免审批。
+- **目前仅完成依赖安装**：尚未编写 Storybook 入口、布局参数面板、保存源码功能，也没有为 x86_64 模拟器编译开发版或完成 Metro 联调。不要把现有 Release APK 当作开发热更新包。
+- Storybook 只能在开发模式显式启用，不能意外进入 Android Release 入口；新增原生模块需要单独构建开发版并验证。
+
 独立 Android 视觉测试应用。使用 Expo SDK 58、React Native 0.88 和 assistant-ui Native。
 **本应用目前只运行本地交互模拟，不连接 Codex App Server，不执行真实命令、OAuth 或定时任务。**
 此工作树不修改原有的 OAuth Android 应用、共享内核、Gateway 或 Funnel。
