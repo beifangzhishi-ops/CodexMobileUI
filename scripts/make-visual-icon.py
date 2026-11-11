@@ -47,7 +47,29 @@ def render(path: Path, width: int, transparent: bool) -> None:
         canvas.paste(Image.new("RGB", artwork.size, "white"), (pad_x, pad_y), artwork)
     canvas.save(path, "PNG", optimize=True)
 
-render(root / "assets" / "icon.png", 740, False)
-render(root / "assets" / "adaptive-icon.png", 640, True)
+render(root / "assets" / "icon.png", 610, False)
+render(root / "assets" / "adaptive-icon.png", 510, True)
+
+# Expo's native Android resources are generated snapshots. Refresh their
+# launcher WebP files as well, otherwise Gradle keeps shipping the previous
+# foreground even though assets/adaptive-icon.png has changed.
+res = root / "android" / "app" / "src" / "main" / "res"
+for density, px in {
+    "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192,
+}.items():
+    directory = res / f"mipmap-{density}"
+    if not directory.is_dir():
+        continue
+    icon = Image.open(root / "assets" / "icon.png").convert("RGBA")
+    icon = icon.resize((px, px), Image.Resampling.LANCZOS)
+    icon.save(directory / "ic_launcher.webp", "WEBP", quality=95)
+    round_icon = icon.copy()
+    round_mask = Image.new("L", (px, px), 0)
+    ImageDraw.Draw(round_mask).ellipse((0, 0, px - 1, px - 1), fill=255)
+    round_icon.putalpha(round_mask)
+    round_icon.save(directory / "ic_launcher_round.webp", "WEBP", quality=95)
+    foreground = Image.open(root / "assets" / "adaptive-icon.png").convert("RGBA")
+    foreground = foreground.resize((px * 9 // 4, px * 9 // 4), Image.Resampling.LANCZOS)
+    foreground.save(directory / "ic_launcher_foreground.webp", "WEBP", quality=95)
 print("source", source.size, "dark square", black_square_bounds, "knot", symbol_bounds)
-print("Android icon output: assets/icon.png, assets/adaptive-icon.png")
+print("Android icon output: assets/icon.png, assets/adaptive-icon.png, native mipmap WebP")

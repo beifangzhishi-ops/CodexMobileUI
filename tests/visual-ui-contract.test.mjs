@@ -74,3 +74,18 @@ test('native Android Release build writes independent Gradle log and checks exit
 test('visual APK artifact filename cannot be confused with the OAuth mainline', () => {
   assert.match(stableBuilder, /CodexMobile-visual-\$appVersion-\$lower-arm64\.apk/);
 });
+
+test('sidebar slides from left with native animation and both new-chat actions use board-and-pen icon', () => {
+  assert.match(sidebar, /Animated\.timing\(drawerProgress/);
+  assert.match(sidebar, /useNativeDriver: true/);
+  assert.match(sidebar, /animationType="none"/);
+  assert.match(sidebar, /translateX: drawerProgress\.interpolate/);
+  assert.match(sidebar, /<NewChatIcon size=\{21\}/);
+  assert.match(app, /<NewChatIcon size=\{23\}/);
+  assert.doesNotMatch(sidebar, /animationType="fade"/);
+});
+
+test('updated Android visual edition has independent upgrade version', () => {
+  assert.equal(config.expo.version, '0.3.1');
+  assert.equal(config.expo.android.versionCode, 2);
+});

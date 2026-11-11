@@ -8,7 +8,7 @@ import { WebView } from 'react-native-webview';
 import { demoReducer, initialDemoState } from './src/demo/conversations';
 import { loadVisualState, persistVisualState } from './src/demo/persistence';
 import { AccountScreen, FullRulesEditor } from './src/ui/AccountScreen';
-import { ChatSidebar } from './src/ui/ChatSidebar';
+import { ChatSidebar, NewChatIcon } from './src/ui/ChatSidebar';
 import { DemoChat } from './src/ui/DemoChat';
 import { DiagnosticsPanel } from './src/diagnostics/DiagnosticsPanel';
 import { logDiagnostic } from './src/diagnostics/journal';
@@ -132,7 +132,7 @@ function MainApp() {
         ><Text style={styles.logLabel}>日志</Text></Pressable>
           : screen === 'chat' ? <Pressable accessibilityRole="button" accessibilityLabel="新建聊天"
               onPress={() => newConversation()} style={styles.headerButton}>
-              <Text style={styles.headerSymbol}>✎</Text>
+              <NewChatIcon size={23} />
             </Pressable> : <View style={styles.headerButton} />}
       </View>
       {screen === 'chat' && <DemoChat

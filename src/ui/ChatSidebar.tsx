@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet,
+  ActivityIndicator, Alert, Animated, Modal, Pressable, ScrollView, StyleSheet,
   Text, TextInput, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +11,20 @@ import {
 
 type ItemMenu = { kind: 'project' | 'conversation' | 'recent-settings'; id: string };
 type EditDialog = { kind: 'create-project' | 'rename-project' | 'rename-conversation'; id: string };
+
+const DRAWER_TRAVEL = 430;
+const DRAWER_DURATION = 240;
+
+/** A board with a pen, rather than a standalone pencil character. */
+export function NewChatIcon({ size = 22 }: { size?: number }) {
+  return <View accessible={false} style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+    <View style={{ width: size * 0.71, height: size * 0.71, borderWidth: 1.8,
+      borderColor: '#fff', borderRadius: 3, marginTop: size * 0.15, marginRight: size * 0.15 }} />
+    <View style={{ position: 'absolute', top: size * 0.12, right: size * 0.05,
+      width: size * 0.62, height: 3, borderRadius: 2, backgroundColor: '#fff',
+      transform: [{ rotate: '-45deg' }] }} />
+  </View>;
+}
 
 type Props = {
   visible: boolean;
@@ -59,7 +73,22 @@ export function ChatSidebar(props: Props) {
   const [dialogText, setDialogText] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [mounted, setMounted] = useState(visible);
+  const drawerProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const consumedLongPress = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (visible) setMounted(true);
+    const animation = Animated.timing(drawerProgress, {
+      toValue: visible ? 1 : 0,
+      duration: DRAWER_DURATION,
+      useNativeDriver: true,
+    });
+    animation.start(({ finished }) => {
+      if (finished && !visible) setMounted(false);
+    });
+    return () => animation.stop();
+  }, [visible, drawerProgress]);
 
   useEffect(() => { setRecentLimit(10); }, [includeProjectConversations, selectedHostId]);
   useEffect(() => { if (!visible) { setMenu(null); setSearchOpen(false); setSearch(''); } }, [visible]);
@@ -156,9 +185,17 @@ export function ChatSidebar(props: Props) {
       <StateIcon item={item} />
     </Pressable>;
 
-  return <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={() => menu ? setMenu(null) : onClose()}>
+  return <Modal visible={mounted} transparent animationType="none" statusBarTranslucent onRequestClose={() => menu ? setMenu(null) : onClose()}>
     <View style={styles.overlay}>
-      <Pressable accessibilityLabel="关闭侧边栏" style={styles.scrim} onPress={onClose} />
+      <Animated.View pointerEvents="none" style={[styles.scrim, {
+        opacity: drawerProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }),
+      }]} />
+      <Pressable accessibilityLabel="关闭侧边栏" style={styles.scrimTouch} onPress={onClose} />
+      <Animated.View style={[styles.animatedPanel, {
+        transform: [{ translateX: drawerProgress.interpolate({
+          inputRange: [0, 1], outputRange: [-DRAWER_TRAVEL, 0],
+        }) }],
+      }]}>
       <SafeAreaView edges={['top', 'bottom']} style={styles.panel}>
         <ScrollView
           style={styles.scroll}
@@ -253,7 +290,7 @@ export function ChatSidebar(props: Props) {
           <View style={styles.bottomBar}>
             <Pressable accessibilityRole="button" accessibilityLabel="新建聊天"
               style={styles.newChat} onPress={() => onNew()}>
-              <Text style={styles.newSymbol}>✎</Text><Text style={styles.newText}>聊天</Text>
+              <NewChatIcon size={21} /><Text style={styles.newText}>聊天</Text>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="电脑与全局规则"
               style={styles.profile} onPress={onAccount}>
@@ -300,6 +337,7 @@ export function ChatSidebar(props: Props) {
           </View>
         </View>}
       </SafeAreaView>
+      </Animated.View>
     </View>
   </Modal>;
 }
@@ -307,7 +345,9 @@ export function ChatSidebar(props: Props) {
 const styles = StyleSheet.create({
   overlay: { flex: 1, flexDirection: 'row' },
   scrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#00000099' },
-  panel: { width: '84%', maxWidth: 370, flex: 1, backgroundColor: '#212121' },
+  scrimTouch: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
+  animatedPanel: { width: '84%', maxWidth: 370, flex: 1 },
+  panel: { flex: 1, backgroundColor: '#212121' },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 12, paddingTop: 90, paddingBottom: 110 },
   taskRow: { minHeight: 49, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, gap: 12 },
