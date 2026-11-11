@@ -13,8 +13,9 @@
 - [x] 6v temporary isolated OAuth PKCE Gateway authenticated and forwarded thread/list to the private backend without touching the installed Gateway or Funnel.
 - [ ] noha private backend startup and both hosts' clean shutdown/restart/ownership checks.
 - [ ] noha dedicated Codex account login and successful, explicitly approved real model turns on both hosts.
-- [ ] Private Gateway `.env` switched safely and OAuth/WSS relaying verified with the new backend. Do not alter Funnel or unrelated running services until backend validated.
-- [ ] New Android build with private cache scope installed and tested. Previous 0.1.4 APK is not proof of the new topology.
+- [x] 6v existing Gateway private `.env` upstream switched to `ws://127.0.0.1:45891` while preserving OAuth secret, origin, callback and listener. Gateway started on original 48888 and public HTTPS Funnel 8443 verified OAuth/PKCE, authenticated WSS and native `thread/list` against private backend.
+- [ ] noha dedicated App Server startup, private account authorization and safe Gateway switch. Current noha 48888 service is alive but does not use a private Codex backend; leave it untouched until the dedicated backend is verified and process ownership is established. Initial private-home creation was sandbox-blocked; scoped approval requested.
+- [ ] New Android 0.1.5 build with private cache scope installed and tested. Previous 0.1.4 APK can retain earlier on-phone cached thread lists and is not proof of the new topology.
 - [ ] Explicitly test concurrent normal Desktop work and MobileUI, verifying data-home and writer-lock separation.
 - [ ] Native project creation / discovery UX for an initially empty isolated profile, and real end-to-end project moves.
 - [ ] Confirm file access/working directories do not unexpectedly overlap files actively edited by the desktop application.

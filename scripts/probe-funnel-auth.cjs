@@ -69,9 +69,13 @@ async function check() {
       ...Object.fromEntries(auth), approval_secret: config.MOBILE_APPROVAL_SECRET,
     }),
   });
-  if (approved.status !== 302) throw new Error('Owner OAuth consent was rejected');
-  const callback = new URL(approved.headers.get('location'));
-  if (callback.protocol !== 'codexmobileui:' || callback.searchParams.get('state') !== state) {
+  if (approved.status !== 200) throw new Error('Owner OAuth consent was rejected');
+  const confirmation = await approved.text();
+  const callbackHref = /<a class="return-to-app" href="([^"]+)"/.exec(confirmation)?.[1];
+  if (!callbackHref) throw new Error('Owner-approved callback link missing');
+  const callback = new URL(callbackHref.replaceAll('&amp;', '&'));
+  if (callback.protocol !== 'codexmobileui:' || callback.host !== 'oauth' ||
+      callback.searchParams.get('state') !== state) {
     throw new Error('OAuth callback URI/state mismatch');
   }
   const code = callback.searchParams.get('code');
