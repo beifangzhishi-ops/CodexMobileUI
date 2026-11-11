@@ -173,6 +173,7 @@ try {
         & $gradleCommand ":app:assemble$Variant" '--console=plain' '--no-daemon' '--max-workers=2' `
             '-PreactNativeArchitectures=arm64-v8a' `
             '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6' `
+            '-Pandroid.enableMinifyInReleaseBuilds=false' `
             2>&1 | Tee-Object -FilePath $gradleOutput | Out-Null
         $gradleExitCode = $LASTEXITCODE
     } finally {

@@ -31,6 +31,7 @@
 - This feature worktree builds the independently installable visual Android application `dev.codexmobileui.visual` (0.3.1). Never substitute the OAuth application's `dev.codexmobileui.app` ID or register its OAuth scheme. Other worktrees maintain their own Android identities. Keystores, credentials, local runtime state and per-machine configuration are not tracked.
 - The visual sidebar must slide horizontally using native-driver animation, not Modal fade; use the same reusable board-and-pen icon in the sidebar and main header. Keep icon foreground proportions controlled by `scripts/make-visual-icon.py`, never redraw the uploaded knot geometry.
 - Icon regeneration must update both Expo assets and generated native Android `mipmap-*/ic_launcher*.webp` files before packaging. Those native files are ignored by Git but are mirrored into the stable build checkout; inspecting only `assets/icon.png` is not sufficient proof that the installed launcher icon changed.
+- The visual-only Android Release packaging command explicitly disables R8 minification (`-Pandroid.enableMinifyInReleaseBuilds=false`) because the 2 GiB JVM Windows build hung for over ten minutes in `:app:minifyReleaseWithR8`. This is a signed, embedded-JS UI test APK, not a production-optimized artifact; keep this override scoped to the visual build only.
 - For a Git repository, commit finished verified work. Push to existing configured remote only; never create or publish a public remote without separate authorization, never force push.
 
 ## Shared Windows launchers

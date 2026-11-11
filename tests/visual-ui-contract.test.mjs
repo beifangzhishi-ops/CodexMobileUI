@@ -64,6 +64,7 @@ test('native Android Release build writes independent Gradle log and checks exit
   assert.match(nativeBuilder, /gradle-\$\(\$Variant\.ToLowerInvariant\(\)\)-output\.log/);
   assert.match(nativeBuilder, /2>&1 \| Tee-Object -FilePath \$gradleOutput/);
   assert.match(nativeBuilder, /\$gradleExitCode = \$LASTEXITCODE/);
+  assert.match(nativeBuilder, /-Pandroid\.enableMinifyInReleaseBuilds=false/);
   assert.match(nativeBuilder, /if \(\$gradleExitCode -ne 0\)/);
   assert.match(nativeBuilder, /if \(\$Variant -eq 'Release'\)/);
   assert.match(nativeBuilder, /android\\app\\debug\.keystore/);
