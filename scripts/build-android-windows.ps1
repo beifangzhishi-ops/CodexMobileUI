@@ -4,6 +4,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Variant = 'Release',
     [switch]$UseWorkspaceCache,
+    [string]$WorkspaceCacheRoot = '',
     [switch]$RegenerateCMake,
     [switch]$CheckOnly,
     [string]$GradleLogPath = ''
@@ -60,8 +61,13 @@ foreach ($relative in @(
     }
 }
 if ($UseWorkspaceCache) {
-    $env:GRADLE_USER_HOME = Join-Path $projectRoot '.tmp\gradle-user'
-    $env:TEMP = Join-Path $projectRoot '.tmp\build-temp'
+    $cacheParent = if ($WorkspaceCacheRoot) {
+        [System.IO.Path]::GetFullPath($WorkspaceCacheRoot)
+    } else {
+        Join-Path $projectRoot '.tmp'
+    }
+    $env:GRADLE_USER_HOME = Join-Path $cacheParent 'gradle-user'
+    $env:TEMP = Join-Path $cacheParent 'build-temp'
     $env:TMP = $env:TEMP
     New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $env:TEMP | Out-Null
 } else {
@@ -99,12 +105,13 @@ if ($UseWorkspaceCache) {
     if (-not $gradleCommand) {
         throw "Shared Gradle $gradleVersion is not installed under $distributionDir. Install it outside the restricted build first."
     }
-    Write-Host "Using shared Gradle $gradleVersion distribution with project-local dependency cache."
+    Write-Host "Using read-only installed Gradle $gradleVersion distribution with isolated writable workspace cache."
 }
 if ($CheckOnly) {
     Write-Host "Verified Windows Android build prerequisites: CMake 3.31.6, Ninja $version and Gradle at $gradleCommand"
     Write-Host "Verified $jdkVersion, Node.js $nodeVersion, API 37, Build Tools 37, and NDK 27.1"
-    Write-Host "Shared Gradle cache: $env:GRADLE_USER_HOME"
+    Write-Host "Gradle writable cache: $env:GRADLE_USER_HOME"
+    if ($UseWorkspaceCache) { Write-Host "Build temporary files: $env:TEMP" }
     Write-Host "Selected test APK variant: $Variant"
     return
 }

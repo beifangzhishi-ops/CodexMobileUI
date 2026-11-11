@@ -51,7 +51,7 @@ Not yet device-validated: the current first-send/project/move/title flows, priva
 - `scripts/mobile-app-server.ps1`: private backend ownership, runtime selection and health. Under restricted CCM, ownership requires private kernel path + PID file birth time + verified loopback listener instead of unavailable WMI command-line inspection.
 - `scripts/probe-private-backend.mjs` / `npm.cmd run probe:private`: read-only local initialize, project/thread counts and native account-presence check without displaying user records.
 - `scripts/gateway-only.ps1`: authenticated Gateway lifecycle. Its private `.env` must specify `CODEX_APP_SERVER_WS=ws://127.0.0.1:45891` before a new Gateway is started.
-- `scripts/build-android-stable.ps1`: fixed Android build entry with version/signature/bundle checks and reusable Gradle/CMake caches.
+- `scripts/build-android-stable.ps1`: fixed Android build entry with version/signature/bundle checks. It writes Gradle cache and temporary files only under this checkout's ignored `.tmp/gradle-user` and `.tmp/build-temp`, reads the installed Gradle distribution without locking its global cache, and keeps the separate short-path native build checkout for incremental CMake/Gradle outputs.
 
 For step-by-step Windows operations and safety boundaries, read `docs/mobile-host.md`. For network and OAuth routing, read `docs/funnel-deployment.md`. For design and scope, read `docs/architecture.md` and `docs/roadmap.md`.
 

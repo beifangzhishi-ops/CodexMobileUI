@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$workspaceCacheRoot = Join-Path $sourceRoot '.tmp'
 $buildRootHint = Join-Path $sourceRoot '.tmp\android-build-root.txt'
 if (-not $BuildRoot) {
     if (Test-Path -LiteralPath $buildRootHint) {
@@ -55,7 +56,7 @@ if ($nativeCode -ne $appCode -or $nativeVersion -ne $appVersion) {
 }
 $sourceBuilder = Join-Path $sourceRoot 'scripts\build-android-windows.ps1'
 if ($CheckOnly) {
-    & $sourceBuilder -Variant $Variant -CheckOnly
+    & $sourceBuilder -Variant $Variant -UseWorkspaceCache -WorkspaceCacheRoot $workspaceCacheRoot -CheckOnly
     if (-not $?) { throw 'Android build preflight failed.' }
     Write-Host "Android identity verified: $appId $appVersion ($appCode)"
     Write-Host "Persistent cache directory: $buildRoot"
@@ -182,9 +183,9 @@ try {
                 $transcribing = $true
                 $builder = Join-Path $buildRoot 'scripts\build-android-windows.ps1'
                 if ($RegenerateCMake) {
-                    & $builder -Variant $Variant -RegenerateCMake -GradleLogPath $gradleLog
+                    & $builder -Variant $Variant -UseWorkspaceCache -WorkspaceCacheRoot $workspaceCacheRoot -RegenerateCMake -GradleLogPath $gradleLog
                 } else {
-                    & $builder -Variant $Variant -GradleLogPath $gradleLog
+                    & $builder -Variant $Variant -UseWorkspaceCache -WorkspaceCacheRoot $workspaceCacheRoot -GradleLogPath $gradleLog
                 }
                 if (-not $?) { throw 'Gradle build did not complete successfully.' }
             } finally {

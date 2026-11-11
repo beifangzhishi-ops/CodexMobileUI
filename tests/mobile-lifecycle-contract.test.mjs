@@ -15,6 +15,7 @@ const diagnosticsJournal = readFileSync(new URL("../src/diagnostics/journal.ts",
 const packageSettings = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
 const androidStableBuild = readFileSync(new URL("../scripts/build-android-stable.ps1", import.meta.url), "utf8");
+const androidWindowsBuild = readFileSync(new URL("../scripts/build-android-windows.ps1", import.meta.url), "utf8");
 
 test("Android real-chat composer stays in a keyboard-avoiding layout", () => {
   assert.match(chatThread, /KeyboardAvoidingView style=\{styles\.keyboardAvoiding\} behavior="padding"/);
@@ -72,6 +73,18 @@ test("Windows stable Android build uses isolated reusable native caches and veri
   assert.match(androidStableBuild, /versionCode=/);
   assert.match(androidStableBuild, /certificate SHA-256 digest/);
   assert.match(androidStableBuild, /android-artifacts/);
+});
+
+test("stable Android release writes Gradle cache and temp files inside this checkout", () => {
+  assert.match(androidStableBuild, /\$workspaceCacheRoot = Join-Path \$sourceRoot '\.tmp'/);
+  assert.match(androidStableBuild, /\$sourceBuilder -Variant \$Variant -UseWorkspaceCache -WorkspaceCacheRoot \$workspaceCacheRoot -CheckOnly/);
+  assert.match(androidStableBuild, /\$builder -Variant \$Variant -UseWorkspaceCache -WorkspaceCacheRoot \$workspaceCacheRoot -GradleLogPath \$gradleLog/);
+  assert.match(androidStableBuild, /\$builder -Variant \$Variant -UseWorkspaceCache -WorkspaceCacheRoot \$workspaceCacheRoot -RegenerateCMake -GradleLogPath \$gradleLog/);
+  assert.match(androidWindowsBuild, /\$env:GRADLE_USER_HOME = Join-Path \$cacheParent 'gradle-user'/);
+  assert.match(androidWindowsBuild, /\$env:TEMP = Join-Path \$cacheParent 'build-temp'/);
+  assert.match(androidWindowsBuild, /\$env:TMP = \$env:TEMP/);
+  assert.match(androidWindowsBuild, /\$gradleCommand = \$candidate/);
+  assert.match(androidWindowsBuild, /installed Gradle \$gradleVersion distribution with isolated writable workspace cache/);
 });
 
 test("device diagnostics are reachable before authorization and export a persistent JSON file", () => {
