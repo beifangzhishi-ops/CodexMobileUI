@@ -8,10 +8,11 @@
 - [x] Android conversation caches receive a distinct profile namespace without deleting old local data.
 - [x] Removed defunct compatibility launcher/proxy source and replaced source contracts; documentation updated.
 - [x] 6v private App Server started from a fingerprinted runtime copy; independent data home created; owner and readiness checks passed under restricted CCM.
-- [x] 6v native initialize, project/list and thread/list: private counts 0 projects, 0 threads; account/read reports no private model login.
+- [x] 6v native initialize, project/list and thread/list: private counts 0 projects, 0 threads.
+- [x] 6v independent Codex device login confirmed by native account/read (account_present=true) and the presence of authentication data exclusively in the private home; no Desktop credential import.
 - [x] 6v temporary isolated OAuth PKCE Gateway authenticated and forwarded thread/list to the private backend without touching the installed Gateway or Funnel.
 - [ ] noha private backend startup and both hosts' clean shutdown/restart/ownership checks.
-- [ ] Dedicated Codex account authentication into the empty home and a successful, explicitly approved real model turn on each host.
+- [ ] noha dedicated Codex account login and successful, explicitly approved real model turns on both hosts.
 - [ ] Private Gateway `.env` switched safely and OAuth/WSS relaying verified with the new backend. Do not alter Funnel or unrelated running services until backend validated.
 - [ ] New Android build with private cache scope installed and tested. Previous 0.1.4 APK is not proof of the new topology.
 - [ ] Explicitly test concurrent normal Desktop work and MobileUI, verifying data-home and writer-lock separation.
