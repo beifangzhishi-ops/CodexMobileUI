@@ -171,7 +171,12 @@ try {
         Write-Host 'Installing dependency lockfile in the persistent build checkout.'
         Push-Location $buildRoot
         try {
-            & npm.cmd ci '--no-audit' '--no-fund' '--prefer-offline'
+            # The lockfile uses legacy peer resolution because Storybook's
+            # optional Windows peers conflict with the selected RN version.
+            # Match the lockfile resolver and keep the cache inside this build.
+            $npmCache = Join-Path $stateDir 'npm-cache'
+            New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
+            & npm.cmd ci '--no-audit' '--no-fund' '--prefer-offline' '--legacy-peer-deps' '--cache' $npmCache
             if ($LASTEXITCODE -ne 0) { throw "npm ci failed: $LASTEXITCODE" }
         } finally { Pop-Location }
     } else {
