@@ -10,6 +10,8 @@
 - The owner needs Codex Desktop for work throughout development. Never stop or restart Desktop or other clients for MobileUI tests. Do not migrate old history, project metadata or credentials without explicit owner approval.
 
 ## Source and protocol rules
+- The independent React/Vite frontend belongs in `web/`, with its own package lock and build. Browser UI changes must not alter the Android/Expo bundle, Gateway or Windows host lifecycle as a side effect.
+- Browser preview data must remain explicitly fictional. Local send/attachment UI must not imply a model request or file upload. Keep the development server loopback-only; no public or Tailscale exposure until an authenticated web coordinator is implemented and approved.
 - Keep `src/core` for native protocol/transport, `src/session` for synchronization, `src/storage` for caches, `src/auth` for Android PKCE, `src/ui` for RN, `gateway` for authenticated Windows relay, `tests` for contracts/integration. Keep visual/frontend work in its dedicated workstream.
 - Native projects come from `project/list`. Real project assignment uses `projectId`; moving a thread uses `thread/metadata/update` without changing cwd or relocating files.
 - New chats stay local until first actual send. Create a native thread then send a turn in order; preserve real IDs and drafts on failures. Never auto-retry ambiguous creates or auto-send drafts after reconnect.
@@ -28,6 +30,7 @@
 - Interactive Codex authentication inside the dedicated home is separate from Gateway OAuth on the Android phone. Both are needed for model turns.
 
 ## Quality and delivery
+- For Web changes, run `npm.cmd --prefix web run build` as well as the existing repository checks. Do not claim visual acceptance without a real browser rendering check.
 - Read AGENTS.md, README.md and relevant modules before editing. Run `npm.cmd run check` and `npm.cmd run build:gateway` after changes; check actual host behavior separately.
 - Use CCM for repo changes, tests, builds and Git on both PCs. Never reuse an expired or task-unapproved Full Access grant. Do not use keyboard/mouse or unrelated tools by default.
 - Do not infer port availability from permission-denied queries; obtain verified listener PID and process identity before stop or restart. Never stop active unrelated processes.

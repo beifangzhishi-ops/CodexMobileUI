@@ -1,5 +1,11 @@
 # CodexMobileUI
 
+## Web 工作台（2026-11-12）
+
+- `web/` 是独立的 React/TypeScript/Vite 网页视觉原型，采用 ChatGPT 风格布局，包含响应式侧边栏、电脑和项目筛选、搜索、主题切换、示例执行卡片以及本地输入交互。
+- 当前电脑、项目、会话均为明确标记的演示数据。**尚未连接任何 Codex App Server、Gateway 或 Tailscale**，开发预览仅监听本机 `127.0.0.1:4173`。
+- 详细用法与后续接入边界见 `web/README.md`。已有 Android、Gateway、App Server、OAuth 和 Funnel 配置均未修改。
+
 Personal Android front end for a **dedicated Codex App Server** running on a Windows host. The Android app uses native Codex thread/turn/project RPCs through a narrowly allowlisted OAuth PKCE Gateway; SQLite holds local caches and unsent drafts.
 
 ## Current status (2026-11-11; development target 0.1.5 / Android versionCode 7)

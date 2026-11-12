@@ -1,5 +1,11 @@
 # CodexMobileUI system architecture
 
+## Web browser frontend (visual prototype)
+
+`web/` is an independent React/Vite frontend, separate from Android/Expo and the per-host OAuth Gateway. It renders clearly identified fictional hosts, projects and conversations; its local send action does not invoke a model. No browser API client, real server credentials or Tailscale route exists in this milestone.
+
+The next step is an authenticated web coordinator reachable through private Tailscale Serve, which binds each request and approval to a specific host and thread and routes to each host's authenticated Gateway. Keep the raw native App Server socket bound to loopback, keep host `CODEX_HOME` databases independent, and leave the existing Android/Funnel deployment unchanged unless specifically authorized.
+
 ## Authority and separation
 
 - The dedicated Windows Codex App Server owns genuine threads, projects, turns, model settings and approvals.

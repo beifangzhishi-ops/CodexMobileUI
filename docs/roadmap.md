@@ -1,5 +1,14 @@
 # CodexMobileUI implementation and acceptance
 
+## Browser workspace
+
+- [x] Standalone `web/` React/TypeScript/Vite application with ChatGPT-like responsive layout, animated desktop sidebar, mobile drawer and theme switching.
+- [x] Fictional multi-host/project conversations, recent/search lists, sample unread/running states, activity details and local-only composer/attachment UI.
+- [x] Web strict TypeScript validation and production build pass independently of Android.
+- [ ] Actual desktop/mobile browser screenshot and interactive acceptance.
+- [ ] Authenticated web coordinator, real device enrollment, private Tailscale Serve deployment and per-host message routing.
+- [ ] Verify true thread restoration, streaming, stop, approvals, disconnect handling and host isolation.
+
 ## Independent Windows backend and private profile
 
 - [x] Native backend endpoint and Gateway target made MobileUI-only: loopback 45891 and 48888.
