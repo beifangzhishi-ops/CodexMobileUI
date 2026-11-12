@@ -4,6 +4,8 @@ import test from 'node:test';
 
 const sidebar = readFileSync(new URL('../src/ui/ChatSidebar.tsx', import.meta.url), 'utf8');
 const chat = readFileSync(new URL('../src/ui/DemoChat.tsx', import.meta.url), 'utf8');
+const setup = readFileSync(new URL('../src/ui/ChatSetupPicker.tsx', import.meta.url), 'utf8');
+const contextMenu = readFileSync(new URL('../src/ui/ConversationMenu.tsx', import.meta.url), 'utf8');
 const account = readFileSync(new URL('../src/ui/AccountScreen.tsx', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../src/demo/conversations.ts', import.meta.url), 'utf8');
@@ -78,7 +80,7 @@ test('visual APK artifact filename cannot be confused with the OAuth mainline', 
   assert.match(stableBuilder, /CodexMobile-visual-\$appVersion-\$lower-arm64\.apk/);
 });
 
-test('sidebar slides from left with native animation and both new-chat actions use board-and-pen icon', () => {
+test('sidebar slides from left with native animation and keeps its board-and-pen button', () => {
   assert.match(sidebar, /Animated\.timing\(drawerProgress/);
   assert.match(sidebar, /useNativeDriver: true/);
   assert.match(sidebar, /onShow=\{\(\) => \{ if \(visible\) setModalReady\(true\); \}\}/);
@@ -90,8 +92,39 @@ test('sidebar slides from left with native animation and both new-chat actions u
   assert.match(sidebar, /animationType="none"/);
   assert.match(sidebar, /translateX: drawerProgress\.interpolate/);
   assert.match(sidebar, /<NewChatIcon size=\{visual\.newChatIconSize\}/);
-  assert.match(app, /<NewChatIcon size=\{visual\.newChatIconSize\}/);
+  assert.doesNotMatch(app, /<NewChatIcon /);
+  assert.match(app, /name="ellipsis"/);
   assert.doesNotMatch(sidebar, /animationType="fade"/);
+});
+
+test('project conversations show the project title and offer local conversation operations', () => {
+  assert.match(app, /activeProject\?\.name \?\? 'CodexMobile'/);
+  assert.match(app, /setConversationMenuOpen\(true\)/);
+  assert.match(app, /onAction=\{conversationAction\}/);
+  assert.match(app, /Clipboard\.setStringAsync\(id\)/);
+  assert.match(app, /conversation-remove-project/);
+  assert.match(app, /conversation-archive/);
+  assert.match(app, /conversation-delete/);
+  for (const label of ['复制对话串 ID', '置顶', '从项目中移除', '在聊天中查找', '归档', '删除']) {
+    assert.ok(contextMenu.includes(label), `missing action ${label}`);
+  }
+  assert.match(chat, /searchOpen && searchQuery\.trim\(\)/);
+  assert.match(chat, /matchingMessages/);
+  assert.match(sidebar, /showArchived \? '已归档对话' : '最近对话'/);
+});
+
+test('new conversation has local machine and project pickers and a project-row plus', () => {
+  assert.match(chat, /<ChatSetupPicker/);
+  assert.match(setup, /accessibilityLabel="选择机器"/);
+  assert.match(setup, /accessibilityLabel="选择项目"/);
+  assert.match(setup, /onChooseHost\(id\)/);
+  assert.match(setup, /onChooseProject\(id\)/);
+  assert.match(setup, /onAddHost\(newHostName\.trim\(\)\)/);
+  assert.match(setup, /仅配置本地视觉演示机器/);
+  assert.match(sidebar, /onNew\(project\.id\)/);
+  assert.match(sidebar, /styles\.projectNewChat/);
+  assert.match(sidebar, /conversationName: \{ flex: 1, color: '#dcdcdc', fontSize: 15/);
+  assert.doesNotMatch(app, /accessibilityLabel="新建聊天"/);
 });
 
 test('project expansion and composer popups animate without blocking keyboard avoidance', () => {
@@ -110,8 +143,8 @@ test('project expansion and composer popups animate without blocking keyboard av
 });
 
 test('updated Android visual edition has independent upgrade version', () => {
-  assert.equal(config.expo.version, '0.3.4');
-  assert.equal(config.expo.android.versionCode, 5);
+  assert.equal(config.expo.version, '0.3.5');
+  assert.equal(config.expo.android.versionCode, 6);
 });
 
 test('sidebar proportions and controls match visual review feedback', () => {

@@ -6,7 +6,7 @@ export type ReferenceIconName =
   | 'mic' | 'wave' | 'search' | 'chevron-right' | 'chevron-left' | 'chevron-down'
   | 'folder' | 'clock' | 'compose' | 'check' | 'plus' | 'close'
   | 'hand' | 'shield-check' | 'shield-lock' | 'warning' | 'settings'
-  | 'menu' | 'arrow-up' | 'account';
+  | 'menu' | 'arrow-up' | 'account' | 'ellipsis' | 'computer' | 'archive' | 'pin' | 'trash' | 'copy';
 
 export function ReferenceIcon({ name, size = 24, color = '#fff', strokeWidth = 2 }: {
   name: ReferenceIconName;
@@ -43,6 +43,12 @@ export function ReferenceIcon({ name, size = 24, color = '#fff', strokeWidth = 2
     case 'menu': drawing = <Path d="M4 8h16M4 16h10" {...ink}/>; break;
     case 'arrow-up': drawing = <Path d="M12 20V4m-7 7 7-7 7 7" {...ink}/>; break;
     case 'account': drawing = <><Circle cx="12" cy="12" r="9" {...ink}/><Circle cx="12" cy="12" r="6.6" {...ink}/></>; break;
+    case 'ellipsis': drawing = <><Circle cx="12" cy="5" r="1.75" fill={color}/><Circle cx="12" cy="12" r="1.75" fill={color}/><Circle cx="12" cy="19" r="1.75" fill={color}/></>; break;
+    case 'computer': drawing = <><Rect x="3" y="4" width="18" height="12" rx="2" {...ink}/><Path d="M2 20h20l-2-3H4z" {...ink}/></>; break;
+    case 'archive': drawing = <><Rect x="3" y="4" width="18" height="5" rx="1" {...ink}/><Path d="M5 9v11h14V9M10 13h4" {...ink}/></>; break;
+    case 'pin': drawing = <><Path d="m9 3 9 9m-9-9 5 1 6 6 1 5-6 1-6 6-2-2 6-6-1-5zM6 18l-3 3" {...ink}/></>; break;
+    case 'trash': drawing = <><Path d="M4 7h16M9 4h6M6 7l1 14h10l1-14M10 11v7M14 11v7" {...ink}/></>; break;
+    case 'copy': drawing = <><Rect x="8" y="8" width="13" height="13" rx="2" {...ink}/><Path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" {...ink}/></>; break;
   }
   return <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" {...ink}>{drawing}</Svg>;
 }

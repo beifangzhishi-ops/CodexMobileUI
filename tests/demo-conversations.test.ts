@@ -74,6 +74,43 @@ test('hosts can be selected, renamed and removed with no fake connected fallback
   assert.equal(state.selectedHostId, null);
 });
 
+test('new chat assigns a local machine and project independently of other chats', () => {
+  let state = demoReducer(initialDemoState, { type: 'host-add', name: '测试机器' });
+  const hostId = state.selectedHostId;
+  assert.ok(hostId);
+  state = demoReducer(state, { type: 'new', projectId: 'project-2' });
+  const id = state.selectedId;
+  assert.equal(state.conversations[0].hostId, hostId);
+  assert.equal(state.conversations[0].projectId, 'project-2');
+  state = demoReducer(state, { type: 'conversation-project', id, projectId: 'project-3' });
+  assert.equal(state.conversations[0].projectId, 'project-3');
+  state = demoReducer(state, { type: 'conversation-host', id, hostId: null });
+  assert.equal(state.conversations[0].hostId, null);
+  state = demoReducer(state, { type: 'host-add-for-conversation', id, name: '第二台测试机器' });
+  assert.equal(state.hosts.length, 2);
+  assert.equal(state.conversations[0].hostId, state.selectedHostId);
+  assert.equal(state.conversations[1].projectId, 'project-1', 'other chats retain their existing project');
+  state = demoReducer(state, { type: 'conversation-project', id, projectId: 'unknown' });
+  assert.equal(state.conversations[0].projectId, null, 'unknown project cannot be assigned');
+});
+
+test('pin, remove-from-project, archive, restore and delete affect only the chosen local chat', () => {
+  let state = demoReducer(initialDemoState, { type: 'conversation-pin', id: 'test-1' });
+  assert.equal(state.conversations[0].pinned, true);
+  state = demoReducer(state, { type: 'conversation-remove-project', id: 'test-1' });
+  assert.equal(state.conversations[0].projectId, null);
+  state = demoReducer(state, { type: 'conversation-archive', id: 'test-1' });
+  assert.equal(state.conversations[0].archived, true);
+  assert.notEqual(state.selectedId, 'test-1', 'archived active chat gives way to visible chat');
+  assert.equal(state.conversations.length, 3, 'archiving is not deletion');
+  state = demoReducer(state, { type: 'select', id: 'test-1' });
+  state = demoReducer(state, { type: 'conversation-archive', id: 'test-1' });
+  assert.equal(state.conversations[0].archived, false);
+  state = demoReducer(state, { type: 'conversation-delete', id: 'test-1' });
+  assert.equal(state.conversations.some((c) => c.id === 'test-1'), false);
+  assert.equal(state.conversations.length, 2);
+});
+
 test('project and recent conversation views share the same IDs and sorted order', () => {
   let state = demoReducer(initialDemoState, { type: 'conversation-pin', id: 'test-3' });
   state = demoReducer(state, { type: 'project-pin', id: 'project-2' });

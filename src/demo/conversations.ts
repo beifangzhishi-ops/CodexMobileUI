@@ -9,6 +9,8 @@ export type DemoConversation = {
   draft: string;
   messages: DemoMessage[];
   projectId: string | null;
+  hostId?: string | null;
+  archived?: boolean;
   updatedAt: number;
   pinned: boolean;
   running: boolean;
@@ -42,6 +44,10 @@ export type DemoAction =
   | { type: 'reply'; id: string; visible: boolean }
   | { type: 'conversation-rename'; id: string; title: string }
   | { type: 'conversation-pin'; id: string }
+  | { type: 'conversation-archive'; id: string }
+  | { type: 'conversation-remove-project'; id: string }
+  | { type: 'conversation-project'; id: string; projectId: string | null }
+  | { type: 'conversation-host'; id: string; hostId: string | null }
   | { type: 'conversation-delete'; id: string }
   | { type: 'project-create'; name: string }
   | { type: 'project-rename'; id: string; name: string }
@@ -50,6 +56,7 @@ export type DemoAction =
   | { type: 'project-rules'; id: string; text: string }
   | { type: 'global-rules'; text: string }
   | { type: 'host-add'; name: string }
+  | { type: 'host-add-for-conversation'; id: string; name: string }
   | { type: 'host-rename'; id: string; name: string }
   | { type: 'host-remove'; id: string }
   | { type: 'host-select'; id: string }
@@ -99,7 +106,8 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
       return {
         ...state, selectedId: id, nextId: state.nextId + 1,
         conversations: [{ id, title: '新聊天', seeded: false, draft: '', messages: [],
-          projectId, updatedAt: tick(state), pinned: false, running: false, unread: false }, ...state.conversations],
+          projectId, hostId: state.selectedHostId, updatedAt: tick(state),
+          pinned: false, archived: false, running: false, unread: false }, ...state.conversations],
       };
     }
     case 'select':
@@ -141,6 +149,29 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
       return changeConversation(state, action.id, (c) => ({ ...c, title: action.title.trim() || c.title }));
     case 'conversation-pin':
       return changeConversation(state, action.id, (c) => ({ ...c, pinned: !c.pinned }));
+    case 'conversation-remove-project':
+      return changeConversation(state, action.id, (c) => ({ ...c, projectId: null }));
+    case 'conversation-project':
+      return changeConversation(state, action.id, (c) => ({
+        ...c, projectId: state.projects.some((p) => p.id === action.projectId) ? action.projectId : null,
+      }));
+    case 'conversation-host': {
+      const hostId = state.hosts.some((h) => h.id === action.hostId) ? action.hostId : null;
+      return { ...changeConversation(state, action.id, (c) => ({ ...c, hostId })), selectedHostId: hostId };
+    }
+    case 'conversation-archive': {
+      const current = state.conversations.find((c) => c.id === action.id);
+      if (!current) return state;
+      const conversations = state.conversations.map((c) => c.id === action.id ? { ...c, archived: !c.archived } : c);
+      if (current.archived || state.selectedId !== action.id) return { ...state, conversations };
+      const next = conversations.find((c) => !c.archived);
+      if (next) return { ...state, conversations, selectedId: next.id };
+      const id = `local-${state.nextId}`;
+      return { ...state, nextId: state.nextId + 1, selectedId: id,
+        conversations: [{ id, title: '新聊天', seeded: false, draft: '', messages: [],
+          projectId: null, hostId: state.selectedHostId, updatedAt: tick(state),
+          pinned: false, archived: false, running: false, unread: false }, ...conversations] };
+    }
     case 'conversation-delete': {
       const conversations = state.conversations.filter((c) => c.id !== action.id);
       if (conversations.length === state.conversations.length) return state;
@@ -150,8 +181,14 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
           conversations: [{ id, title: '新聊天', seeded: false, draft: '', messages: [],
             projectId: null, updatedAt: tick(state), pinned: false, running: false, unread: false }] };
       }
-      return { ...state, conversations,
-        selectedId: state.selectedId === action.id ? conversations[0].id : state.selectedId };
+      if (state.selectedId !== action.id) return { ...state, conversations };
+      const next = conversations.find((c) => !c.archived);
+      if (next) return { ...state, conversations, selectedId: next.id };
+      const id = `local-${state.nextId}`;
+      return { ...state, selectedId: id, nextId: state.nextId + 1,
+        conversations: [{ id, title: '新聊天', seeded: false, draft: '', messages: [],
+          projectId: null, hostId: state.selectedHostId, updatedAt: tick(state),
+          pinned: false, archived: false, running: false, unread: false }, ...conversations] };
     }
     case 'project-create': {
       const id = `project-local-${state.nextId}`;
@@ -178,12 +215,20 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
       return { ...state, nextId: state.nextId + 1, selectedHostId: id,
         hosts: [...state.hosts, { id, name: action.name.trim() || '演示电脑', demo: true }] };
     }
+    case 'host-add-for-conversation': {
+      if (!state.conversations.some((c) => c.id === action.id)) return state;
+      const id = `demo-host-${state.nextId}`;
+      const result = changeConversation(state, action.id, (c) => ({ ...c, hostId: id }));
+      return { ...result, nextId: state.nextId + 1, selectedHostId: id,
+        hosts: [...state.hosts, { id, name: action.name.trim() || '演示机器', demo: true }] };
+    }
     case 'host-rename':
       return { ...state, hosts: state.hosts.map((h) =>
         h.id === action.id ? { ...h, name: action.name.trim() || h.name } : h) };
     case 'host-remove': {
       const hosts = state.hosts.filter((h) => h.id !== action.id);
-      return { ...state, hosts, selectedHostId: state.selectedHostId === action.id ? null : state.selectedHostId };
+      return { ...state, hosts, selectedHostId: state.selectedHostId === action.id ? null : state.selectedHostId,
+        conversations: state.conversations.map((c) => c.hostId === action.id ? { ...c, hostId: null } : c) };
     }
     case 'host-select':
       return state.hosts.some((h) => h.id === action.id) ? { ...state, selectedHostId: action.id } : state;

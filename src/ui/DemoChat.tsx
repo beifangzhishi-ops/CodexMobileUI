@@ -5,9 +5,10 @@ import {
   type AppendMessage, type ThreadMessageLike,
 } from '@assistant-ui/react-native';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
-import type { DemoConversation } from '../demo/conversations';
+import type { DemoConversation, DemoHost, DemoProject } from '../demo/conversations';
 import type { VisualTokens } from './visual-tokens';
 import { ReferenceIcon } from './ReferenceIcons';
+import { ChatSetupPicker } from './ChatSetupPicker';
 
 const models = ['GPT-6.1 Sol', 'GPT-6 Astra', 'GPT-6.1 Terra', 'GPT-6 Sol', 'GPT-5.6 Sol'];
 const thinkingLevels = ['低', '中', '高', '极高', 'Max', 'Ultra'] as const;
@@ -31,12 +32,22 @@ function Bubble({ role }: { role: 'user' | 'assistant' }) {
   </MessagePrimitive.Root>;
 }
 
-export function DemoChat({ conversation, onDraft, onSend, visual }: {
+export function DemoChat({ conversation, onDraft, onSend, visual, searchOpen, onSearchClose,
+  hosts, projects, hostId, onChooseHost, onChooseProject, onAddHost }: {
   conversation: DemoConversation;
   onDraft: (text: string) => void;
   onSend: () => void;
   visual: VisualTokens;
+  searchOpen: boolean;
+  onSearchClose: () => void;
+  hosts: readonly DemoHost[];
+  projects: readonly DemoProject[];
+  hostId: string | null;
+  onChooseHost: (id: string | null) => void;
+  onChooseProject: (id: string | null) => void;
+  onAddHost: (name: string) => void;
 }) {
+  const [searchQuery, setSearchQuery] = useState('');
   const [selectedModel, setSelectedModel] = useState(models[0]);
   const [selectedEffort, setSelectedEffort] = useState<(typeof thinkingLevels)[number]>('低');
   const [selectedSpeed, setSelectedSpeed] = useState<(typeof speeds)[number]>('常速');
@@ -158,9 +169,14 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
     setSpeechError('');
   };
 
-  const messages = useMemo<ThreadMessageLike[]>(() => conversation.messages.map((message) => ({
+  const matchingMessages = useMemo(() => searchOpen && searchQuery.trim()
+    ? conversation.messages.filter((message) =>
+        message.text.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase()))
+    : conversation.messages, [conversation.messages, searchOpen, searchQuery]);
+  useEffect(() => { setSearchQuery(''); }, [conversation.id, searchOpen]);
+  const messages = useMemo<ThreadMessageLike[]>(() => matchingMessages.map((message) => ({
     id: message.id, role: message.role, content: [{ type: 'text' as const, text: message.text }],
-  })), [conversation.messages]);
+  })), [matchingMessages]);
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage: (message: ThreadMessageLike) => message,
@@ -170,6 +186,17 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
 
   return <AssistantRuntimeProvider runtime={runtime}>
     <ThreadPrimitive.Root style={styles.thread}>
+      {searchOpen && <View style={styles.chatSearchBar}>
+        <ReferenceIcon name="search" size={20} color="#ddd" />
+        <TextInput accessibilityLabel="在聊天中查找" autoFocus
+          value={searchQuery} onChangeText={setSearchQuery}
+          placeholder="查找对话内容" placeholderTextColor="#999"
+          style={styles.chatSearchInput} />
+        <Text style={styles.matchCount}>{searchQuery.trim() ? `${matchingMessages.length} 条` : ''}</Text>
+        <Pressable accessibilityLabel="关闭聊天查找" onPress={onSearchClose}>
+          <ReferenceIcon name="close" size={21} color="#ddd" />
+        </Pressable>
+      </View>}
       <ThreadPrimitive.MessagesFlatList
         key={conversation.id}
         style={styles.list}
@@ -177,12 +204,17 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
         autoScroll
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={<View style={styles.empty}>
-          <Text style={styles.greeting}>有什么可以帮忙的？</Text>
-          <Text style={styles.caption}>本地视觉演示 · 无需连接电脑</Text>
+          {searchOpen && searchQuery.trim()
+            ? <Text style={styles.caption}>未找到匹配消息</Text>
+            : <><Text style={styles.greeting}>有什么可以帮忙的？</Text>
+              <Text style={styles.caption}>本地视觉演示 · 无需连接电脑</Text></>}
         </View>}
       >
         {({ message }) => <Bubble role={message.role === 'user' ? 'user' : 'assistant'} />}
       </ThreadPrimitive.MessagesFlatList>
+      {conversation.messages.length === 0 && !searchOpen && <ChatSetupPicker
+        hosts={hosts} projects={projects} hostId={hostId} projectId={conversation.projectId}
+        onChooseHost={onChooseHost} onChooseProject={onChooseProject} onAddHost={onAddHost} />}
       <Animated.View style={[styles.composerArea, { transform: [{ translateY: composerRise }] }]}>
         {displayedPanel && <Animated.View pointerEvents={panel ? 'auto' : 'none'}
           style={[styles.floatingMenu, {
@@ -323,6 +355,10 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
 
 const styles = StyleSheet.create({
   thread: { flex: 1, backgroundColor: '#000' },
+  chatSearchBar: { marginHorizontal: 17, marginTop: 10, minHeight: 48, borderRadius: 14,
+    paddingHorizontal: 12, backgroundColor: '#292929', flexDirection: 'row', gap: 10, alignItems: 'center' },
+  chatSearchInput: { flex: 1, color: '#fff', fontSize: 16, paddingVertical: 8 },
+  matchCount: { color: '#a5a5a5', fontSize: 12 },
   list: { flex: 1 },
   listContent: { paddingHorizontal: 15, paddingVertical: 20, gap: 17, flexGrow: 1 },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 40, gap: 10 },

@@ -5,12 +5,14 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import * as Clipboard from 'expo-clipboard';
 import { demoReducer, initialDemoState } from './src/demo/conversations';
 import { loadVisualState, persistVisualState } from './src/demo/persistence';
 import { AccountScreen, FullRulesEditor } from './src/ui/AccountScreen';
-import { ChatSidebar, NewChatIcon } from './src/ui/ChatSidebar';
+import { ChatSidebar } from './src/ui/ChatSidebar';
 import { ReferenceIcon } from './src/ui/ReferenceIcons';
 import { DemoChat } from './src/ui/DemoChat';
+import { ConversationMenu, type ConversationMenuAction } from './src/ui/ConversationMenu';
 import { DiagnosticsPanel } from './src/diagnostics/DiagnosticsPanel';
 import { logDiagnostic } from './src/diagnostics/journal';
 import { classifyDiagnosticError } from './src/diagnostics/safe';
@@ -38,10 +40,15 @@ function MainApp() {
   const [screen, setScreen] = useState<Screen>('chat');
   const [rulesProjectId, setRulesProjectId] = useState<string | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [conversationMenuOpen, setConversationMenuOpen] = useState(false);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const currentScreen = useRef({ selectedId: demo.selectedId, screen, sidebar });
   const createdDemoHost = useRef(false);
   currentScreen.current = { selectedId: demo.selectedId, screen, sidebar };
   const conversation = demo.conversations.find((c) => c.id === demo.selectedId) ?? demo.conversations[0];
+  const activeProject = demo.projects.find((p) => p.id === conversation?.projectId);
+  const chatHostId = conversation?.hostId === undefined
+    ? demo.selectedHostId : conversation.hostId;
   const editingProject = demo.projects.find((p) => p.id === rulesProjectId);
 
   useEffect(() => {
@@ -82,11 +89,37 @@ function MainApp() {
 
   const newConversation = (projectId?: string) => {
     dispatch({ type: 'new', projectId });
-    setScreen('chat'); setSidebar(false);
+    setScreen('chat'); setSidebar(false); setChatSearchOpen(false);
   };
   const chooseConversation = (id: string) => {
     dispatch({ type: 'select', id });
-    setScreen('chat'); setSidebar(false);
+    setScreen('chat'); setSidebar(false); setChatSearchOpen(false);
+  };
+  const conversationAction = (action: ConversationMenuAction) => {
+    if (!conversation) return;
+    const id = conversation.id;
+    if (action === 'copy-id') {
+      void Clipboard.setStringAsync(id).then(() => {
+        Alert.alert('已复制本地演示 ID', id);
+      }).catch(() => Alert.alert('复制失败', '剪贴板不可用。'));
+    } else if (action === 'pin') {
+      dispatch({ type: 'conversation-pin', id });
+    } else if (action === 'move-out') {
+      dispatch({ type: 'conversation-remove-project', id });
+    } else if (action === 'find') {
+      setChatSearchOpen(true);
+    } else if (action === 'archive') {
+      setChatSearchOpen(false);
+      dispatch({ type: 'conversation-archive', id });
+    } else if (action === 'delete') {
+      Alert.alert('删除本地对话', '删除后不能恢复。', [
+        { text: '取消', style: 'cancel' },
+        { text: '删除', style: 'destructive', onPress: () => {
+          setChatSearchOpen(false);
+          dispatch({ type: 'conversation-delete', id });
+        } },
+      ]);
+    }
   };
   const sendMessage = () => {
     if (!conversation || !conversation.draft.trim() || conversation.running) return;
@@ -103,7 +136,7 @@ function MainApp() {
     setSidebar(false); setRulesProjectId(projectId); setScreen('rules');
   };
   const connect = () => { createdDemoHost.current = false; setScreen('connect'); };
-  const title = screen === 'chat' ? 'CodexMobile' : screen === 'account' ? '电脑与全局规则'
+  const title = screen === 'chat' ? (activeProject?.name ?? 'CodexMobile') : screen === 'account' ? '电脑与全局规则'
     : screen === 'connect' ? '连接新的电脑' : screen === 'tasks' ? '定时任务'
       : rulesProjectId ? `${editingProject?.name ?? '项目'} · 项目规则` : '全局规则';
 
@@ -135,14 +168,25 @@ function MainApp() {
           }}
           style={styles.headerButton}
         ><Text style={styles.logLabel}>日志</Text></Pressable>
-          : screen === 'chat' ? <Pressable accessibilityRole="button" accessibilityLabel="新建聊天"
-              onPress={() => newConversation()} style={styles.headerButton}>
-              <NewChatIcon size={visual.newChatIconSize} />
-            </Pressable> : <View style={styles.headerButton} />}
+          : screen === 'chat' && conversation &&
+            (conversation.seeded || conversation.messages.length > 0 || conversation.archived)
+            ? <Pressable accessibilityRole="button" accessibilityLabel="对话更多操作"
+                onPress={() => setConversationMenuOpen(true)}
+                style={[styles.headerButton, styles.headerCircle]}>
+                <ReferenceIcon name="ellipsis" size={24} color="#fff" />
+              </Pressable> : <View style={styles.headerButton} />}
       </View>
       {screen === 'chat' && <DemoChat
         visual={visual}
         conversation={conversation}
+        searchOpen={chatSearchOpen}
+        onSearchClose={() => setChatSearchOpen(false)}
+        hosts={demo.hosts}
+        projects={demo.projects}
+        hostId={chatHostId ?? null}
+        onChooseHost={(hostId) => dispatch({ type: 'conversation-host', id: conversation.id, hostId })}
+        onChooseProject={(projectId) => dispatch({ type: 'conversation-project', id: conversation.id, projectId })}
+        onAddHost={(name) => dispatch({ type: 'host-add-for-conversation', id: conversation.id, name })}
         onDraft={(text) => dispatch({ type: 'draft', text })}
         onSend={sendMessage}
       />}
@@ -204,8 +248,15 @@ function MainApp() {
       onProjectRules={(id) => openRules(id)}
       onConversationAction={(id, action, value) => dispatch(action === 'pin'
         ? { type: 'conversation-pin', id } : action === 'delete'
-          ? { type: 'conversation-delete', id } : { type: 'conversation-rename', id, title: value ?? '' })}
+          ? { type: 'conversation-delete', id } : action === 'archive'
+            ? { type: 'conversation-archive', id } : action === 'move-out'
+              ? { type: 'conversation-remove-project', id }
+              : { type: 'conversation-rename', id, title: value ?? '' })}
     />
+    <ConversationMenu visible={conversationMenuOpen && screen === 'chat'}
+      hasProject={Boolean(activeProject)} pinned={Boolean(conversation?.pinned)}
+      archived={Boolean(conversation?.archived)} onClose={() => setConversationMenuOpen(false)}
+      onAction={conversationAction} />
     <DiagnosticsPanel visible={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
   </SafeAreaView>;
 }

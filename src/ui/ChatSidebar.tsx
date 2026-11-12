@@ -37,7 +37,7 @@ type Props = {
   onProjectCreate: (name: string) => void;
   onProjectAction: (id: string, action: 'rename' | 'pin' | 'delete', value?: string) => void;
   onProjectRules: (id: string) => void;
-  onConversationAction: (id: string, action: 'rename' | 'pin' | 'delete', value?: string) => void;
+  onConversationAction: (id: string, action: 'rename' | 'pin' | 'delete' | 'archive' | 'move-out', value?: string) => void;
 };
 
 function StateIcon({ item }: { item: DemoConversation }) {
@@ -90,6 +90,7 @@ export function ChatSidebar(props: Props) {
   const [openProjects, setOpenProjects] = useState<string[]>([]);
   const [allProjectConversations, setAllProjectConversations] = useState<string[]>([]);
   const [recentLimit, setRecentLimit] = useState(10);
+  const [showArchived, setShowArchived] = useState(false);
   const [menu, setMenu] = useState<ItemMenu | null>(null);
   const [dialog, setDialog] = useState<EditDialog | null>(null);
   const [dialogText, setDialogText] = useState('');
@@ -136,9 +137,10 @@ export function ChatSidebar(props: Props) {
   [projects, search]);
   const allRecent = useMemo(() =>
     sortConversations(conversations).filter((c) =>
-      (includeProjectConversations || c.projectId === null) &&
+      Boolean(c.archived) === showArchived &&
+      (showArchived || includeProjectConversations || c.projectId === null) &&
       c.title.toLowerCase().includes(search.trim().toLowerCase())),
-  [conversations, includeProjectConversations, search]);
+  [conversations, includeProjectConversations, showArchived, search]);
   const projectRows = showAllProjects || search ? sortedProjects : sortedProjects.slice(0, 5);
   const recentRows = allRecent.slice(0, recentLimit);
   const toggleProject = (id: string) => {
@@ -199,6 +201,10 @@ export function ChatSidebar(props: Props) {
         ]);
       }
     } else if (kind === 'conversation') {
+      if (key === 'archive' || key === 'move-out') {
+        onConversationAction(id, key);
+        return;
+      }
       if (key === 'pin') onConversationAction(id, 'pin');
       if (key === 'rename') edit('rename-conversation', id,
         conversations.find((c) => c.id === id)?.title || '');
@@ -267,7 +273,8 @@ export function ChatSidebar(props: Props) {
           {projectRows.map((project) => {
             const opened = openProjects.includes(project.id);
             const children = sortConversations(conversations.filter((c) =>
-              c.projectId === project.id && c.title.toLowerCase().includes(search.trim().toLowerCase())));
+              !c.archived && c.projectId === project.id &&
+              c.title.toLowerCase().includes(search.trim().toLowerCase())));
             const showAll = allProjectConversations.includes(project.id);
             const shownChildren = showAll || search ? children : children.slice(0, 5);
             return <View key={project.id}>
@@ -284,6 +291,11 @@ export function ChatSidebar(props: Props) {
                 <ProjectDisclosure opened={opened} />
                 <ReferenceIcon name="folder" size={24} color="#bebebe" />
                 <Text style={styles.projectName} numberOfLines={1}>{project.name}</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel={`在${project.name}中新建对话`}
+                  hitSlop={7} style={styles.projectNewChat}
+                  onPress={(event) => { event.stopPropagation(); onNew(project.id); }}>
+                  <ReferenceIcon name="plus" size={19} color="#dedede" />
+                </Pressable>
                 {project.pinned && <Text style={styles.pin}>⌁</Text>}
               </Pressable>
               {opened && <View style={styles.children}>
@@ -308,14 +320,14 @@ export function ChatSidebar(props: Props) {
           </Pressable>}
 
           <View style={[styles.sectionHead, styles.recentHead, { minHeight: visual.sidebarSectionHeight }]}>
-            <Text style={styles.sectionName}>最近对话</Text>
+            <Text style={styles.sectionName}>{showArchived ? '已归档对话' : '最近对话'}</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="最近对话设置"
               style={styles.sectionAction} onPress={() => setMenu({ kind: 'recent-settings', id: '' })}>
               <ReferenceIcon name="settings" size={23} color="#cfcfcf" />
             </Pressable>
           </View>
           {recentRows.map((item) => conversationRow(item, false))}
-          {!allRecent.length && <Text style={styles.empty}>暂无对话</Text>}
+          {!allRecent.length && <Text style={styles.empty}>{showArchived ? '暂无归档对话' : '暂无对话'}</Text>}
           {recentLimit < allRecent.length && <Pressable style={styles.moreRow}
             onPress={() => setRecentLimit((n) => n + 10)}>
             <ReferenceIcon name="chevron-down" size={15} color="#acacac" />
@@ -375,13 +387,21 @@ export function ChatSidebar(props: Props) {
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setMenu(null)} />
           <View style={styles.contextMenu}>
             {menu.kind === 'recent-settings'
-              ? <Pressable style={styles.menuItem} onPress={() => {
+              ? <><Pressable style={styles.menuItem} onPress={() => {
                 onIncludeProjectConversations(!includeProjectConversations);
                 setMenu(null);
               }}>
                 <Text style={styles.menuGlyph}>{includeProjectConversations ? '☑' : '☐'}</Text>
                 <Text style={styles.menuText}>包含项目内对话</Text>
               </Pressable>
+              <Pressable style={styles.menuItem} onPress={() => {
+                setShowArchived(!showArchived);
+                setRecentLimit(10);
+                setMenu(null);
+              }}>
+                <ReferenceIcon name="folder" size={20} />
+                <Text style={styles.menuText}>{showArchived ? '返回最近对话' : '查看已归档对话'}</Text>
+              </Pressable></>
               : (menu.kind === 'project'
                 ? [
                   ['new', '新建项目聊天'], ['pin', projects.find((p) => p.id === menu.id)?.pinned ? '取消置顶' : '置顶项目'],
@@ -389,6 +409,8 @@ export function ChatSidebar(props: Props) {
                 ] : [
                   ['rename', '重命名对话'],
                   ['pin', conversations.find((c) => c.id === menu.id)?.pinned ? '取消置顶' : '置顶对话'],
+                  ['archive', conversations.find((c) => c.id === menu.id)?.archived ? '取消归档' : '归档'],
+                  ['move-out', '从项目中移除'],
                   ['delete', '删除对话'],
                 ]).map(([key, label]) => <Pressable key={key} style={styles.menuItem}
                   onPress={() => action(menu.kind, menu.id, key)}>
@@ -424,36 +446,37 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 12, paddingTop: 85, paddingBottom: 136 },
   taskRow: { minHeight: 49, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, gap: 12 },
-  rowText: { color: '#eee', fontSize: 15 },
+  rowText: { color: '#eee', fontSize: 16 },
   sectionHead: { minHeight: 45, flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', gap: 8, paddingLeft: 14, paddingRight: 6, marginTop: 10 },
   recentHead: { marginTop: 15 },
-  sectionName: { color: '#eaeaea', fontSize: 14, fontWeight: '600' },
+  sectionName: { color: '#eaeaea', fontSize: 15, fontWeight: '600' },
   sectionAction: { width: 34, height: 38, alignItems: 'center', justifyContent: 'center' },
   sectionActionText: { fontSize: 25, color: '#dedede' },
   projectRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 9, borderRadius: 12, gap: 9 },
-  projectName: { color: '#e6e6e6', fontSize: 14, flex: 1 },
+  projectName: { color: '#e6e6e6', fontSize: 15, flexShrink: 1 },
+  projectNewChat: { height: 30, width: 30, alignItems: 'center', justifyContent: 'center' },
   pin: { color: '#a0a0a0' },
   children: { marginLeft: 19 },
   conversationRow: { height: 39, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 7, borderRadius: 10 },
   nested: { paddingLeft: 24 },
   selected: { backgroundColor: '#383838' },
-  conversationName: { flex: 1, color: '#dcdcdc', fontSize: 14 },
+  conversationName: { flex: 1, color: '#dcdcdc', fontSize: 15 },
   status: { width: 24, height: 24, justifyContent: 'center', alignItems: 'center' },
   unreadDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#5897f9' },
-  empty: { color: '#999', fontSize: 13, paddingHorizontal: 20, paddingVertical: 12 },
+  empty: { color: '#999', fontSize: 14, paddingHorizontal: 20, paddingVertical: 12 },
   emptyChild: { paddingLeft: 11 },
   moreRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 20 },
   moreChild: { minHeight: 35, justifyContent: 'center', paddingLeft: 23 },
-  moreText: { color: '#acacac', fontSize: 13 },
+  moreText: { color: '#acacac', fontSize: 14 },
   fixedTop: { position: 'absolute', top: 0, left: 0, right: 0, height: 118 },
   topBar: { flex: 1, paddingTop: 46, paddingHorizontal: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  appName: { color: '#fff', fontSize: 21, fontWeight: '600' },
+  appName: { color: '#fff', fontSize: 22, fontWeight: '600' },
   topButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#303030', borderWidth: 1, borderColor: '#4a4a4a', alignItems: 'center', justifyContent: 'center' },
   searchField: { color: '#fff', flex: 1, fontSize: 16 },
   fixedBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 120 },
   bottomBar: { height: '100%', paddingLeft: 30, paddingRight: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   newChat: { height: 54, paddingHorizontal: 24, borderRadius: 28, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#236ae2' },
-  newText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  newText: { color: '#fff', fontSize: 17, fontWeight: '600' },
   profile: { height: 55, width: 55, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: '#55565b' },
   modalLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 10, justifyContent: 'center', alignItems: 'center', backgroundColor: '#00000099', padding: 20 },
   contextMenu: { width: '100%', maxWidth: 290, backgroundColor: '#343434', borderRadius: 18, paddingVertical: 8 },
