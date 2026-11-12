@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, ActivityIndicator, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   AssistantRuntimeProvider, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime,
   type AppendMessage, type ThreadMessageLike,
@@ -42,12 +42,42 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
   const [selectedSpeed, setSelectedSpeed] = useState<(typeof speeds)[number]>('常速');
   const [selectedPermission, setSelectedPermission] = useState(permissions[0].name);
   const [panel, setPanel] = useState<'model' | 'effort' | 'speed' | 'permission' | null>(null);
+  const [closingPanel, setClosingPanel] = useState<typeof panel>(null);
+  const panelProgress = useRef(new Animated.Value(0)).current;
+  const composerRise = useRef(new Animated.Value(0)).current;
   const [voiceMode, setVoiceMode] = useState<'idle' | 'recording' | 'review'>('idle');
   const [transcript, setTranscript] = useState('');
   const [volume, setVolume] = useState(1);
   const [speechError, setSpeechError] = useState('');
   const cancelled = useRef(false);
   const microphoneActive = useRef(false);
+
+  useEffect(() => {
+    if (panel) setClosingPanel(panel);
+    const animation = Animated.timing(panelProgress, {
+      toValue: panel ? 1 : 0,
+      duration: panel ? 205 : 145,
+      easing: panel ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      useNativeDriver: true,
+      isInteraction: false,
+    });
+    animation.start(({ finished }) => {
+      if (finished && !panel) setClosingPanel(null);
+    });
+    return () => animation.stop();
+  }, [Boolean(panel), panelProgress]);
+
+  const liftComposerOnFocus = () => {
+    setPanel(null);
+    composerRise.stopAnimation();
+    composerRise.setValue(12);
+    Animated.spring(composerRise, {
+      toValue: 0, tension: 130, friction: 15,
+      useNativeDriver: true, isInteraction: false,
+    }).start();
+  };
+
+  const displayedPanel = panel ?? closingPanel;
 
   useSpeechRecognitionEvent('result', (event) => {
     if (!cancelled.current && event.results[0]?.transcript) {
@@ -153,10 +183,17 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
       >
         {({ message }) => <Bubble role={message.role === 'user' ? 'user' : 'assistant'} />}
       </ThreadPrimitive.MessagesFlatList>
-      <View style={styles.composerArea}>
-        {panel && <View style={styles.floatingMenu}>
+      <Animated.View style={[styles.composerArea, { transform: [{ translateY: composerRise }] }]}>
+        {displayedPanel && <Animated.View pointerEvents={panel ? 'auto' : 'none'}
+          style={[styles.floatingMenu, {
+            opacity: panelProgress,
+            transform: [
+              { translateY: panelProgress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
+              { scale: panelProgress.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) },
+            ],
+          }]}>
           <ScrollView style={styles.floatingScroll} keyboardShouldPersistTaps="handled">
-            {panel === 'effort' && <>
+            {displayedPanel === 'effort' && <>
               <Text style={styles.menuHeading}>智能 · 思考强度（演示）</Text>
               {thinkingLevels.map((item) => <Pressable key={item} style={styles.modelItem}
                 accessibilityLabel={`思考强度${item}`}
@@ -176,7 +213,7 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
                 <ReferenceIcon name="chevron-right" size={20} />
               </Pressable>
             </>}
-            {panel === 'speed' && <>
+            {displayedPanel === 'speed' && <>
               <Pressable style={styles.menuBack} onPress={() => setPanel('effort')}>
                 <ReferenceIcon name="chevron-left" size={16} color="#bbb" />
                 <Text style={styles.menuBackText}>返回思考强度</Text>
@@ -187,16 +224,16 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
                 {selectedSpeed === item && <ReferenceIcon name="check" size={20} />}
               </Pressable>)}
             </>}
-            {panel === 'model' && <Pressable style={styles.menuBack} onPress={() => setPanel('effort')}>
+            {displayedPanel === 'model' && <Pressable style={styles.menuBack} onPress={() => setPanel('effort')}>
               <ReferenceIcon name="chevron-left" size={16} color="#bbb" />
               <Text style={styles.menuBackText}>返回思考强度</Text>
             </Pressable>}
-            {panel === 'model' && models.map((item) => <Pressable key={item} style={styles.modelItem}
+            {displayedPanel === 'model' && models.map((item) => <Pressable key={item} style={styles.modelItem}
                   onPress={() => { setSelectedModel(item); setPanel('effort'); }}>
                   <Text style={styles.modelText}>{item}</Text>
                    {selectedModel === item && <ReferenceIcon name="check" size={20} />}
                 </Pressable>)}
-            {panel === 'permission' && permissions.map((item, index) => <Pressable key={item.name} style={styles.permissionItem}
+            {displayedPanel === 'permission' && permissions.map((item, index) => <Pressable key={item.name} style={styles.permissionItem}
                   onPress={() => { setSelectedPermission(item.name); setPanel(null); }}>
                   <ReferenceIcon name={(['hand', 'shield-check', 'shield-lock', 'warning'] as const)[index]}
                     size={24} color={index === 3 ? '#ce922f' : '#fff'} />
@@ -207,7 +244,7 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
                   {selectedPermission === item.name && <ReferenceIcon name="check" size={20} />}
                 </Pressable>)}
           </ScrollView>
-        </View>}
+        </Animated.View>}
         <View style={[styles.composer, {
           minHeight: visual.composerMinHeight,
           borderRadius: visual.composerRadius,
@@ -224,6 +261,7 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
               textAlignVertical="top"
               value={conversation.draft}
               onChangeText={onDraft}
+                onFocus={liftComposerOnFocus}
               editable={!conversation.running}
             />
             <View style={[styles.toolbar, { height: visual.composerToolbarHeight }]}>
@@ -278,7 +316,7 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
             </View>
           </>}
         </View>
-      </View>
+      </Animated.View>
     </ThreadPrimitive.Root>
   </AssistantRuntimeProvider>;
 }

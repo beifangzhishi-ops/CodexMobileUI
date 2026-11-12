@@ -81,6 +81,12 @@ test('visual APK artifact filename cannot be confused with the OAuth mainline', 
 test('sidebar slides from left with native animation and both new-chat actions use board-and-pen icon', () => {
   assert.match(sidebar, /Animated\.timing\(drawerProgress/);
   assert.match(sidebar, /useNativeDriver: true/);
+  assert.match(sidebar, /onShow=\{\(\) => \{ if \(visible\) setModalReady\(true\); \}\}/);
+  assert.match(sidebar, /if \(!modalReady\)/);
+  assert.match(sidebar, /hardwareAccelerated/);
+  assert.match(sidebar, /renderToHardwareTextureAndroid/);
+  assert.match(sidebar, /Easing\.out\(Easing\.cubic\)/);
+  assert.match(sidebar, /isInteraction: false/);
   assert.match(sidebar, /animationType="none"/);
   assert.match(sidebar, /translateX: drawerProgress\.interpolate/);
   assert.match(sidebar, /<NewChatIcon size=\{visual\.newChatIconSize\}/);
@@ -88,9 +94,24 @@ test('sidebar slides from left with native animation and both new-chat actions u
   assert.doesNotMatch(sidebar, /animationType="fade"/);
 });
 
+test('project expansion and composer popups animate without blocking keyboard avoidance', () => {
+  assert.match(sidebar, /LayoutAnimation\.configureNext\(expandAnimation\)/);
+  assert.match(sidebar, /function ProjectDisclosure/);
+  assert.match(sidebar, /rotate: progress\.interpolate/);
+  assert.match(sidebar, /setOpenProjects\(\(ids\)/);
+  assert.match(sidebar, /setAllProjectConversations\(\(ids\)/);
+  assert.match(chat, /const panelProgress = useRef\(new Animated\.Value\(0\)\)/);
+  assert.match(chat, /const composerRise = useRef\(new Animated\.Value\(0\)\)/);
+  assert.match(chat, /onFocus=\{liftComposerOnFocus\}/);
+  assert.match(chat, /displayedPanel && <Animated\.View/);
+  assert.match(chat, /opacity: panelProgress/);
+  assert.match(chat, /scale: panelProgress\.interpolate/);
+  assert.match(app, /<KeyboardAvoidingView style=\{styles\.keyboardLayout\} behavior="padding"/);
+});
+
 test('updated Android visual edition has independent upgrade version', () => {
-  assert.equal(config.expo.version, '0.3.3');
-  assert.equal(config.expo.android.versionCode, 4);
+  assert.equal(config.expo.version, '0.3.4');
+  assert.equal(config.expo.android.versionCode, 5);
 });
 
 test('sidebar proportions and controls match visual review feedback', () => {

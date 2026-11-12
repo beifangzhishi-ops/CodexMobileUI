@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Animated, Modal, Pressable, ScrollView, StyleSheet,
-  Text, TextInput, View,
+  ActivityIndicator, Alert, Animated, Easing, LayoutAnimation, Modal, Pressable,
+  ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
@@ -52,6 +52,32 @@ function StateIcon({ item }: { item: DemoConversation }) {
   return <View style={styles.status} />;
 }
 
+const expandAnimation = {
+  duration: 240,
+  create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity, duration: 180 },
+  update: { type: LayoutAnimation.Types.easeInEaseOut, duration: 240 },
+  delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity, duration: 150 },
+};
+
+function ProjectDisclosure({ opened }: { opened: boolean }) {
+  const progress = useRef(new Animated.Value(opened ? 1 : 0)).current;
+  useEffect(() => {
+    const animation = Animated.timing(progress, {
+      toValue: opened ? 1 : 0,
+      duration: 200,
+      useNativeDriver: true,
+      isInteraction: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [opened, progress]);
+  return <Animated.View style={{ transform: [{ rotate: progress.interpolate({
+    inputRange: [0, 1], outputRange: ['0deg', '90deg'],
+  }) }] }}>
+    <ReferenceIcon name="chevron-right" size={19} color="#a9a9a9" />
+  </Animated.View>;
+}
+
 export function ChatSidebar(props: Props) {
   const {
     visual,
@@ -70,21 +96,37 @@ export function ChatSidebar(props: Props) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [mounted, setMounted] = useState(visible);
+  const [modalReady, setModalReady] = useState(false);
   const drawerProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const consumedLongPress = useRef<string | null>(null);
 
   useEffect(() => {
-    if (visible) setMounted(true);
+    // Mount the full scrollable panel while it is off-screen. Starting the
+    // native animation before Android's Modal onShow causes a stalled first
+    // frame followed by an abrupt jump, especially on long chat lists.
+    if (visible && !mounted) {
+      setMounted(true);
+      return;
+    }
+    if (!modalReady) {
+      if (!visible && mounted) setMounted(false);
+      return;
+    }
     const animation = Animated.timing(drawerProgress, {
       toValue: visible ? 1 : 0,
-      duration: visual.sidebarSlideDurationMs,
+      duration: visible ? visual.sidebarSlideDurationMs : Math.min(200, visual.sidebarSlideDurationMs),
+      easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
       useNativeDriver: true,
+      isInteraction: false,
     });
     animation.start(({ finished }) => {
-      if (finished && !visible) setMounted(false);
+      if (finished && !visible) {
+        setModalReady(false);
+        setMounted(false);
+      }
     });
     return () => animation.stop();
-  }, [visible, drawerProgress, visual.sidebarSlideDurationMs]);
+  }, [visible, mounted, modalReady, drawerProgress, visual.sidebarSlideDurationMs]);
 
   useEffect(() => { setRecentLimit(10); }, [includeProjectConversations, selectedHostId]);
   useEffect(() => { if (!visible) { setMenu(null); setSearchOpen(false); setSearch(''); } }, [visible]);
@@ -99,10 +141,14 @@ export function ChatSidebar(props: Props) {
   [conversations, includeProjectConversations, search]);
   const projectRows = showAllProjects || search ? sortedProjects : sortedProjects.slice(0, 5);
   const recentRows = allRecent.slice(0, recentLimit);
-  const toggleProject = (id: string) =>
+  const toggleProject = (id: string) => {
+    LayoutAnimation.configureNext(expandAnimation);
     setOpenProjects((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]);
-  const toggleProjectAll = (id: string) =>
+  };
+  const toggleProjectAll = (id: string) => {
+    LayoutAnimation.configureNext(expandAnimation);
     setAllProjectConversations((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]);
+  };
 
   const longPress = (kind: ItemMenu['kind'], id: string) => {
     consumedLongPress.current = `${kind}:${id}`;
@@ -182,13 +228,15 @@ export function ChatSidebar(props: Props) {
       <StateIcon item={item} />
     </Pressable>;
 
-  return <Modal visible={mounted} transparent animationType="none" statusBarTranslucent onRequestClose={() => menu ? setMenu(null) : onClose()}>
+  return <Modal visible={mounted} transparent animationType="none" statusBarTranslucent hardwareAccelerated
+    onShow={() => { if (visible) setModalReady(true); }}
+    onRequestClose={() => menu ? setMenu(null) : onClose()}>
     <View style={styles.overlay}>
       <Animated.View pointerEvents="none" style={[styles.scrim, {
         opacity: drawerProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }),
       }]} />
       <Pressable accessibilityLabel="关闭侧边栏" style={styles.scrimTouch} onPress={onClose} />
-      <Animated.View style={[styles.animatedPanel, {
+      <Animated.View renderToHardwareTextureAndroid style={[styles.animatedPanel, {
         width: `${visual.sidebarWidthPercent}%`,
         maxWidth: visual.sidebarMaxWidth,
         transform: [{ translateX: drawerProgress.interpolate({
@@ -233,7 +281,7 @@ export function ChatSidebar(props: Props) {
                 onPressOut={() => clearConsumedPress('project', project.id)}
                 delayLongPress={450}
               >
-                <ReferenceIcon name={opened ? 'chevron-down' : 'chevron-right'} size={19} color="#a9a9a9" />
+                <ProjectDisclosure opened={opened} />
                 <ReferenceIcon name="folder" size={24} color="#bebebe" />
                 <Text style={styles.projectName} numberOfLines={1}>{project.name}</Text>
                 {project.pinned && <Text style={styles.pin}>⌁</Text>}
@@ -251,7 +299,10 @@ export function ChatSidebar(props: Props) {
             </View>;
           })}
           {sortedProjects.length > 5 && !search && <Pressable
-            style={styles.moreRow} onPress={() => setShowAllProjects(!showAllProjects)}>
+            style={styles.moreRow} onPress={() => {
+              LayoutAnimation.configureNext(expandAnimation);
+              setShowAllProjects(!showAllProjects);
+            }}>
             <ReferenceIcon name={showAllProjects ? 'chevron-right' : 'chevron-down'} size={15} color="#acacac" />
             <Text style={styles.moreText}>{showAllProjects ? '收起项目' : '展开全部项目'}</Text>
           </Pressable>}
