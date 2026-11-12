@@ -5,7 +5,7 @@
 - 根据手机截图重新绘制可缩放的 SVG 轮廓图标，覆盖新对话写字板、搜索、文件夹、项目展开/收起、时钟、麦克风、蓝色语音波形、设置和权限四个级别；图标代码集中在 `src/ui/ReferenceIcons.tsx`。
 - 侧边栏滚动到顶部时，定时任务入口上移 33dp，缩短标题下方空白；顶部与底部使用连续 SVG 透明度渐变，不再用两层纯色透明遮罩拼接。
 - 输入框模型弹层新增本地“思考强度”选择：低、中、高、极高、Max、Ultra；可进一步进入模型、速度子菜单。选择结果显示在输入栏，**仅用于视觉演示，不传递给 Codex App Server**。
-- 独立包名仍为 `dev.codexmobileui.visual`，Android versionCode 为 4。新版本必须通过构建和设备检查后才能认定为已交付。
+- 独立包名为 `dev.codexmobileui.visual`，Android versionCode 为 4。0.3.3 ARM64 Release 已在 6v 完成 Gradle 编译（2026-11-12 20:33），`aapt` 核对包名/版本正确，V2 签名证书与 0.3.2 一致，APK 含 3,088,480 字节的 `assets/index.android.bundle`。文件 `CodexMobile-visual-0.3.3-release-arm64.apk` 为 52,322,529 字节，SHA-256 `E9C50707B867CCAE54C96574BC5040D311C4243478843DF7EAA958DD2E9AB947`。夸克「上传文件」回报 FINISH/100%，远端大小匹配；红米 K80 实机视觉仍待验收。
 
 ## 电脑端视觉编辑环境
 
@@ -75,6 +75,6 @@ Gradle 的完整标准输出和错误输出会写到独立构建目录的
 - TypeScript 与本地 reducer/协议测试均可由 `npm run check` 执行。
 - 红米 K80 真机上的键盘避让、录音服务、项目列表滚动位置、WebView 页面和 Android 返回键尚未验证；**代码检查或 APK 编译成功均不能代替实机验证**。
 - 编译/上传结果以实际 CCM 构建核验为准；不使用先前采用主线包名的旧视觉 APK。
-- 0.3.3 源码已通过 75 项自动测试；当前构建验收以 Release 输出、签名和内嵌 JS 的独立检查为准。红米 K80 实机布局和动画仍需验收。
+- 0.3.3 源码已通过 75 项自动测试；Release 输出、签名、内嵌 JS 和夸克上传已经核验。红米 K80 实机布局和动画仍需验收。
 
 项目开发规则见 `AGENTS.md`，验收清单见 `docs/roadmap.md`。

@@ -4,7 +4,7 @@
 - [x] 从参考截图重绘矢量轮廓图标，集中管理，统一用于侧边栏和输入区。
 - [x] 顶部任务入口减少空白，滚动列表与上下固定栏改为连续透明度渐变。
 - [x] 思考强度菜单包含低/中/高/极高/Max/Ultra，并可进入模型和速度二级菜单；仅本地视觉选择。
-- [ ] 新版 ARM64 Release 包名/versionCode/签名/内嵌 JS 校验、夸克上传。
+- [x] 0.3.3 ARM64 Release 构建与核验完成：Gradle BUILD SUCCESSFUL，包名 `dev.codexmobileui.visual`、versionCode 4、versionName 0.3.3；V2 签名与 0.3.2 一致；嵌入 JS 3,088,480 字节；APK 52,322,529 字节，SHA-256 `E9C50707B867CCAE54C96574BC5040D311C4243478843DF7EAA958DD2E9AB947`；夸克上传 FINISH/100%，远端大小一致。
 - [ ] 红米 K80 实机确认顶部留白、两端渐隐、图标笔画和菜单手感。
 
 
