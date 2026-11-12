@@ -3,6 +3,8 @@
 param(
     [ValidateSet('Debug', 'Release')]
     [string]$Variant = 'Release',
+    [ValidateSet('arm64-v8a', 'x86_64')]
+    [string]$Architecture = 'arm64-v8a',
     [switch]$UseWorkspaceCache,
     [switch]$RegenerateCMake,
     [switch]$CheckOnly
@@ -171,7 +173,7 @@ try {
         # It must not abort before Gradle's real exit code is recorded.
         $ErrorActionPreference = 'Continue'
         & $gradleCommand ":app:assemble$Variant" '--console=plain' '--no-daemon' '--max-workers=2' `
-            '-PreactNativeArchitectures=arm64-v8a' `
+            "-PreactNativeArchitectures=$Architecture" `
             '-Pkotlin.compiler.execution.strategy=in-process' '-Pandroid.cmakeVersion=3.31.6' `
             '-Pandroid.enableMinifyInReleaseBuilds=false' `
             2>&1 | Tee-Object -FilePath $gradleOutput | Out-Null

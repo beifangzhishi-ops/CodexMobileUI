@@ -13,6 +13,7 @@ import { DemoChat } from './src/ui/DemoChat';
 import { DiagnosticsPanel } from './src/diagnostics/DiagnosticsPanel';
 import { logDiagnostic } from './src/diagnostics/journal';
 import { classifyDiagnosticError } from './src/diagnostics/safe';
+import { useVisualTokens } from './src/ui/visual-tokens';
 
 type Screen = 'chat' | 'account' | 'connect' | 'rules' | 'tasks';
 
@@ -29,6 +30,7 @@ window.ReactNativeWebView.postMessage('add-demo-host')">测试连接</button>
 <p id="result"></p></div></body></html>`;
 
 function MainApp() {
+  const visual = useVisualTokens();
   const [demo, dispatch] = useReducer(demoReducer, initialDemoState);
   const [loaded, setLoaded] = useState(false);
   const [sidebar, setSidebar] = useState(false);
@@ -107,7 +109,7 @@ function MainApp() {
   return <SafeAreaView edges={['top', 'bottom']} style={styles.root}>
     <StatusBar barStyle="light-content" />
     <KeyboardAvoidingView style={styles.keyboardLayout} behavior="padding">
-      <View style={styles.header}>
+      <View style={[styles.header, { height: visual.headerHeight }]}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={screen === 'chat' ? '打开左上角菜单' : '返回'}
@@ -132,10 +134,11 @@ function MainApp() {
         ><Text style={styles.logLabel}>日志</Text></Pressable>
           : screen === 'chat' ? <Pressable accessibilityRole="button" accessibilityLabel="新建聊天"
               onPress={() => newConversation()} style={styles.headerButton}>
-              <NewChatIcon size={23} />
+              <NewChatIcon size={visual.newChatIconSize} />
             </Pressable> : <View style={styles.headerButton} />}
       </View>
       {screen === 'chat' && <DemoChat
+        visual={visual}
         conversation={conversation}
         onDraft={(text) => dispatch({ type: 'draft', text })}
         onSend={sendMessage}
@@ -178,6 +181,7 @@ function MainApp() {
       </View>}
     </KeyboardAvoidingView>
     <ChatSidebar
+      visual={visual}
       visible={sidebar}
       selectedId={demo.selectedId}
       selectedHostId={demo.selectedHostId}

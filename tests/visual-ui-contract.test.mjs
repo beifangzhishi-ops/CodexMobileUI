@@ -9,6 +9,7 @@ const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const state = readFileSync(new URL('../src/demo/conversations.ts', import.meta.url), 'utf8');
 const persistence = readFileSync(new URL('../src/demo/persistence.ts', import.meta.url), 'utf8');
 const config = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8'));
+const visualDefaults = JSON.parse(readFileSync(new URL('../src/ui/visual-tokens.json', import.meta.url), 'utf8'));
 const nativeBuilder = readFileSync(new URL('../scripts/build-android-windows.ps1', import.meta.url), 'utf8');
 const stableBuilder = readFileSync(new URL('../scripts/build-android-stable.ps1', import.meta.url), 'utf8');
 
@@ -81,12 +82,25 @@ test('sidebar slides from left with native animation and both new-chat actions u
   assert.match(sidebar, /useNativeDriver: true/);
   assert.match(sidebar, /animationType="none"/);
   assert.match(sidebar, /translateX: drawerProgress\.interpolate/);
-  assert.match(sidebar, /<NewChatIcon size=\{21\}/);
-  assert.match(app, /<NewChatIcon size=\{23\}/);
+  assert.match(sidebar, /<NewChatIcon size=\{visual\.newChatIconSize\}/);
+  assert.match(app, /<NewChatIcon size=\{visual\.newChatIconSize\}/);
   assert.doesNotMatch(sidebar, /animationType="fade"/);
 });
 
 test('updated Android visual edition has independent upgrade version', () => {
-  assert.equal(config.expo.version, '0.3.1');
-  assert.equal(config.expo.android.versionCode, 2);
+  assert.equal(config.expo.version, '0.3.2');
+  assert.equal(config.expo.android.versionCode, 3);
+});
+
+test('sidebar proportions and controls match visual review feedback', () => {
+  assert.equal(visualDefaults.sidebarWidthPercent, 80, 'leave a visible 20% right-side strip');
+  assert.equal(visualDefaults.sidebarTopHeight, 118, 'lower title and search together');
+  assert.equal(visualDefaults.sidebarBottomHeight, 120, 'lift the bottom fixed controls');
+  assert.equal(visualDefaults.newChatHeight, 54);
+  assert.equal(visualDefaults.newChatIconSize, 25);
+  assert.match(sidebar, /sectionHead: \{[^\n]*justifyContent: 'flex-start'/);
+  assert.match(sidebar, /topBar: \{[^\n]*paddingTop: 46/);
+  assert.match(sidebar, /bottomBar: \{[^\n]*paddingLeft: 30/);
+  assert.match(sidebar, /profile: \{ height: 55, width: 55/);
+  assert.match(sidebar, /paddingBottom: visual\.sidebarBottomHeight \+ 16/);
 });

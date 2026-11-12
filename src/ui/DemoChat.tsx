@@ -6,6 +6,7 @@ import {
 } from '@assistant-ui/react-native';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import type { DemoConversation } from '../demo/conversations';
+import type { VisualTokens } from './visual-tokens';
 
 const models = ['GPT-6.1 Sol', 'GPT-6 Astra', 'GPT-6.1 Terra', 'GPT-6 Sol', 'GPT-5.6 Sol'];
 const permissions = [
@@ -27,10 +28,11 @@ function Bubble({ role }: { role: 'user' | 'assistant' }) {
   </MessagePrimitive.Root>;
 }
 
-export function DemoChat({ conversation, onDraft, onSend }: {
+export function DemoChat({ conversation, onDraft, onSend, visual }: {
   conversation: DemoConversation;
   onDraft: (text: string) => void;
   onSend: () => void;
+  visual: VisualTokens;
 }) {
   const [selectedModel, setSelectedModel] = useState(models[0]);
   const [selectedPermission, setSelectedPermission] = useState(permissions[0].name);
@@ -166,7 +168,11 @@ export function DemoChat({ conversation, onDraft, onSend }: {
                 </Pressable>)}
           </ScrollView>
         </View>}
-        <View style={styles.composer}>
+        <View style={[styles.composer, {
+          minHeight: visual.composerMinHeight,
+          borderRadius: visual.composerRadius,
+          backgroundColor: visual.composerBackground,
+        }]}>
           {voiceMode === 'idle' ? <>
             <TextInput
               accessibilityLabel="消息输入框"
@@ -180,7 +186,7 @@ export function DemoChat({ conversation, onDraft, onSend }: {
               onChangeText={onDraft}
               editable={!conversation.running}
             />
-            <View style={styles.toolbar}>
+            <View style={[styles.toolbar, { height: visual.composerToolbarHeight }]}>
               <Pressable accessibilityLabel="添加附件（未接入）" style={styles.toolButton}
                 onPress={() => Alert.alert('附件', '视觉版暂未实现文件上传。')}>
                 <Text style={styles.toolGlyph}>＋</Text>

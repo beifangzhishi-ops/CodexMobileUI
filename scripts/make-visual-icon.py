@@ -5,10 +5,12 @@ white symbol without redrawing its geometry and provides safe-sized adaptive
 foreground art. Requires Pillow and never alters the original source file.
 """
 from pathlib import Path
+import json
 from PIL import Image, ImageDraw, ImageFilter
 
 
 root = Path(__file__).resolve().parents[1]
+visual = json.loads((root / "src" / "ui" / "visual-tokens.json").read_text(encoding="utf-8"))
 source = Image.open(root / "assets" / "icon-source.png").convert("RGB")
 dark = source.convert("L").point(lambda v: 255 if v < 70 else 0)
 black_square_bounds = dark.getbbox()
@@ -47,8 +49,8 @@ def render(path: Path, width: int, transparent: bool) -> None:
         canvas.paste(Image.new("RGB", artwork.size, "white"), (pad_x, pad_y), artwork)
     canvas.save(path, "PNG", optimize=True)
 
-render(root / "assets" / "icon.png", 610, False)
-render(root / "assets" / "adaptive-icon.png", 510, True)
+render(root / "assets" / "icon.png", visual["logoMarkWidth"], False)
+render(root / "assets" / "adaptive-icon.png", visual["logoAdaptiveMarkWidth"], True)
 
 # Expo's native Android resources are generated snapshots. Refresh their
 # launcher WebP files as well, otherwise Gradle keeps shipping the previous

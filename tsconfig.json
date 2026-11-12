@@ -3,8 +3,19 @@
   "compilerOptions": {
     "strict": true,
     "noEmit": true,
-    "types": ["react", "react-native"]
+    "types": [
+      "react",
+      "react-native"
+    ]
   },
-  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx", "expo-env.d.ts"],
-  "exclude": ["gateway", "tests", "node_modules"]
+  "include": [
+    "App.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "exclude": [
+    "gateway",
+    "tests",
+    "node_modules"
+  ]
 }

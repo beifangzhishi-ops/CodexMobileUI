@@ -1,10 +1,11 @@
 {
   "name": "codex-mobile-ui",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "dev": "expo start --dev-client --localhost",
+    "visual:editor": "node scripts/visual-editor.mjs",
     "android": "expo run:android",
     "gateway": "node dist/gateway/main.js",
     "build:gateway": "tsc -p tsconfig.gateway-build.json",
@@ -13,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:gateway": "tsc --noEmit -p tsconfig.gateway.json",
     "test": "tsc -p tsconfig.tests.json && node .tmp/testdist/tests/all.js",
-    "test:shared": "node --test --test-isolation=none tests/shared-runtime.test.js tests/shared-app-server-proxy.test.js tests/shared-launcher-contract.test.js tests/mobile-lifecycle-contract.test.mjs tests/visual-ui-contract.test.mjs",
+    "test:shared": "node --test --test-isolation=none tests/shared-runtime.test.js tests/shared-app-server-proxy.test.js tests/shared-launcher-contract.test.js tests/mobile-lifecycle-contract.test.mjs tests/visual-ui-contract.test.mjs tests/visual-editor.test.mjs",
     "check": "npm run typecheck && npm run typecheck:gateway && npm run test && npm run test:shared",
     "export:android": "expo export --platform android"
   },

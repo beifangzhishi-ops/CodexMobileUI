@@ -8,12 +8,10 @@ import {
   sortConversations, sortProjects,
   type DemoConversation, type DemoProject,
 } from '../demo/conversations';
+import type { VisualTokens } from './visual-tokens';
 
 type ItemMenu = { kind: 'project' | 'conversation' | 'recent-settings'; id: string };
 type EditDialog = { kind: 'create-project' | 'rename-project' | 'rename-conversation'; id: string };
-
-const DRAWER_TRAVEL = 430;
-const DRAWER_DURATION = 240;
 
 /** A board with a pen, rather than a standalone pencil character. */
 export function NewChatIcon({ size = 22 }: { size?: number }) {
@@ -27,6 +25,7 @@ export function NewChatIcon({ size = 22 }: { size?: number }) {
 }
 
 type Props = {
+  visual: VisualTokens;
   visible: boolean;
   selectedId: string;
   selectedHostId: string | null;
@@ -59,6 +58,7 @@ function StateIcon({ item }: { item: DemoConversation }) {
 
 export function ChatSidebar(props: Props) {
   const {
+    visual,
     visible, selectedId, selectedHostId, conversations, projects,
     includeProjectConversations, onIncludeProjectConversations, onClose, onNew,
     onChoose, onAccount, onTasks, onProjectCreate, onProjectAction,
@@ -81,14 +81,14 @@ export function ChatSidebar(props: Props) {
     if (visible) setMounted(true);
     const animation = Animated.timing(drawerProgress, {
       toValue: visible ? 1 : 0,
-      duration: DRAWER_DURATION,
+      duration: visual.sidebarSlideDurationMs,
       useNativeDriver: true,
     });
     animation.start(({ finished }) => {
       if (finished && !visible) setMounted(false);
     });
     return () => animation.stop();
-  }, [visible, drawerProgress]);
+  }, [visible, drawerProgress, visual.sidebarSlideDurationMs]);
 
   useEffect(() => { setRecentLimit(10); }, [includeProjectConversations, selectedHostId]);
   useEffect(() => { if (!visible) { setMenu(null); setSearchOpen(false); setSearch(''); } }, [visible]);
@@ -175,7 +175,8 @@ export function ChatSidebar(props: Props) {
       accessibilityRole="button"
       accessibilityLabel={item.title}
       accessibilityState={{ selected: item.id === selectedId }}
-      style={[styles.conversationRow, nested && styles.nested, item.id === selectedId && styles.selected]}
+      style={[styles.conversationRow, { height: visual.sidebarConversationRowHeight },
+        nested && styles.nested, item.id === selectedId && styles.selected]}
       onPress={() => activate('conversation', item.id, () => onChoose(item.id))}
       onLongPress={() => longPress('conversation', item.id)}
       onPressOut={() => clearConsumedPress('conversation', item.id)}
@@ -192,21 +193,26 @@ export function ChatSidebar(props: Props) {
       }]} />
       <Pressable accessibilityLabel="关闭侧边栏" style={styles.scrimTouch} onPress={onClose} />
       <Animated.View style={[styles.animatedPanel, {
+        width: `${visual.sidebarWidthPercent}%`,
+        maxWidth: visual.sidebarMaxWidth,
         transform: [{ translateX: drawerProgress.interpolate({
-          inputRange: [0, 1], outputRange: [-DRAWER_TRAVEL, 0],
+          inputRange: [0, 1], outputRange: [-Math.max(600, visual.sidebarMaxWidth), 0],
         }) }],
       }]}>
       <SafeAreaView edges={['top', 'bottom']} style={styles.panel}>
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, {
+            paddingTop: visual.sidebarTopHeight + 4,
+            paddingBottom: visual.sidebarBottomHeight + 16,
+          }]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
           <Pressable style={styles.taskRow} onPress={onTasks}>
             <Text style={styles.taskIcon}>◷</Text><Text style={styles.rowText}>定时任务</Text>
           </Pressable>
-          <View style={styles.sectionHead}>
+          <View style={[styles.sectionHead, { minHeight: visual.sidebarSectionHeight }]}>
             <Text style={styles.sectionName}>项目</Text>
             <Pressable accessibilityLabel="新建项目" style={styles.sectionAction}
               onPress={() => edit('create-project', '', '')}><Text style={styles.sectionActionText}>＋</Text></Pressable>
@@ -223,7 +229,7 @@ export function ChatSidebar(props: Props) {
                 accessibilityRole="button"
                 accessibilityLabel={project.name}
                 accessibilityState={{ expanded: opened }}
-                style={styles.projectRow}
+                style={[styles.projectRow, { minHeight: visual.sidebarProjectRowHeight }]}
                 onPress={() => activate('project', project.id, () => toggleProject(project.id))}
                 onLongPress={() => longPress('project', project.id)}
                 onPressOut={() => clearConsumedPress('project', project.id)}
@@ -251,7 +257,7 @@ export function ChatSidebar(props: Props) {
             <Text style={styles.moreText}>{showAllProjects ? '⌃ 收起项目' : '⌄ 展开全部项目'}</Text>
           </Pressable>}
 
-          <View style={[styles.sectionHead, styles.recentHead]}>
+          <View style={[styles.sectionHead, styles.recentHead, { minHeight: visual.sidebarSectionHeight }]}>
             <Text style={styles.sectionName}>最近对话</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="最近对话设置"
               style={styles.sectionAction} onPress={() => setMenu({ kind: 'recent-settings', id: '' })}>
@@ -266,7 +272,7 @@ export function ChatSidebar(props: Props) {
           </Pressable>}
         </ScrollView>
 
-        <View pointerEvents="box-none" style={styles.fixedTop}>
+        <View pointerEvents="box-none" style={[styles.fixedTop, { height: visual.sidebarTopHeight }]}>
           <View pointerEvents="none" style={styles.topFadeLight} />
           <View style={styles.topBar}>
             {searchOpen ? <>
@@ -285,12 +291,12 @@ export function ChatSidebar(props: Props) {
             </>}
           </View>
         </View>
-        <View pointerEvents="box-none" style={styles.fixedBottom}>
+        <View pointerEvents="box-none" style={[styles.fixedBottom, { height: visual.sidebarBottomHeight }]}>
           <View pointerEvents="none" style={styles.bottomFadeLight} />
           <View style={styles.bottomBar}>
             <Pressable accessibilityRole="button" accessibilityLabel="新建聊天"
-              style={styles.newChat} onPress={() => onNew()}>
-              <NewChatIcon size={21} /><Text style={styles.newText}>聊天</Text>
+              style={[styles.newChat, { height: visual.newChatHeight }]} onPress={() => onNew()}>
+              <NewChatIcon size={visual.newChatIconSize} /><Text style={styles.newText}>聊天</Text>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="电脑与全局规则"
               style={styles.profile} onPress={onAccount}>
@@ -349,14 +355,14 @@ const styles = StyleSheet.create({
   animatedPanel: { width: '84%', maxWidth: 370, flex: 1 },
   panel: { flex: 1, backgroundColor: '#212121' },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 12, paddingTop: 90, paddingBottom: 110 },
+  scrollContent: { paddingHorizontal: 12, paddingTop: 122, paddingBottom: 136 },
   taskRow: { minHeight: 49, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, gap: 12 },
   taskIcon: { color: '#dddddd', fontSize: 25 },
   rowText: { color: '#eee', fontSize: 15 },
-  sectionHead: { minHeight: 45, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 14, paddingRight: 6, marginTop: 10 },
+  sectionHead: { minHeight: 45, flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', gap: 8, paddingLeft: 14, paddingRight: 6, marginTop: 10 },
   recentHead: { marginTop: 15 },
   sectionName: { color: '#eaeaea', fontSize: 14, fontWeight: '600' },
-  sectionAction: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  sectionAction: { width: 34, height: 38, alignItems: 'center', justifyContent: 'center' },
   sectionActionText: { fontSize: 25, color: '#dedede' },
   settingsGlyph: { color: '#d0d0d0', fontSize: 21 },
   projectRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 9, borderRadius: 12, gap: 9 },
@@ -378,19 +384,19 @@ const styles = StyleSheet.create({
   moreText: { color: '#acacac', fontSize: 13 },
   fixedTop: { position: 'absolute', top: 0, left: 0, right: 0, height: 85, backgroundColor: '#212121f1' },
   topFadeLight: { backgroundColor: '#21212188', position: 'absolute', bottom: -13, height: 13, left: 0, right: 0 },
-  topBar: { flex: 1, paddingHorizontal: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  topBar: { flex: 1, paddingTop: 46, paddingHorizontal: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   appName: { color: '#fff', fontSize: 21, fontWeight: '600' },
-  topButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
-  topSymbol: { color: '#f3f3f3', fontSize: 28 },
+  topButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#303030', borderWidth: 1, borderColor: '#4a4a4a', alignItems: 'center', justifyContent: 'center' },
+  topSymbol: { color: '#f3f3f3', fontSize: 26 },
   searchField: { color: '#fff', flex: 1, fontSize: 16 },
   fixedBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 86, backgroundColor: '#212121e9' },
   bottomFadeLight: { backgroundColor: '#21212199', position: 'absolute', top: -12, height: 12, left: 0, right: 0 },
-  bottomBar: { height: '100%', paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  newChat: { height: 45, paddingHorizontal: 19, borderRadius: 25, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#236ae2' },
+  bottomBar: { height: '100%', paddingLeft: 30, paddingRight: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  newChat: { height: 54, paddingHorizontal: 24, borderRadius: 28, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#236ae2' },
   newSymbol: { color: '#fff', fontSize: 23 },
-  newText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  profile: { height: 47, width: 47, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#55565b' },
-  avatarGlyph: { fontSize: 27, color: '#f5f5f5' },
+  newText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  profile: { height: 55, width: 55, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: '#55565b' },
+  avatarGlyph: { fontSize: 31, color: '#f5f5f5' },
   modalLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 10, justifyContent: 'center', alignItems: 'center', backgroundColor: '#00000099', padding: 20 },
   contextMenu: { width: '100%', maxWidth: 290, backgroundColor: '#343434', borderRadius: 18, paddingVertical: 8 },
   menuItem: { minHeight: 48, paddingHorizontal: 19, flexDirection: 'row', alignItems: 'center', gap: 14 },
