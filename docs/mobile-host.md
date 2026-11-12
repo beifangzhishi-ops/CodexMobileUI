@@ -21,7 +21,7 @@ These paths and identities are intentionally independent of the developer's ever
 - `scripts/gateway-only.ps1 -Action status`: Gateway ownership and HTTP health.
 - `npm.cmd run build:gateway`: compile Gateway from this checkout before starting it.
 
-All launcher operations are local to their host. Use existing workspace paths for scripts; do not run binaries from another project's source. Both 6v and noha have their own private profile and login.
+All launcher operations are local to their host. Use existing workspace paths for scripts; do not run binaries from another project's source. The 6v private profile, backend and login have been verified. The noha private backend/login have not yet been provisioned and are paused by the owner.
 
 ## Safe startup and switch
 
@@ -46,4 +46,4 @@ A system policy that blocks process inspection, startup, or writing the private 
 
 ## Validation status
 
-On 6v, real backend startup, ownership, private-home creation, native read-only RPC, native Codex login and the actual public Gateway/Funnel OAuth + WSS relay have passed. Gateway retains loopback port 48888; only its .env upstream was changed to 45891. No model turn has been tested. On noha, its private backend has not yet been started because the workspace sandbox denied creation of its private home; a controlled approval is pending. The noha Gateway at 48888 remains unchanged. Neither Funnel configuration nor Desktop has been changed. Track these remaining gates separately: noha startup/login, model request, safe noha cutover, both-host ownership/stop/restart, Android installation and real conversation turns.
+On 6v, owned private App Server startup, data-home separation, native login and real model inference have passed. A private thread contains one completed model turn with both user and assistant messages; read-only native thread/read and public HTTPS 8443 Funnel OAuth/WSS thread/list and thread/read recovered that completed turn. Gateway retains loopback port 48888, forwarding only to native App Server 45891. On 2026-11-12, the ARM64 0.1.5 Release APK passed identity, embedded-JS, ABI, v2 signature and SHA-256 checks; Quark accepted it with FINISH/100% and matching size. On noha, private backend startup, login and safe Gateway cutover remain paused by the owner; existing services were not modified. Actual Android installation, on-device authentication, new chat/turn and broader UI acceptance, concurrent Desktop operation and noha deployment remain separate unverified gates.

@@ -8,15 +8,15 @@
 
 Personal Android front end for a **dedicated Codex App Server** running on a Windows host. The Android app uses native Codex thread/turn/project RPCs through a narrowly allowlisted OAuth PKCE Gateway; SQLite holds local caches and unsent drafts.
 
-## Current status (2026-11-11; development target 0.1.5 / Android versionCode 7)
+## Current status (2026-11-12; Android 0.1.5 / versionCode 7 built and delivered)
 
 - The Windows host source now implements an independently managed App Server and a private `CODEX_HOME`. It draws executables from the installed Codex Desktop runtime but **does not launch the Desktop app or share its live process**.
 - Default private data home: `%LOCALAPPDATA%\CodexMobileUI\CodexHome`. The everyday Desktop profile `%USERPROFILE%\.codex` is untouched. No existing sessions, projects, configuration or model credentials are copied.
 - Direct native backend: `ws://127.0.0.1:45891`, Gateway: `127.0.0.1:48888`, owner-authorized HTTPS Funnel: port `8443` -> Gateway. Backend is loopback-only.
-- On **6v**, the private App Server is running from the independently copied kernel and native account/read returns **account_present=true**. The owner check and /readyz pass; native initialize, thread/list and project/list report an empty independent catalog (0 conversations, 0 projects). The existing private Gateway upstream was updated to 45891 (no other .env keys changed), and Gateway started at its original loopback port 48888 with owner and health both True. The real public HTTPS 8443 Funnel passed OAuth wrong-key retry, PKCE token exchange and authenticated WSS thread/list via the independent backend. This verifies real public read-only transport, not a model turn or physical phone UI.
-- On **noha**, the live Gateway at 48888 remains healthy and was deliberately left unchanged; the current checkout does not identify it as an owned process. Its new private backend is not running: first creation of its isolated CODEX_HOME was denied by the workspace sandbox, and a narrowly scoped start approval is pending. Its Gateway cannot safely be repointed before backend startup, independent account authorization and confirmed Gateway process ownership.
-- Windows scripts, mobile cache scope and documentation are updated. **Real model turns, noha cutover, Android 0.1.5 packaging and physical-device acceptance remain pending.** Neither Codex Desktop data/processes nor the existing Funnel routes were modified.
-- Last previously verified distributed artifact: `CodexMobileUI-0.1.4-release-arm64.apk` (versionCode 6, test signing certificate; 30,016,839 bytes; SHA-256 `98B44344894AE65B2F42DB6B4114CD8B2CE4983DE04069C87BE5A38AC1353178`), uploaded to Quark with FINISH/100%. **That prior APK does not include the new isolated-client cache namespace or current host-launcher changes**.
+- On **6v**, the private App Server is running from a separately copied Codex runtime with its own logged-in profile; native account/read returns **account_present=true**. The independently owned Gateway is healthy at 48888, forwarding only to private App Server 45891. Real public HTTPS Funnel 8443 passed OAuth wrong-secret retry, PKCE token exchange, authenticated WSS, thread/list and thread/read. One real model turn was completed and its user/assistant messages were read back from the private profile and again through the authenticated public Funnel. This proves host-side inference and public readback, **not a physical Android UI test**.
+- The **6v Android 0.1.5 ARM64 Release test APK** was successfully built on 2026-11-12 after approving the fixed Android build command via CCM. Gradle completed **605 tasks (60 executed, 545 up-to-date)** in 20m 30s, including native CMake/Ninja, Metro bundle and R8 optimization. The checked artifact is `CodexMobileUI-0.1.5-release-arm64.apk` (versionCode 7, 30,016,591 bytes, SHA-256 `324B6CF43A4A9791E3C2BFB509514A218E5CE28303EC565770731FB901F84896`). Identity `dev.codexmobileui.app`, embedded JS, 20 ARM64 libraries and v2 test signature passed independent verification. CCM uploaded it to **夸克上传文件** with **FINISH / 100%** and matching size. Core 38, host 22 and build 5 tests passed, as did TypeScript checks and Gateway compilation.
+- **noha is paused by owner request.** Its Gateway, native backend and private login were not modified in this round. Noha's private backend cutover still requires its own controlled setup and validation.
+- **Remaining acceptance:** install/use the new APK on a physical Android phone, exercise login, first-send, streaming, projects, title generation, filesystem permissions, offline recovery and concurrent Desktop behavior. No Codex Desktop, AOI or Funnel configuration was modified by this build.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ Gateway OAuth is independent of native Codex model login. For model requests, au
 - A bounded ephemeral title worker and native `thread/name/set`, manual renames, host-scoped Android conversation caches and independently serialized drafts.
 - Host-specific OAuth PKCE/WSS Gateway, restricted RPCs, sanitized request diagnostics and Android diagnostic export.
 
-Not yet device-validated: the current first-send/project/move/title flows, private-home model authentication, noha mobile login, offline recovery, file upload/download/preview, Android keyboard behavior and new launch/stop lifecycle. See `docs/roadmap.md`.
+Not yet validated on a physical device: first-send/project/move/title flows, on-phone authorization of the private host, offline recovery, file upload/download/preview, Android keyboard behavior and new launch/stop lifecycle. See `docs/roadmap.md`.
 
 ## Windows operations
 

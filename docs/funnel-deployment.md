@@ -13,7 +13,7 @@ Android HTTPS/WSS :8443 -> Tailscale Funnel
 
 Only the Gateway is eligible for public Funnel routing. The native App Server is always loopback-only. Do not change unrelated existing Funnel port mappings, Windows proxy settings or any other client processes. The Gateway and native backend are separately managed; see [mobile-host.md](mobile-host.md).
 
-**Deployment state (2026-11-11):** 6v's private native backend is healthy and independently signed into Codex. The existing Gateway listens at 48888 and its private upstream now targets the dedicated native backend at 45891. A real public HTTPS Funnel 8443 test succeeded for OAuth wrong-key retry, PKCE token exchange, authenticated WSS and native thread/list. The private home currently has no existing threads, so thread/read and real turns remain unverified. On noha, the existing Gateway remains in service without any upstream change; its dedicated backend has not yet started or been authorized. No Funnel configuration was changed.
+**Deployment state (2026-11-12):** 6v's private native backend is healthy and independently signed into Codex. The existing Gateway listens at 48888 and its upstream targets only the dedicated native backend at 45891. A real public HTTPS Funnel 8443 test succeeded for OAuth wrong-key retry, PKCE token exchange, authenticated WSS and native thread/list and thread/read. A single completed native model turn was saved in the independent private home and its user/assistant messages were read back over the public authorized relay. This is host-side verification, **not physical Android app acceptance**. On noha, the owner paused private backend deployment; existing services and Funnel routing remain unchanged.
 
 ## Local private configuration
 

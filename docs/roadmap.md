@@ -17,14 +17,16 @@
 - [x] Android conversation caches receive a distinct profile namespace without deleting old local data.
 - [x] Removed defunct compatibility launcher/proxy source and replaced source contracts; documentation updated.
 - [x] 6v private App Server started from a fingerprinted runtime copy; independent data home created; owner and readiness checks passed under restricted CCM.
-- [x] 6v native initialize, project/list and thread/list: private counts 0 projects, 0 threads.
+- [x] 6v native initialize, project/list and thread/list confirmed the private profile initially started empty. A separate real model test subsequently created one native thread with a persisted user message and assistant reply.
 - [x] 6v independent Codex device login confirmed by native account/read (account_present=true) and the presence of authentication data exclusively in the private home; no Desktop credential import.
 - [x] 6v temporary isolated OAuth PKCE Gateway authenticated and forwarded thread/list to the private backend without touching the installed Gateway or Funnel.
 - [ ] noha private backend startup and both hosts' clean shutdown/restart/ownership checks.
-- [ ] noha dedicated Codex account login and successful, explicitly approved real model turns on both hosts.
+- [x] 6v independently authenticated native Codex model turn completed; private thread/read confirmed user and assistant messages, and the real HTTPS Funnel 8443 OAuth/WSS relay retrieved them with thread/list and thread/read.
+- [ ] noha dedicated Codex account login and real model turns, once owner resumes noha work.
 - [x] 6v existing Gateway private `.env` upstream switched to `ws://127.0.0.1:45891` while preserving OAuth secret, origin, callback and listener. Gateway started on original 48888 and public HTTPS Funnel 8443 verified OAuth/PKCE, authenticated WSS and native `thread/list` against private backend.
-- [ ] noha dedicated App Server startup, private account authorization and safe Gateway switch. Current noha 48888 service is alive but does not use a private Codex backend; leave it untouched until the dedicated backend is verified and process ownership is established. Initial private-home creation was sandbox-blocked; scoped approval requested.
-- [ ] New Android 0.1.5 build with private cache scope installed and tested. Previous 0.1.4 APK can retain earlier on-phone cached thread lists and is not proof of the new topology.
+- [ ] noha dedicated App Server startup, private account authorization and safe Gateway switch (paused by owner). Leave noha's existing Gateway untouched until its dedicated backend, login and process ownership have been verified.
+- [x] Android 0.1.5 / versionCode 7 ARM64 Release test APK built and verified on 6v using private Gradle user cache and a short-path native build checkout. Signed, embedded-JS bundle, ARM64 libraries, actual Android package identity, source SHA-256 and delivery to Quark FINISH/100% verified.
+- [ ] Install and test the current APK on Android; old on-device conversation cache must not be treated as independent backend history.
 - [ ] Explicitly test concurrent normal Desktop work and MobileUI, verifying data-home and writer-lock separation.
 - [ ] Native project creation / discovery UX for an initially empty isolated profile, and real end-to-end project moves.
 - [ ] Confirm file access/working directories do not unexpectedly overlap files actively edited by the desktop application.
@@ -40,8 +42,7 @@
 
 ## Android delivery and future stages
 
-- Last previously delivered test Release is 0.1.4 / versionCode 6, signed for testing and uploaded to Quark. It predates the private cache namespace and independent launcher implementation.
-- [ ] Build and verify the 0.1.5 / versionCode 7 Android Release and upload it after host-side validation; check package identity, embedded JS, ARM64 binaries and signature.
+- [x] 0.1.5 / versionCode 7 Android Release delivered to **夸克上传文件** on 2026-11-12. Verified artifact: `CodexMobileUI-0.1.5-release-arm64.apk` (30,016,591 bytes; SHA-256 `324B6CF43A4A9791E3C2BFB509514A218E5CE28303EC565770731FB901F84896`; test signing, not production signing). CCM reported FINISH/100% and matching remote size. Full suite: 38 core + 22 host + 5 build tests passed.
 - [ ] Native approval and user-question cards, model/effort/Plan controls, stop/steering and recovery.
 - [ ] A common upload/download/preview implementation for both project and projectless conversations, with path authorization and progress.
 - [ ] Search/unread, notifications, AGENTS editor, host-scoped cross-conversation references and long-thread paging.
