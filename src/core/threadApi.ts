@@ -28,7 +28,7 @@ export function parseThreadPage(result: unknown): ThreadPage {
  * A broken/looping cursor causes a failure rather than silently presenting an
  * incomplete list as authoritative. Cache is only updated after all pages.
  */
-export async function listAllThreads(client: ThreadRpcClient): Promise<CodexThread[]> {
+export async function listAllThreads(client: ThreadRpcClient, archived = false): Promise<CodexThread[]> {
   const byId = new Map<string, CodexThread>();
   const cursors = new Set<string>();
   let cursor: string | null = null;
@@ -37,7 +37,8 @@ export async function listAllThreads(client: ThreadRpcClient): Promise<CodexThre
     const result = await client.request('thread/list', {
       // When omitted, the server filters by its configured model provider.
       // Desktop history may use multiple provider IDs, even for the same host.
-      limit: 100, sortKey: 'recency_at', modelProviders: [], ...(cursor ? { cursor } : {}),
+      limit: 100, sortKey: 'recency_at', modelProviders: [],
+      ...(archived ? { archived: true } : {}), ...(cursor ? { cursor } : {}),
     });
     const page = parseThreadPage(result);
     for (const thread of page.threads) {

@@ -53,3 +53,42 @@ test('project reading, thread moving and naming allow only narrow validated para
     id: 1_000_000_000, method: 'thread/list', params: {},
   }), false).allowed, false);
 });
+
+test('visual conversation and project actions require exact validated native parameters', () => {
+  const allow = [
+    ['thread/archive', { threadId: 'thread-1' }],
+    ['thread/unarchive', { threadId: 'thread-1' }],
+    ['thread/delete', { threadId: 'thread-1' }],
+    ['project/create', { name: 'Project', roots: [], idempotencyKey: 'unique-key' }],
+    ['project/update', { projectId: 'project-1', name: 'New name' }],
+    ['project/delete', { projectId: 'project-1' }],
+    ['model/list', { limit: 100 }],
+    ['turn/start', { threadId: 'thread-1', input: [{ type: 'text', text: 'hello' }],
+      model: 'gpt-5.6-codex', effort: 'high', serviceTierForTurn: 'default' }],
+  ] as const;
+  for (const [method, params] of allow) {
+    assert.equal(permitMobileRpcFrame(JSON.stringify({ id: 7, method, params }), false).allowed,
+      true, method);
+  }
+  const deny = [
+    ['thread/delete', { threadId: 't', force: true }],
+    ['thread/delete', { threadId: '' }],
+    ['project/create', { name: 'Unsafe', roots: [{ path: 'C:\\Windows' }],
+      idempotencyKey: 'unique-key' }],
+    ['project/update', { projectId: 'p', roots: [{ path: 'C:\\Windows' }] }],
+    ['project/update', { projectId: 'p', name: 'bad\nname' }],
+    ['project/delete', {}],
+    ['model/list', { limit: 500 }],
+    ['turn/start', { threadId: 'thread-1', input: [{ type: 'text', text: 'hi' }],
+      sandboxPolicy: { type: 'dangerFullAccess' } }],
+    ['turn/start', { threadId: 'thread-1', input: [{ type: 'text', text: 'hi' }],
+      approvalPolicy: 'never' }],
+    ['turn/start', { threadId: 'thread-1', input: [{ type: 'text', text: '' }] }],
+    ['turn/start', { threadId: 'thread-1', input: [{ type: 'text', text: 'hi' }],
+      effort: 'unsupported' }],
+  ] as const;
+  for (const [method, params] of deny) {
+    assert.equal(permitMobileRpcFrame(JSON.stringify({ id: 8, method, params }), false).allowed,
+      false, method);
+  }
+});

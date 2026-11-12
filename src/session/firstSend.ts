@@ -13,6 +13,12 @@ export function createPendingSelection(
 export const pendingDraftKey = (selection: PendingSelectionRecord): string =>
   'pending:' + selection.id;
 
+export type TurnSettings = {
+  model?: string;
+  effort?: string;
+  serviceTierForTurn?: 'default' | 'fast';
+};
+
 /** The only place where an unsent selection becomes a real Codex thread. */
 export async function sendFirstTurn(
   client: ThreadRpcClient,
@@ -20,6 +26,7 @@ export async function sendFirstTurn(
   text: string,
   onThreadCreated: (thread: CodexThread) => Promise<void>,
   onStartAttempt?: () => Promise<void> | void,
+  settings: TurnSettings = {},
 ): Promise<CodexThread> {
   let cwd = selection.cwd;
   if (!cwd) {
@@ -36,6 +43,7 @@ export async function sendFirstTurn(
   await onThreadCreated(thread);
   await client.request('turn/start', {
     threadId: thread.id, input: [{ type: 'text', text }],
+    ...settings,
   });
   return thread;
 }

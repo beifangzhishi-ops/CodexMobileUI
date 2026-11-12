@@ -74,6 +74,11 @@ export async function storeHost(host: Host): Promise<void> {
   );
 }
 
+export async function removeHost(hostId: string): Promise<void> {
+  const db = await database();
+  await db.runAsync('DELETE FROM hosts WHERE id=?', hostId);
+}
+
 export async function loadThreads(hostId: string): Promise<CodexThread[]> {
   const db = await database();
   const rows = await db.getAllAsync<{ id: string; title: string | null; cwd: string | null; updated_at: number }>(

@@ -8,7 +8,7 @@ const backend = readFileSync(new URL("../scripts/mobile-app-server.ps1", import.
 const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
 const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
 const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
-const chatThread = readFileSync(new URL("../src/ui/ChatThread.tsx", import.meta.url), "utf8");
+const chatView = readFileSync(new URL("../src/ui/ChatView.tsx", import.meta.url), "utf8");
 const diagnosticsPanel = readFileSync(new URL("../src/diagnostics/DiagnosticsPanel.tsx", import.meta.url), "utf8");
 const diagnosticsExport = readFileSync(new URL("../src/diagnostics/export.ts", import.meta.url), "utf8");
 const diagnosticsJournal = readFileSync(new URL("../src/diagnostics/journal.ts", import.meta.url), "utf8");
@@ -17,10 +17,12 @@ const packageLock = JSON.parse(readFileSync(new URL("../package-lock.json", impo
 const androidStableBuild = readFileSync(new URL("../scripts/build-android-stable.ps1", import.meta.url), "utf8");
 const androidWindowsBuild = readFileSync(new URL("../scripts/build-android-windows.ps1", import.meta.url), "utf8");
 
-test("Android real-chat composer stays in a keyboard-avoiding layout", () => {
-  assert.match(chatThread, /KeyboardAvoidingView style=\{styles\.keyboardAvoiding\} behavior="padding"/);
-  assert.match(chatThread, /<KeyboardAvoidingView[\s\S]*<ThreadPrimitive\.MessagesFlatList[\s\S]*<Composer host=\{host\} session=\{session\} \/>[\s\S]*<\/KeyboardAvoidingView>/);
-  assert.match(chatThread, /keyboardAvoiding: \{ flex: 1 \}/);
+test("visual composer keeps native keyboard avoidance and real message rendering", () => {
+  assert.match(mainApp, /KeyboardAvoidingView style=\{styles\.keyboardLayout\} behavior="padding"/);
+  assert.match(chatView, /<ThreadPrimitive\.MessagesFlatList/);
+  assert.match(chatView, /<Animated\.View style=\{\[styles\.composerArea/);
+  assert.match(mainApp, /<ChatView/);
+  assert.match(mainApp, /session\.messages/);
   assert.equal(appSettings.expo.android.softwareKeyboardLayoutMode, "resize");
 });
 

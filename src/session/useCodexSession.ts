@@ -15,7 +15,7 @@ import {
   savePendingSelection, storeDraft, storeProjects, storeThreads,
   type PendingSelectionRecord,
 } from '../storage/database';
-import { createPendingSelection, pendingDraftKey, sendFirstTurn } from './firstSend';
+import { createPendingSelection, pendingDraftKey, sendFirstTurn, type TurnSettings } from './firstSend';
 import { isolatedHostCacheKey } from '../storage/profile';
 import { generateAutoTitle } from './titleGenerator';
 import { logDiagnostic } from '../diagnostics/journal';
@@ -23,10 +23,20 @@ import { classifyDiagnosticError } from '../diagnostics/safe';
 
 export type ConnectionStatus = 'offline' | 'connecting' | 'online';
 
+export type AvailableModel = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  efforts: string[];
+  defaultEffort: string | null;
+};
+
 export interface CodexSession {
   status: ConnectionStatus;
   threads: CodexThread[];
+  archivedThreads: CodexThread[];
   projects: CodexProject[];
+  models: AvailableModel[];
   activeThreadId: string | null;
   pending: PendingSelectionRecord | null;
   draftKey: string | null;
@@ -36,10 +46,16 @@ export interface CodexSession {
   error: string | null;
   chooseThread: (id: string) => Promise<void>;
   createThread: (projectId: string | null, cwd: string | null) => Promise<void>;
-  send: (text: string, expectedKey: string | null) => Promise<void>;
-  moveThread: (id: string, projectId: string) => Promise<void>;
+  send: (text: string, expectedKey: string | null, settings?: TurnSettings) => Promise<void>;
+  moveThread: (id: string, projectId: string | null) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
+  archiveThread: (id: string, archived: boolean) => Promise<void>;
+  deleteThread: (id: string) => Promise<void>;
+  createProject: (name: string) => Promise<void>;
+  renameProject: (id: string, name: string) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
+  reconnectNow: () => void;
 }
 
 const errorString = (value: unknown): string =>
@@ -49,19 +65,23 @@ const errorString = (value: unknown): string =>
 export function useCodexSession(host: Host | null): CodexSession {
   const [status, setStatus] = useState<ConnectionStatus>('offline');
   const [threads, setThreads] = useState<CodexThread[]>([]);
+  const [archivedThreads, setArchivedThreads] = useState<CodexThread[]>([]);
   const [projects, setProjects] = useState<CodexProject[]>([]);
+  const [models, setModels] = useState<AvailableModel[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingSelectionRecord | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [running, setRunning] = useState(false);
   const [lastSynced, setLastSynced] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [connectionRevision, setConnectionRevision] = useState(0);
 
   const client = useRef<CodexTransport | null>(null);
   const active = useRef<string | null>(null);
   const pendingRef = useRef<PendingSelectionRecord | null>(null);
   const generation = useRef(0);
   const reconnect = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectNow = useCallback(() => setConnectionRevision((value) => value + 1), []);
   const liveThreads = useRef(new Map<string, CodexThread>());
   const sending = useRef<Promise<void> | null>(null);
   const uncertainCreation = useRef<string | null>(null);
@@ -74,7 +94,7 @@ export function useCodexSession(host: Host | null): CodexSession {
     for (const thread of list) {
       liveThreads.current.delete(thread.id);
       const expected = moved.current.get(thread.id);
-      if (expected !== undefined && thread.projectId !== expected) {
+      if (expected !== undefined && (thread.projectId ?? '') !== expected) {
         moved.current.delete(thread.id);
         setError('会话项目归属已变化：请刷新 MobileUI 项目列表核对当前状态');
       }
@@ -179,6 +199,9 @@ export function useCodexSession(host: Host | null): CodexSession {
     await storeThreads(isolatedHostCacheKey(host.id), list);
     if (client.current !== connection) return;
     reconcileThreads(list);
+    const archived = await listAllThreads(connection, true);
+    if (client.current !== connection) return;
+    setArchivedThreads(archived);
     logDiagnostic('session.refreshFinished', { count: list.length });
     try { await fetchProjects(connection, isolatedHostCacheKey(host.id)); }
     catch (e) { if (client.current === connection) setError('项目同步失败：' + errorString(e)); }
@@ -195,7 +218,9 @@ export function useCodexSession(host: Host | null): CodexSession {
     logDiagnostic('session.hostEffectStarted', { codePresent: Boolean(currentHost) });
     setStatus('offline');
     setThreads([]);
+    setArchivedThreads([]);
     setProjects([]);
+    setModels([]);
     setMessages([]);
     setError(null);
     active.current = null;
@@ -283,6 +308,31 @@ export function useCodexSession(host: Host | null): CodexSession {
         if (!alive || client.current !== connection) return;
         logDiagnostic('session.threadsReceived', { count: list.length });
         reconcileThreads(list);
+        void listAllThreads(connection, true).then((archived) => {
+          if (alive && client.current === connection) setArchivedThreads(archived);
+        }).catch(() => undefined);
+        void connection.request('model/list', { limit: 100 }).then((raw) => {
+          if (!alive || client.current !== connection) return;
+          const rows = recordOf(raw).data;
+          if (!Array.isArray(rows)) return;
+          setModels(rows.flatMap((value) => {
+            const model = recordOf(value);
+            if (typeof model.model !== 'string' || !model.model || model.hidden === true) return [];
+            const effortOptions = Array.isArray(model.supportedReasoningEfforts)
+              ? model.supportedReasoningEfforts : [];
+            return [{
+              id: model.model,
+              name: typeof model.displayName === 'string' ? model.displayName : model.model,
+              isDefault: model.isDefault === true,
+              efforts: effortOptions.flatMap((option) => {
+                const entry = recordOf(option);
+                return typeof entry.reasoningEffort === 'string' ? [entry.reasoningEffort] : [];
+              }),
+              defaultEffort: typeof model.defaultReasoningEffort === 'string'
+                ? model.defaultReasoningEffort : null,
+            }];
+          }));
+        }).catch(() => undefined);
         void storeThreads(isolatedHostCacheKey(currentHost.id), list);
         try { await fetchProjects(connection, isolatedHostCacheKey(currentHost.id)); }
         catch (e) { if (alive) setError('项目同步失败：' + errorString(e)); }
@@ -347,7 +397,7 @@ export function useCodexSession(host: Host | null): CodexSession {
       client.current?.close();
       client.current = null;
     };
-  }, [host?.id, readThread, reconcileThreads, fetchProjects, refresh, maybeName]);
+  }, [host?.id, connectionRevision, readThread, reconcileThreads, fetchProjects, refresh, maybeName]);
 
   const createThread = useCallback(async (projectId: string | null, cwd: string | null) => {
     if (!host) throw new Error('请先选择电脑');
@@ -366,7 +416,7 @@ export function useCodexSession(host: Host | null): CodexSession {
     logDiagnostic('session.createThreadFinished');
   }, [host]);
 
-  const send = useCallback(async (text: string, expectedKey: string | null) => {
+  const send = useCallback(async (text: string, expectedKey: string | null, settings: TurnSettings = {}) => {
     logDiagnostic('session.sendPressed', { codePresent: Boolean(text.trim()) });
     if (!text.trim()) return;
     const selection = pendingRef.current;
@@ -417,7 +467,7 @@ export function useCodexSession(host: Host | null): CodexSession {
             attemptedCreate = true;
             // No automatic second thread even if the app dies in this window.
             await markPendingCreationAttempt(isolatedHostCacheKey(host.id), selection.id);
-          });
+          }, settings);
           if (created.value) {
             await enqueueTitleJob(isolatedHostCacheKey(host.id), created.value.id, created.value.cwd ?? '', text).catch(() => undefined);
             await promote(created.value, true);
@@ -426,6 +476,7 @@ export function useCodexSession(host: Host | null): CodexSession {
         } else {
           await connection.request('turn/start', {
             threadId: currentId, input: [{ type: 'text', text }],
+            ...settings,
           });
         }
         logDiagnostic('session.sendAccepted');
@@ -448,19 +499,19 @@ export function useCodexSession(host: Host | null): CodexSession {
     finally { if (sending.current === task) sending.current = null; }
   }, [host, readThread, maybeName]);
 
-  const moveThread = useCallback(async (id: string, projectId: string) => {
+  const moveThread = useCallback(async (id: string, projectId: string | null) => {
     const connection = client.current;
     if (!host || !connection?.connected) throw new Error('电脑当前离线');
-    if (!projects.some((project) => project.id === projectId)) {
+    if (projectId !== null && !projects.some((project) => project.id === projectId)) {
       throw new Error('目标项目不存在，请刷新项目列表');
     }
     const raw = recordOf(await connection.request('thread/metadata/update', {
-      threadId: id, projectId,
+      threadId: id, projectId: projectId ?? '',
     }));
-    if (recordOf(raw.thread).projectId !== projectId) {
+    if ((recordOf(raw.thread).projectId || null) !== projectId) {
       throw new Error('服务端没有确认会话归属变更');
     }
-    moved.current.set(id, projectId);
+    moved.current.set(id, projectId ?? '');
     await refresh();
   }, [host, projects, refresh]);
 
@@ -479,10 +530,64 @@ export function useCodexSession(host: Host | null): CodexSession {
     }
   }, [host, refresh]);
 
+  const archiveThread = useCallback(async (id: string, archived: boolean) => {
+    const connection = client.current;
+    if (!connection?.connected) throw new Error('电脑当前离线');
+    await connection.request(archived ? 'thread/archive' : 'thread/unarchive', { threadId: id });
+    if (archived && active.current === id) {
+      active.current = null;
+      setActiveThreadId(null);
+      setMessages([]);
+      setRunning(false);
+    }
+    await refresh();
+  }, [refresh]);
+
+  const deleteThread = useCallback(async (id: string) => {
+    const connection = client.current;
+    if (!connection?.connected) throw new Error('电脑当前离线');
+    await connection.request('thread/delete', { threadId: id });
+    liveThreads.current.delete(id);
+    if (active.current === id) {
+      active.current = null;
+      setActiveThreadId(null);
+      setMessages([]);
+      setRunning(false);
+    }
+    await refresh();
+  }, [refresh]);
+
+  const createProject = useCallback(async (name: string) => {
+    const connection = client.current;
+    if (!connection?.connected) throw new Error('电脑当前离线');
+    const clean = name.trim();
+    if (!clean || Array.from(clean).length > 80) throw new Error('请输入 1–80 字符的项目名称');
+    const key = createPendingSelection(null, null).id;
+    await connection.request('project/create', { name: clean, roots: [], idempotencyKey: key });
+    await refresh();
+  }, [refresh]);
+
+  const renameProject = useCallback(async (id: string, name: string) => {
+    const connection = client.current;
+    if (!connection?.connected) throw new Error('电脑当前离线');
+    const clean = name.trim();
+    if (!clean || Array.from(clean).length > 80) throw new Error('请输入 1–80 字符的项目名称');
+    await connection.request('project/update', { projectId: id, name: clean });
+    await refresh();
+  }, [refresh]);
+
+  const deleteProject = useCallback(async (id: string) => {
+    const connection = client.current;
+    if (!connection?.connected) throw new Error('电脑当前离线');
+    await connection.request('project/delete', { projectId: id });
+    await refresh();
+  }, [refresh]);
+
   return {
-    status, threads, projects, activeThreadId, pending,
+    status, threads, archivedThreads, projects, models, activeThreadId, pending,
     draftKey: pending ? pendingDraftKey(pending) : activeThreadId,
     messages, running, lastSynced, error, chooseThread, createThread,
-    send, moveThread, renameThread, refresh,
+    send, moveThread, renameThread, archiveThread, deleteThread,
+    createProject, renameProject, deleteProject, refresh, reconnectNow,
   };
 }
