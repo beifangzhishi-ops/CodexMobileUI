@@ -80,6 +80,8 @@ test('visual APK artifact filename cannot be confused with the OAuth mainline', 
   assert.match(stableBuilder, /CodexMobile-visual-\$appVersion-\$lower-arm64\.apk/);
   assert.match(stableBuilder, /'--legacy-peer-deps'/);
   assert.match(stableBuilder, /Join-Path \$stateDir 'npm-cache'/);
+  assert.match(stableBuilder, /Test-InstalledRootDependencies \$sourceLock/);
+  assert.match(stableBuilder, /\.package-lock\.json/);
 });
 
 test('sidebar slides from left with native animation and keeps its board-and-pen button', () => {
