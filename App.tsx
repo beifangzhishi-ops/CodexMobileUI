@@ -243,7 +243,6 @@ const styles = StyleSheet.create({
   header: { height: 56, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#000' },
   headerButton: { width: 51, height: 50, alignItems: 'center', justifyContent: 'center' },
   headerCircle: { borderRadius: 26, backgroundColor: '#303030', borderWidth: 1, borderColor: '#454545' },
-  headerSymbol: { color: '#eee', fontSize: 27 },
   heading: { flex: 1, textAlign: 'center', color: '#f5f5f5', fontSize: 17, fontWeight: '600' },
   logLabel: { color: '#eee', fontSize: 14, fontWeight: '600' },
   content: { flex: 1, backgroundColor: '#000' },
