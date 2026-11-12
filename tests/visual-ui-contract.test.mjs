@@ -38,7 +38,8 @@ test('sidebar marks only running or unread conversations on their right', () => 
 
 test('visual edition composer uses explicit Android keyboard avoidance and non-authoritative model/permission selectors', () => {
   assert.match(app, /<KeyboardAvoidingView style=\{styles\.keyboardLayout\} behavior="padding"/);
-  assert.match(chat, /setPanel\(panel === 'model'/);
+  assert.match(chat, /setPanel\(panel === 'effort'/);
+  assert.match(chat, /setPanel\('model'\)/);
   assert.match(chat, /setPanel\(panel === 'permission'/);
   assert.match(chat, /useSpeechRecognitionEvent\('result'/);
   assert.match(chat, /ExpoSpeechRecognitionModule\.requestPermissionsAsync\(\)/);
@@ -88,8 +89,8 @@ test('sidebar slides from left with native animation and both new-chat actions u
 });
 
 test('updated Android visual edition has independent upgrade version', () => {
-  assert.equal(config.expo.version, '0.3.2');
-  assert.equal(config.expo.android.versionCode, 3);
+  assert.equal(config.expo.version, '0.3.3');
+  assert.equal(config.expo.android.versionCode, 4);
 });
 
 test('sidebar proportions and controls match visual review feedback', () => {
@@ -103,4 +104,30 @@ test('sidebar proportions and controls match visual review feedback', () => {
   assert.match(sidebar, /bottomBar: \{[^\n]*paddingLeft: 30/);
   assert.match(sidebar, /profile: \{ height: 55, width: 55/);
   assert.match(sidebar, /paddingBottom: visual\.sidebarBottomHeight \+ 16/);
+});
+
+test('visual reference icons replace text glyphs and both sidebar fades are continuous SVG gradients', () => {
+  const icons = readFileSync(new URL('../src/ui/ReferenceIcons.tsx', import.meta.url), 'utf8');
+  assert.match(icons, /export function ReferenceIcon/);
+  for (const name of ['mic', 'wave', 'hand', 'shield-check', 'shield-lock', 'warning', 'folder', 'clock', 'compose', 'search', 'chevron-right', 'chevron-down']) {
+    assert.ok(icons.includes(`case '${name}'`), `Missing ${name} vector icon`);
+  }
+  assert.match(sidebar, /<LinearGradient id="sidebarHeaderFade"/);
+  assert.match(sidebar, /<LinearGradient id="sidebarFooterFade"/);
+  assert.doesNotMatch(sidebar, /topFadeLight|bottomFadeLight/);
+  assert.match(sidebar, /sidebarTopHeight - 33/);
+  assert.match(sidebar, /<ReferenceIcon name="clock"/);
+  assert.match(sidebar, /<ReferenceIcon name="folder"/);
+  assert.match(chat, /<ReferenceIcon name="mic"/);
+  assert.match(chat, /<ReferenceIcon name="wave"|\? 'arrow-up' : 'wave'/);
+});
+
+test('thinking effort is an explicitly local visual selector with model and speed submenus', () => {
+  assert.match(chat, /const thinkingLevels = \['低', '中', '高', '极高', 'Max', 'Ultra'\]/);
+  assert.match(chat, /setSelectedEffort\(item\)/);
+  assert.match(chat, /setSelectedSpeed\(item\)/);
+  assert.match(chat, /智能 · 思考强度（演示）/);
+  assert.match(chat, /setPanel\('effort'\)/);
+  assert.match(chat, /setPanel\('speed'\)/);
+  assert.doesNotMatch(chat, /turn\/start|useCodexSession/);
 });

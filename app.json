@@ -2,7 +2,7 @@
   "expo": {
     "name": "CodexMobile 视觉版",
     "slug": "codexmobile-visual",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -10,7 +10,7 @@
     "android": {
       "package": "dev.codexmobileui.visual",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 3,
+      "versionCode": 4,
       "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

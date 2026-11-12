@@ -9,6 +9,7 @@ import { demoReducer, initialDemoState } from './src/demo/conversations';
 import { loadVisualState, persistVisualState } from './src/demo/persistence';
 import { AccountScreen, FullRulesEditor } from './src/ui/AccountScreen';
 import { ChatSidebar, NewChatIcon } from './src/ui/ChatSidebar';
+import { ReferenceIcon } from './src/ui/ReferenceIcons';
 import { DemoChat } from './src/ui/DemoChat';
 import { DiagnosticsPanel } from './src/diagnostics/DiagnosticsPanel';
 import { logDiagnostic } from './src/diagnostics/journal';
@@ -113,7 +114,7 @@ function MainApp() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={screen === 'chat' ? '打开左上角菜单' : '返回'}
-          style={styles.headerButton}
+          style={[styles.headerButton, screen === 'chat' && styles.headerCircle]}
           onPress={() => {
             if (screen === 'chat') setSidebar(true);
             else if (screen === 'connect') setScreen('account');
@@ -121,7 +122,9 @@ function MainApp() {
               setScreen(rulesProjectId ? 'chat' : 'account'); setRulesProjectId(null);
             } else setScreen('chat');
           }}
-        ><Text style={styles.headerSymbol}>{screen === 'chat' ? '☰' : '‹'}</Text></Pressable>
+        >{screen === 'chat'
+          ? <ReferenceIcon name="menu" size={26} color="#fff" />
+          : <ReferenceIcon name="chevron-left" size={24} color="#fff" />}</Pressable>
         <Text style={styles.heading} numberOfLines={1}>{title}</Text>
         {screen === 'account' ? <Pressable
           accessibilityRole="button"
@@ -239,6 +242,7 @@ const styles = StyleSheet.create({
   keyboardLayout: { flex: 1 },
   header: { height: 56, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#000' },
   headerButton: { width: 51, height: 50, alignItems: 'center', justifyContent: 'center' },
+  headerCircle: { borderRadius: 26, backgroundColor: '#303030', borderWidth: 1, borderColor: '#454545' },
   headerSymbol: { color: '#eee', fontSize: 27 },
   heading: { flex: 1, textAlign: 'center', color: '#f5f5f5', fontSize: 17, fontWeight: '600' },
   logLabel: { color: '#eee', fontSize: 14, fontWeight: '600' },

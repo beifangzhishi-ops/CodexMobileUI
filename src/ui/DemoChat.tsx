@@ -7,8 +7,11 @@ import {
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import type { DemoConversation } from '../demo/conversations';
 import type { VisualTokens } from './visual-tokens';
+import { ReferenceIcon } from './ReferenceIcons';
 
 const models = ['GPT-6.1 Sol', 'GPT-6 Astra', 'GPT-6.1 Terra', 'GPT-6 Sol', 'GPT-5.6 Sol'];
+const thinkingLevels = ['低', '中', '高', '极高', 'Max', 'Ultra'] as const;
+const speeds = ['常速', '快速'] as const;
 const permissions = [
   { name: '默认权限', description: '在沙盒中运行命令' },
   { name: '自动审查', description: '自动处理可安全批准的请求' },
@@ -35,8 +38,10 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
   visual: VisualTokens;
 }) {
   const [selectedModel, setSelectedModel] = useState(models[0]);
+  const [selectedEffort, setSelectedEffort] = useState<(typeof thinkingLevels)[number]>('低');
+  const [selectedSpeed, setSelectedSpeed] = useState<(typeof speeds)[number]>('常速');
   const [selectedPermission, setSelectedPermission] = useState(permissions[0].name);
-  const [panel, setPanel] = useState<'model' | 'permission' | null>(null);
+  const [panel, setPanel] = useState<'model' | 'effort' | 'speed' | 'permission' | null>(null);
   const [voiceMode, setVoiceMode] = useState<'idle' | 'recording' | 'review'>('idle');
   const [transcript, setTranscript] = useState('');
   const [volume, setVolume] = useState(1);
@@ -151,20 +156,55 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
       <View style={styles.composerArea}>
         {panel && <View style={styles.floatingMenu}>
           <ScrollView style={styles.floatingScroll} keyboardShouldPersistTaps="handled">
-            {panel === 'model'
-              ? models.map((item) => <Pressable key={item} style={styles.modelItem}
-                  onPress={() => { setSelectedModel(item); setPanel(null); }}>
+            {panel === 'effort' && <>
+              <Text style={styles.menuHeading}>智能 · 思考强度（演示）</Text>
+              {thinkingLevels.map((item) => <Pressable key={item} style={styles.modelItem}
+                accessibilityLabel={`思考强度${item}`}
+                onPress={() => { setSelectedEffort(item); setPanel(null); }}>
+                <Text style={styles.modelText}>{item}</Text>
+                {selectedEffort === item && <ReferenceIcon name="check" size={22} />}
+              </Pressable>)}
+              <View style={styles.menuDivider} />
+              <Pressable style={styles.menuSubmenu} onPress={() => setPanel('model')}>
+                <View style={styles.menuDetail}><Text style={styles.modelText}>模型</Text>
+                  <Text style={styles.menuSubtitle}>{selectedModel}</Text></View>
+                <ReferenceIcon name="chevron-right" size={20} />
+              </Pressable>
+              <Pressable style={styles.menuSubmenu} onPress={() => setPanel('speed')}>
+                <View style={styles.menuDetail}><Text style={styles.modelText}>速度</Text>
+                  <Text style={styles.menuSubtitle}>{selectedSpeed}</Text></View>
+                <ReferenceIcon name="chevron-right" size={20} />
+              </Pressable>
+            </>}
+            {panel === 'speed' && <>
+              <Pressable style={styles.menuBack} onPress={() => setPanel('effort')}>
+                <ReferenceIcon name="chevron-left" size={16} color="#bbb" />
+                <Text style={styles.menuBackText}>返回思考强度</Text>
+              </Pressable>
+              {speeds.map((item) => <Pressable key={item} style={styles.modelItem}
+                onPress={() => { setSelectedSpeed(item); setPanel('effort'); }}>
+                <Text style={styles.modelText}>{item}</Text>
+                {selectedSpeed === item && <ReferenceIcon name="check" size={20} />}
+              </Pressable>)}
+            </>}
+            {panel === 'model' && <Pressable style={styles.menuBack} onPress={() => setPanel('effort')}>
+              <ReferenceIcon name="chevron-left" size={16} color="#bbb" />
+              <Text style={styles.menuBackText}>返回思考强度</Text>
+            </Pressable>}
+            {panel === 'model' && models.map((item) => <Pressable key={item} style={styles.modelItem}
+                  onPress={() => { setSelectedModel(item); setPanel('effort'); }}>
                   <Text style={styles.modelText}>{item}</Text>
-                  {selectedModel === item && <Text style={styles.checkmark}>✓</Text>}
-                </Pressable>)
-              : permissions.map((item, index) => <Pressable key={item.name} style={styles.permissionItem}
+                   {selectedModel === item && <ReferenceIcon name="check" size={20} />}
+                </Pressable>)}
+            {panel === 'permission' && permissions.map((item, index) => <Pressable key={item.name} style={styles.permissionItem}
                   onPress={() => { setSelectedPermission(item.name); setPanel(null); }}>
-                  <Text style={[styles.permissionIcon, index === 3 && styles.warning]}>{index === 2 ? '◫' : '◇'}</Text>
+                  <ReferenceIcon name={(['hand', 'shield-check', 'shield-lock', 'warning'] as const)[index]}
+                    size={24} color={index === 3 ? '#ce922f' : '#fff'} />
                   <View style={styles.permissionCopy}>
                     <Text style={styles.modelText}>{item.name}</Text>
                     <Text style={styles.permissionDescription}>{item.description}</Text>
                   </View>
-                  {selectedPermission === item.name && <Text style={styles.checkmark}>✓</Text>}
+                  {selectedPermission === item.name && <ReferenceIcon name="check" size={20} />}
                 </Pressable>)}
           </ScrollView>
         </View>}
@@ -189,19 +229,21 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
             <View style={[styles.toolbar, { height: visual.composerToolbarHeight }]}>
               <Pressable accessibilityLabel="添加附件（未接入）" style={styles.toolButton}
                 onPress={() => Alert.alert('附件', '视觉版暂未实现文件上传。')}>
-                <Text style={styles.toolGlyph}>＋</Text>
+                <ReferenceIcon name="plus" size={24} color="#e7e7e7" />
               </Pressable>
               <Pressable accessibilityLabel="选择审批权限" style={styles.toolButton}
                 onPress={() => setPanel(panel === 'permission' ? null : 'permission')}>
-                <Text style={styles.toolGlyph}>◇</Text>
+                <ReferenceIcon name={(['hand', 'shield-check', 'shield-lock', 'warning'] as const)[
+                  Math.max(0, permissions.findIndex((item) => item.name === selectedPermission))]}
+                  size={23} color="#e7e7e7" />
               </Pressable>
-              <Pressable accessibilityLabel="选择模型" style={styles.modelButton}
-                onPress={() => setPanel(panel === 'model' ? null : 'model')}>
-                <Text style={styles.modelLabel}>{selectedModel.replace('GPT-', '')} ▾</Text>
+              <Pressable accessibilityLabel="选择模型和思考强度" style={styles.modelButton}
+                onPress={() => setPanel(panel === 'effort' ? null : 'effort')}>
+                <Text style={styles.modelLabel}>{selectedModel.replace('GPT-', '')} {selectedEffort} ▾</Text>
               </Pressable>
               <View style={styles.spacer} />
               <Pressable accessibilityLabel="语音听写" style={styles.toolButton} onPress={() => { void startSpeech(); }}>
-                <Text style={styles.toolGlyph}>♩</Text>
+                <ReferenceIcon name="mic" size={24} color="#fff" />
               </Pressable>
               <Pressable
                 accessibilityRole="button"
@@ -211,7 +253,7 @@ export function DemoChat({ conversation, onDraft, onSend, visual }: {
                 disabled={conversation.running}
                 style={[styles.blueButton, conversation.running && styles.disabled]}>
                 {conversation.running ? <ActivityIndicator size="small" color="#fff" /> :
-                  <Text style={styles.blueGlyph}>{conversation.draft.trim() ? '↑' : '◉'}</Text>}
+                  <ReferenceIcon name={conversation.draft.trim() ? 'arrow-up' : 'wave'} size={23} color="#fff" strokeWidth={2.4} />}
               </Pressable>
             </View>
           </> : <>
@@ -267,8 +309,15 @@ const styles = StyleSheet.create({
   blueGlyph: { fontSize: 23, color: '#fff', fontWeight: '600' },
   disabled: { opacity: 0.6 },
   floatingMenu: { position: 'absolute', bottom: 119, left: 18, right: 18, zIndex: 6,
-    borderRadius: 20, backgroundColor: '#343434', overflow: 'hidden', maxHeight: 350 },
+    borderRadius: 20, backgroundColor: '#303030', overflow: 'hidden', maxHeight: 490 },
   floatingScroll: { flexGrow: 0 },
+  menuHeading: { color: '#a9a9a9', fontSize: 14, paddingHorizontal: 19, paddingTop: 20, paddingBottom: 8 },
+  menuDivider: { height: 1, backgroundColor: '#484848', marginHorizontal: 19, marginTop: 8 },
+  menuSubmenu: { minHeight: 66, paddingHorizontal: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  menuDetail: { gap: 4 },
+  menuSubtitle: { color: '#a0a0a0', fontSize: 13 },
+  menuBack: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 19 },
+  menuBackText: { fontSize: 13, color: '#d2d2d2' },
   modelItem: { minHeight: 49, paddingHorizontal: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   modelText: { color: '#f0f0f0', fontSize: 15 },
   checkmark: { color: '#9cbfff', fontSize: 20 },

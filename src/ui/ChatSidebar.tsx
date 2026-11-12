@@ -4,24 +4,20 @@ import {
   Text, TextInput, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import {
   sortConversations, sortProjects,
   type DemoConversation, type DemoProject,
 } from '../demo/conversations';
 import type { VisualTokens } from './visual-tokens';
+import { ReferenceIcon } from './ReferenceIcons';
 
 type ItemMenu = { kind: 'project' | 'conversation' | 'recent-settings'; id: string };
 type EditDialog = { kind: 'create-project' | 'rename-project' | 'rename-conversation'; id: string };
 
 /** A board with a pen, rather than a standalone pencil character. */
 export function NewChatIcon({ size = 22 }: { size?: number }) {
-  return <View accessible={false} style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
-    <View style={{ width: size * 0.71, height: size * 0.71, borderWidth: 1.8,
-      borderColor: '#fff', borderRadius: 3, marginTop: size * 0.15, marginRight: size * 0.15 }} />
-    <View style={{ position: 'absolute', top: size * 0.12, right: size * 0.05,
-      width: size * 0.62, height: 3, borderRadius: 2, backgroundColor: '#fff',
-      transform: [{ rotate: '-45deg' }] }} />
-  </View>;
+  return <ReferenceIcon name="compose" size={size} color="#fff" strokeWidth={2.1} />;
 }
 
 type Props = {
@@ -203,14 +199,16 @@ export function ChatSidebar(props: Props) {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[styles.scrollContent, {
-            paddingTop: visual.sidebarTopHeight + 4,
+            // Let the task row sit just below the heading, rather than leaving
+            // an entire second toolbar's worth of empty space at scroll top.
+            paddingTop: Math.max(54, visual.sidebarTopHeight - 33),
             paddingBottom: visual.sidebarBottomHeight + 16,
           }]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
           <Pressable style={styles.taskRow} onPress={onTasks}>
-            <Text style={styles.taskIcon}>◷</Text><Text style={styles.rowText}>定时任务</Text>
+            <ReferenceIcon name="clock" size={21} color="#c7c7c7" /><Text style={styles.rowText}>定时任务</Text>
           </Pressable>
           <View style={[styles.sectionHead, { minHeight: visual.sidebarSectionHeight }]}>
             <Text style={styles.sectionName}>项目</Text>
@@ -235,8 +233,8 @@ export function ChatSidebar(props: Props) {
                 onPressOut={() => clearConsumedPress('project', project.id)}
                 delayLongPress={450}
               >
-                <Text style={styles.disclosure}>{opened ? '⌄' : '›'}</Text>
-                <Text style={styles.folder}>▱</Text>
+                <ReferenceIcon name={opened ? 'chevron-down' : 'chevron-right'} size={19} color="#a9a9a9" />
+                <ReferenceIcon name="folder" size={24} color="#bebebe" />
                 <Text style={styles.projectName} numberOfLines={1}>{project.name}</Text>
                 {project.pinned && <Text style={styles.pin}>⌁</Text>}
               </Pressable>
@@ -254,45 +252,63 @@ export function ChatSidebar(props: Props) {
           })}
           {sortedProjects.length > 5 && !search && <Pressable
             style={styles.moreRow} onPress={() => setShowAllProjects(!showAllProjects)}>
-            <Text style={styles.moreText}>{showAllProjects ? '⌃ 收起项目' : '⌄ 展开全部项目'}</Text>
+            <ReferenceIcon name={showAllProjects ? 'chevron-right' : 'chevron-down'} size={15} color="#acacac" />
+            <Text style={styles.moreText}>{showAllProjects ? '收起项目' : '展开全部项目'}</Text>
           </Pressable>}
 
           <View style={[styles.sectionHead, styles.recentHead, { minHeight: visual.sidebarSectionHeight }]}>
             <Text style={styles.sectionName}>最近对话</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="最近对话设置"
               style={styles.sectionAction} onPress={() => setMenu({ kind: 'recent-settings', id: '' })}>
-              <Text style={styles.settingsGlyph}>⚙</Text>
+              <ReferenceIcon name="settings" size={23} color="#cfcfcf" />
             </Pressable>
           </View>
           {recentRows.map((item) => conversationRow(item, false))}
           {!allRecent.length && <Text style={styles.empty}>暂无对话</Text>}
           {recentLimit < allRecent.length && <Pressable style={styles.moreRow}
             onPress={() => setRecentLimit((n) => n + 10)}>
-            <Text style={styles.moreText}>⌄ 加载更多对话</Text>
+            <ReferenceIcon name="chevron-down" size={15} color="#acacac" />
+            <Text style={styles.moreText}>加载更多对话</Text>
           </Pressable>}
         </ScrollView>
 
         <View pointerEvents="box-none" style={[styles.fixedTop, { height: visual.sidebarTopHeight }]}>
-          <View pointerEvents="none" style={styles.topFadeLight} />
+          <Svg pointerEvents="none" width="100%" height="100%" style={StyleSheet.absoluteFill}>
+            <Defs><LinearGradient id="sidebarHeaderFade" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#212121" stopOpacity="1" />
+              <Stop offset="0.68" stopColor="#212121" stopOpacity="1" />
+              <Stop offset="1" stopColor="#212121" stopOpacity="0" />
+            </LinearGradient></Defs>
+            <Rect width="100%" height="100%" fill="url(#sidebarHeaderFade)" />
+          </Svg>
           <View style={styles.topBar}>
             {searchOpen ? <>
               <TextInput autoFocus value={search} onChangeText={setSearch}
                 placeholder="搜索项目或对话" placeholderTextColor="#9d9d9d"
                 style={styles.searchField} />
               <Pressable accessibilityLabel="关闭搜索" onPress={() => { setSearchOpen(false); setSearch(''); }}>
-                <Text style={styles.topSymbol}>×</Text>
+                <ReferenceIcon name="close" size={24} color="#f3f3f3" />
               </Pressable>
             </> : <>
               <Text style={styles.appName}>CodexMobile</Text>
               <Pressable accessibilityRole="button" accessibilityLabel="搜索"
                 onPress={() => setSearchOpen(true)} style={styles.topButton}>
-                <Text style={styles.topSymbol}>⌕</Text>
+                <ReferenceIcon name="search" size={25} color="#f3f3f3" />
               </Pressable>
             </>}
           </View>
         </View>
         <View pointerEvents="box-none" style={[styles.fixedBottom, { height: visual.sidebarBottomHeight }]}>
-          <View pointerEvents="none" style={styles.bottomFadeLight} />
+          <Svg pointerEvents="none" width="100%" height={visual.sidebarBottomHeight + 64}
+            style={{ position: 'absolute', top: -64, left: 0, right: 0 }}>
+            <Defs><LinearGradient id="sidebarFooterFade" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#212121" stopOpacity="0" />
+              <Stop offset="0.30" stopColor="#212121" stopOpacity="0.43" />
+              <Stop offset="0.65" stopColor="#212121" stopOpacity="0.91" />
+              <Stop offset="1" stopColor="#212121" stopOpacity="1" />
+            </LinearGradient></Defs>
+            <Rect width="100%" height="100%" fill="url(#sidebarFooterFade)" />
+          </Svg>
           <View style={styles.bottomBar}>
             <Pressable accessibilityRole="button" accessibilityLabel="新建聊天"
               style={[styles.newChat, { height: visual.newChatHeight }]} onPress={() => onNew()}>
@@ -300,7 +316,7 @@ export function ChatSidebar(props: Props) {
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="电脑与全局规则"
               style={styles.profile} onPress={onAccount}>
-              <Text style={styles.avatarGlyph}>◉</Text>
+              <ReferenceIcon name="account" size={33} color="#f5f5f5" strokeWidth={2.1} />
             </Pressable>
           </View>
         </View>
@@ -352,22 +368,18 @@ const styles = StyleSheet.create({
   overlay: { flex: 1, flexDirection: 'row' },
   scrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#00000099' },
   scrimTouch: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
-  animatedPanel: { width: '84%', maxWidth: 370, flex: 1 },
+  animatedPanel: { width: '80%', maxWidth: 350, flex: 1 },
   panel: { flex: 1, backgroundColor: '#212121' },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 12, paddingTop: 122, paddingBottom: 136 },
+  scrollContent: { paddingHorizontal: 12, paddingTop: 85, paddingBottom: 136 },
   taskRow: { minHeight: 49, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, gap: 12 },
-  taskIcon: { color: '#dddddd', fontSize: 25 },
   rowText: { color: '#eee', fontSize: 15 },
   sectionHead: { minHeight: 45, flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', gap: 8, paddingLeft: 14, paddingRight: 6, marginTop: 10 },
   recentHead: { marginTop: 15 },
   sectionName: { color: '#eaeaea', fontSize: 14, fontWeight: '600' },
   sectionAction: { width: 34, height: 38, alignItems: 'center', justifyContent: 'center' },
   sectionActionText: { fontSize: 25, color: '#dedede' },
-  settingsGlyph: { color: '#d0d0d0', fontSize: 21 },
   projectRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 9, borderRadius: 12, gap: 9 },
-  disclosure: { color: '#9e9e9e', fontSize: 23, width: 14, textAlign: 'center' },
-  folder: { color: '#b8b8b8', fontSize: 23, width: 22 },
   projectName: { color: '#e6e6e6', fontSize: 14, flex: 1 },
   pin: { color: '#a0a0a0' },
   children: { marginLeft: 19 },
@@ -379,24 +391,19 @@ const styles = StyleSheet.create({
   unreadDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#5897f9' },
   empty: { color: '#999', fontSize: 13, paddingHorizontal: 20, paddingVertical: 12 },
   emptyChild: { paddingLeft: 11 },
-  moreRow: { minHeight: 40, justifyContent: 'center', paddingLeft: 20 },
+  moreRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 20 },
   moreChild: { minHeight: 35, justifyContent: 'center', paddingLeft: 23 },
   moreText: { color: '#acacac', fontSize: 13 },
-  fixedTop: { position: 'absolute', top: 0, left: 0, right: 0, height: 85, backgroundColor: '#212121f1' },
-  topFadeLight: { backgroundColor: '#21212188', position: 'absolute', bottom: -13, height: 13, left: 0, right: 0 },
+  fixedTop: { position: 'absolute', top: 0, left: 0, right: 0, height: 118 },
   topBar: { flex: 1, paddingTop: 46, paddingHorizontal: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   appName: { color: '#fff', fontSize: 21, fontWeight: '600' },
   topButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#303030', borderWidth: 1, borderColor: '#4a4a4a', alignItems: 'center', justifyContent: 'center' },
-  topSymbol: { color: '#f3f3f3', fontSize: 26 },
   searchField: { color: '#fff', flex: 1, fontSize: 16 },
-  fixedBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 86, backgroundColor: '#212121e9' },
-  bottomFadeLight: { backgroundColor: '#21212199', position: 'absolute', top: -12, height: 12, left: 0, right: 0 },
+  fixedBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 120 },
   bottomBar: { height: '100%', paddingLeft: 30, paddingRight: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   newChat: { height: 54, paddingHorizontal: 24, borderRadius: 28, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#236ae2' },
-  newSymbol: { color: '#fff', fontSize: 23 },
   newText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   profile: { height: 55, width: 55, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: '#55565b' },
-  avatarGlyph: { fontSize: 31, color: '#f5f5f5' },
   modalLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 10, justifyContent: 'center', alignItems: 'center', backgroundColor: '#00000099', padding: 20 },
   contextMenu: { width: '100%', maxWidth: 290, backgroundColor: '#343434', borderRadius: 18, paddingVertical: 8 },
   menuItem: { minHeight: 48, paddingHorizontal: 19, flexDirection: 'row', alignItems: 'center', gap: 14 },
