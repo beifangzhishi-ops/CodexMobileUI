@@ -9,6 +9,7 @@ if not exist "%PROJECT%node_modules\expo\package.json" (
 )
 if exist "%ADB%" (
   "%ADB%" -s emulator-5554 reverse tcp:8081 tcp:8081
+  "%ADB%" -s emulator-5554 reverse tcp:49173 tcp:49173
 )
 "%SystemRoot%\System32\curl.exe" --silent --max-time 2 "http://127.0.0.1:49173/health" >nul 2>&1
 if errorlevel 1 (

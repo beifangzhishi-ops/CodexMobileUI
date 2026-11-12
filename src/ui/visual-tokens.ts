@@ -5,9 +5,9 @@ import savedTokens from './visual-tokens.json';
 export type VisualTokens = typeof savedTokens;
 export const visualDefaults: VisualTokens = savedTokens;
 
-// This is an emulator-only development bridge. Android Emulator's 10.0.2.2
-// maps to the host's loopback address; no public interface is exposed.
-const previewUrl = 'http://10.0.2.2:49173/api/tokens';
+// Local development only, through ADB reverse tcp:49173 tcp:49173.
+// No public network listener is required.
+const previewUrl = 'http://127.0.0.1:49173/api/tokens';
 
 const ranges: Record<keyof VisualTokens, [number, number] | 'color'> = {
   headerHeight: [44, 84],

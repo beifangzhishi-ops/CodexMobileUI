@@ -7,7 +7,7 @@
 - 已实现本地浏览器参数编辑器 `scripts/visual-editor.mjs`（`http://127.0.0.1:49173/`），具备临时预览、撤销、保存到源码、输入安全校验、手机布局缩略图和 Logo 比例预览。
 - `src/ui/visual-tokens.json` 是调参保存源；开发版模拟器通过 `src/ui/visual-tokens.ts` 读取本机预览参数，普通 App 绝不连接该开发服务。
 - 双击 `Start-Visual-Workbench.cmd` 可启动编辑器和 Metro；详细说明见 `docs/visual-workbench.md`。Storybook 开发依赖已安装，但当前调参面板是独立浏览器工具，尚未接入 Storybook UI。
-- **x86_64 Debug 开发版的安装和模拟器 Metro 连接必须单独验证**；已有 ARM64 Release APK 不具备热更新能力。Logo 修改保存后需重新生成 Android 原生图标并编译。
+- **已验证 Android x86_64 Debug 开发版**：Gradle `BUILD SUCCESSFUL`；独立构建目录下 `app-debug.apk` 为 85,639,092 字节，已通过 ADB 安装到 `emulator-5554`，从 Metro 8081 加载了聊天页与可展开侧栏。浏览器编辑器通过 `adb reverse tcp:49173 tcp:49173` 同步参数；已实测临时预览输入框高度、保存到 JSON 源码、Metro 更新和恢复原值，不需要重新编译 APK。已有 ARM64 Release APK 不具备热更新能力，Logo 资源仍需下次重新生成与编译。
 
 独立 Android 视觉测试应用。使用 Expo SDK 58、React Native 0.88 和 assistant-ui Native。
 **本应用目前只运行本地交互模拟，不连接 Codex App Server，不执行真实命令、OAuth 或定时任务。**
