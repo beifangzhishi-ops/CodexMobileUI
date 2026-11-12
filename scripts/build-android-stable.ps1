@@ -106,38 +106,6 @@ function Get-DependencyLockContent([string]$Path) {
     return $rootVersions.Replace($content, '1APP_VERSION2', 2)
 }
 
-function Test-InstalledRootDependencies([string]$Lockfile, [string]$NodeModules) {
-    # A failed npm ci may leave the new staged lockfile beside OLD modules.
-    # Verify every direct package in npm's installed-state lock and on disk.
-    $installedLock = Join-Path $NodeModules '.package-lock.json'
-    if (-not (Test-Path -LiteralPath $installedLock)) { return $false }
-    try {
-        $expected = Get-Content -LiteralPath $Lockfile -Raw | ConvertFrom-Json
-        $installed = Get-Content -LiteralPath $installedLock -Raw | ConvertFrom-Json
-        $root = $expected.packages.PSObject.Properties[''].Value
-        foreach ($kind in @('dependencies', 'devDependencies')) {
-            $direct = $root.PSObject.Properties[$kind]
-            if ($null -eq $direct -or $null -eq $direct.Value) { continue }
-            foreach ($dependency in $direct.Value.PSObject.Properties) {
-                $key = "node_modules/$($dependency.Name)"
-                $wanted = $expected.packages.PSObject.Properties[$key]
-                $actual = $installed.packages.PSObject.Properties[$key]
-                $manifest = Join-Path $NodeModules ($dependency.Name.Replace('/', '\') + '\package.json')
-                if ($null -eq $wanted -or $null -eq $actual -or
-                    [string]$wanted.Value.version -ne [string]$actual.Value.version -or
-                    -not (Test-Path -LiteralPath $manifest)) {
-                    Write-Host "Installed dependency missing/stale: $($dependency.Name)"
-                    return $false
-                }
-            }
-        }
-        return $true
-    } catch {
-        Write-Host 'Cannot verify installed dependency inventory; forcing npm ci.'
-        return $false
-    }
-}
-
 if (Test-Path -LiteralPath (Join-Path $buildRoot 'package.json')) {
     $existing = Get-Content -LiteralPath (Join-Path $buildRoot 'package.json') -Raw | ConvertFrom-Json
     if ([string]$existing.name -ne [string]$package.name) {
@@ -167,7 +135,10 @@ try {
             (Get-DependencyLockContent $stagedLock)
     }
     if ($dependenciesCurrent) {
-        $dependenciesCurrent = Test-InstalledRootDependencies $sourceLock (Join-Path $buildRoot 'node_modules')
+        # npm ci can fail after the new lockfile is mirrored, so check the
+        # installed-state lock and direct package manifests before reuse.
+        & node.exe (Join-Path $sourceRoot 'scripts\check-installed-dependencies.mjs') $sourceLock (Join-Path $buildRoot 'node_modules')
+        $dependenciesCurrent = ($LASTEXITCODE -eq 0)
     }
 
     Write-Host "Synchronizing source into $buildRoot"

@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:gateway": "tsc --noEmit -p tsconfig.gateway.json",
     "test": "tsc -p tsconfig.tests.json && node .tmp/testdist/tests/all.js",
-    "test:shared": "node --test --test-isolation=none tests/shared-runtime.test.js tests/shared-app-server-proxy.test.js tests/shared-launcher-contract.test.js tests/mobile-lifecycle-contract.test.mjs tests/visual-ui-contract.test.mjs tests/visual-editor.test.mjs",
+    "test:shared": "node --test --test-isolation=none tests/shared-runtime.test.js tests/shared-app-server-proxy.test.js tests/shared-launcher-contract.test.js tests/mobile-lifecycle-contract.test.mjs tests/visual-ui-contract.test.mjs tests/visual-editor.test.mjs tests/dependency-cache.test.mjs",
     "check": "npm run typecheck && npm run typecheck:gateway && npm run test && npm run test:shared",
     "export:android": "expo export --platform android"
   },

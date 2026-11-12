@@ -14,6 +14,7 @@ const config = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 
 const visualDefaults = JSON.parse(readFileSync(new URL('../src/ui/visual-tokens.json', import.meta.url), 'utf8'));
 const nativeBuilder = readFileSync(new URL('../scripts/build-android-windows.ps1', import.meta.url), 'utf8');
 const stableBuilder = readFileSync(new URL('../scripts/build-android-stable.ps1', import.meta.url), 'utf8');
+const dependencyChecker = readFileSync(new URL('../scripts/check-installed-dependencies.mjs', import.meta.url), 'utf8');
 
 test('sidebar has independent project, project-thread and recent-thread limits', () => {
   assert.match(sidebar, /sortedProjects\.slice\(0, 5\)/);
@@ -80,8 +81,8 @@ test('visual APK artifact filename cannot be confused with the OAuth mainline', 
   assert.match(stableBuilder, /CodexMobile-visual-\$appVersion-\$lower-arm64\.apk/);
   assert.match(stableBuilder, /'--legacy-peer-deps'/);
   assert.match(stableBuilder, /Join-Path \$stateDir 'npm-cache'/);
-  assert.match(stableBuilder, /Test-InstalledRootDependencies \$sourceLock/);
-  assert.match(stableBuilder, /\.package-lock\.json/);
+  assert.match(stableBuilder, /check-installed-dependencies\.mjs/);
+  assert.match(dependencyChecker, /\.package-lock\.json/);
 });
 
 test('sidebar slides from left with native animation and keeps its board-and-pen button', () => {
