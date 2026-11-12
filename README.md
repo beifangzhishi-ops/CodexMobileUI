@@ -15,7 +15,7 @@
 - 根据手机截图重新绘制可缩放的 SVG 轮廓图标，覆盖新对话写字板、搜索、文件夹、项目展开/收起、时钟、麦克风、蓝色语音波形、设置和权限四个级别；图标代码集中在 `src/ui/ReferenceIcons.tsx`。
 - 侧边栏滚动到顶部时，定时任务入口上移 33dp，缩短标题下方空白；顶部与底部使用连续 SVG 透明度渐变，不再用两层纯色透明遮罩拼接。
 - 输入框模型弹层新增本地“思考强度”选择：低、中、高、极高、Max、Ultra；可进一步进入模型、速度子菜单。选择结果显示在输入栏，**仅用于视觉演示，不传递给 Codex App Server**。
-- 独立包名为 `dev.codexmobileui.visual`，Android versionCode 为 6。0.3.5 源码及本地操作已通过 81 项自动测试；构建、上传和红米 K80 实机验收以实际结果为准。
+- 独立包名为 `dev.codexmobileui.visual`，Android versionCode 为 6。0.3.5 源码及本地操作已通过 81 项自动测试。ARM64 Release 构建已 `BUILD SUCCESSFUL`，JS Bundle 3,111,160 字节；产物 `.tmp/android-artifacts/CodexMobile-visual-0.3.5-release-arm64.apk` 为 37,936,661 字节，SHA-256 `FF59AD54C63BFDAEBE0FCB2950E3B73600B9B5350D5EC24EDF80C70A8B533ACF`。`aapt` 校验包名/版本成功，`apksigner` 的 V2 证书 SHA-256 与 0.3.4 一致。这是当前项目调试密钥签署的测试 Release，非生产签名；夸克上传及红米 K80 实机验收尚未核验。
 
 ## 电脑端视觉编辑环境
 
