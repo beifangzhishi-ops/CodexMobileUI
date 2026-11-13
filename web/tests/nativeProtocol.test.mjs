@@ -69,3 +69,24 @@ test('queued followups, permissions, models and goals reflect native shapes', ()
   assert.equal(parseGoal({ threadId: 't', objective: 'ship web', status: 'active' }, 't')?.objective, 'ship web');
   assert.throws(() => parseGoal({ threadId: 'different', objective: 'no', status: 'active' }, 't'), /INVALID_GOAL/);
 });
+
+test('native snapshots retain image-only and image-plus-text messages without exposing host paths', () => {
+  const snapshot = parseSnapshot({ thread: { id: 't', turns: [{
+    id: 'turn', status: 'completed', items: [
+      { id: 'img1', type: 'userMessage', content: [
+        { type: 'text', text: '请查看我附带的图片' },
+        { type: 'localImage', path: 'C:\\private\\uploads\\first.jpg' },
+      ] },
+      { id: 'img2', type: 'userMessage', content: [
+        { type: 'text', text: '这是第二张' },
+        { type: 'localImage', path: 'C:\\private\\uploads\\second.png' },
+      ] },
+    ],
+  }] } }, 't');
+  assert.equal(snapshot.messages.length, 2);
+  assert.equal(snapshot.messages[0].content, '');
+  assert.deepEqual(snapshot.messages[0].images, [{ itemId: 'img1', imageIndex: 0 }]);
+  assert.equal(snapshot.messages[1].content, '这是第二张');
+  assert.deepEqual(snapshot.messages[1].images, [{ itemId: 'img2', imageIndex: 0 }]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /private|uploads|\.jpg|\.png/);
+});

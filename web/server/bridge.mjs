@@ -5,6 +5,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
+import { createImageStore, isValidImageRpc } from './imageStore.mjs';
 
 // This file is copied unchanged to noha's host-only bundle for agent mode.
 // Neither endpoint ever listens on a non-loopback interface.
@@ -64,7 +65,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end(); return;
   }
   res.setHeader('Content-Type', allowedAssets.get(extname(target)));
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   createReadStream(target).on('error', () => { if (!res.headersSent) res.writeHead(500); res.end(); }).pipe(res);
 });
 
@@ -79,10 +80,15 @@ function validPermissions(p) {
   if (p.approvalsReviewer !== undefined && !['user','auto_review'].includes(p.approvalsReviewer)) return false;
   return p.permissions !== ':danger-full-access' || p.approvalsReviewer !== 'auto_review';
 }
-function validTextInput(input) {
-  return Array.isArray(input) && input.length === 1 && input[0]?.type === 'text' &&
+function validTextInput(input, withImages = false) {
+  return Array.isArray(input) && input.length >= 1 &&
+    input.length <= (withImages ? 5 : 1) && input[0]?.type === 'text' &&
     typeof input[0]?.text === 'string' && input[0].text.trim().length > 0 &&
-    input[0].text.length <= 12_000 && subset(input[0], ['type','text']);
+    input[0].text.length <= 12_000 && subset(input[0], ['type','text']) &&
+    (withImages || input.length === 1) &&
+    input.slice(1).every((item) => item?.type === 'localImage' &&
+      subset(item, ['type','path']) && typeof item.path === 'string' &&
+      item.path.length > 0 && item.path.length <= 400);
 }
 function validCollaborationMode(mode, model) {
   if (mode === undefined) return true;
@@ -104,6 +110,7 @@ function allowedFrame(msg) {
       typeof msg.method !== 'string' || !msg.params || typeof msg.params !== 'object' ||
       Array.isArray(msg.params) || !subset(msg, ['id', 'method', 'params'])) return false;
   const p = msg.params;
+  if (msg.method.startsWith('web/image/')) return isValidImageRpc(msg.method, p);
   if (msg.method === 'web/start') return subset(p, ['projectId','permissions','approvalsReviewer']) &&
     (p.projectId === null || validId(p.projectId)) &&
     validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => key !== 'projectId')));
@@ -124,7 +131,7 @@ function allowedFrame(msg) {
   if (msg.method === 'permissionProfile/list') return Object.keys(p).length === 0;
   if (msg.method === 'turn/start') return subset(p, ['threadId','input','model','effort',
     'permissions','approvalsReviewer','collaborationMode']) &&
-    validId(p.threadId) && validTextInput(p.input) &&
+    validId(p.threadId) && validTextInput(p.input, true) &&
     (p.model === undefined || typeof p.model === 'string' && /^[\w.-]{1,80}$/.test(p.model)) &&
     (p.effort === undefined || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(p.effort)) &&
     validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => ['permissions','approvalsReviewer'].includes(key)))) &&
@@ -168,6 +175,10 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     pendingInternal.set(id, { resolvePromise, rejectPromise, timer });
     upstream.send(JSON.stringify({ id, method, params }));
   });
+  // On a noha route the Coordinator merely forwards validated frames. The
+  // noha Agent validates uploaded-file ownership on its own local connection.
+  const images = remotePeer ? null : createImageStore(resolve('.state'), (threadId) =>
+    internalRequest('thread/read', { threadId, includeTurns: true }));
   const safeSend = (frame) => {
     if (browser.readyState === WebSocket.OPEN) browser.send(String(frame), { binary: false });
   };
@@ -240,13 +251,21 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       return;
     }
     if (!upstreamReady) { safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'HOST_OFFLINE' } })); return; }
-    if (msg.method === 'web/start' && !remotePeer) {
+    if (msg.method.startsWith('web/image/') && !remotePeer) {
+      void images.handle(msg.method, msg.params)
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_REQUEST_REJECTED' } })));
+    } else if (msg.method === 'turn/start' && !remotePeer &&
+      msg.params.input.slice(1).some((item) => !images.owns(item.path))) {
+      safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_NOT_UPLOADED_ON_THIS_CONNECTION' } }));
+    } else if (msg.method === 'web/start' && !remotePeer) {
       void prepareStart(msg).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'THREAD_START_UNCONFIRMED' } })));
     } else upstream.send(data.toString(), { binary: false });
   });
   const close = () => {
     upstreamReady = false;
+    images?.dispose();
     for (const pending of pendingInternal.values()) { clearTimeout(pending.timer); pending.rejectPromise(Error('DISCONNECTED')); }
     pendingInternal.clear();
     if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) upstream.close();

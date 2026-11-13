@@ -18,6 +18,8 @@ export type Message = {
   status?: string;
   failed?: boolean;
   summaryParts?: string[];
+  /** Image references are matched to native user item IDs, never host paths. */
+  images?: { itemId: string; imageIndex: number }[];
   activity?: { title: string; lines: string[] };
 };
 

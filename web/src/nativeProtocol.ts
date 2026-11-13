@@ -103,10 +103,18 @@ function contentText(item: Obj): string {
 
 function messageFromItem(item: Obj, turnId: string, ordinal: number, startedAtMs?: number, completedAtMs?: number): Message | null {
   if (item.type !== 'userMessage' && item.type !== 'agentMessage') return null;
-  const content = contentText(item);
-  if (!content) return null;
+  const itemId = text(item.id);
+  const images = item.type === 'userMessage' && itemId && Array.isArray(item.content)
+    ? item.content.filter((part) => obj(part).type === 'localImage')
+      .slice(0, 4).map((_, imageIndex) => ({ itemId, imageIndex })) : [];
+  const rawContent = contentText(item);
+  // Same image-only prompt as the current Android client. Do not show
+  // internal attachment instructions as visible user text.
+  const content = images.length && rawContent === '请查看我附带的图片' ? '' : rawContent;
+  if (!content && !images.length) return null;
   return { id: turnId + ':' + (text(item.id) || 'item-' + ordinal), turnId, ordinal,
     role: item.type === 'userMessage' ? 'user' : 'assistant', content,
+    ...(images.length ? { images } : {}),
     timestampMs: unixMs(item.type === 'userMessage' ? item.startedAtMs ?? startedAtMs : item.completedAtMs ?? completedAtMs ?? startedAtMs),
     complete: true };
 }

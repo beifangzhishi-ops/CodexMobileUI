@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type { ChangeEvent, ClipboardEvent as ReactClipboardEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ArrowUp, Archive, Check, ChevronDown, ChevronRight, Clock3, Copy, Ellipsis,
   FileText, Folder, GitBranch, Hand, Image, ListTodo, Menu, Monitor, RefreshCw, Square,
-  Moon, Paperclip, PanelLeftClose, PanelLeftOpen, Pin,
+  Moon, PanelLeftClose, PanelLeftOpen, Pin,
   Plus, Search, Settings, ShieldCheck, SquarePen, Sun, Target, Trash2, X,
 } from 'lucide-react';
 import { hosts } from './types';
 import type { Conversation, HostId } from './types';
 import { useLiveCodex } from './useLiveCodex';
+import { MessageImage } from './MessageImage';
 import type { PermissionMode, FollowUpMode } from './useLiveCodex';
 import { copyToClipboard } from './browserHelpers';
 
@@ -16,6 +17,7 @@ type Popup = 'host' | 'project' | 'account' | 'add' | 'permission' | 'model' | '
 type Theme = 'dark' | 'light';
 type ViewMode = 'chat' | 'tasks';
 type IconProps = { size?: number; className?: string };
+type PastedImage = { id: string; file: File; url: string };
 
 // Exact board-and-pen silhouette from the current native ReferenceIcons design.
 function ComposeIcon({ size = 21, className }: IconProps) {
@@ -56,7 +58,11 @@ export default function DesktopApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewMode>('chat');
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
+  const pastedImagesRef = useRef<PastedImage[]>([]);
+  pastedImagesRef.current = pastedImages;
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [imageViewer, setImageViewer] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const sendBusy = useRef(false);
   const [plan, setPlan] = useState(false);
@@ -127,6 +133,9 @@ export default function DesktopApp() {
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus();
   }, [searchOpen]);
+  useEffect(() => () => {
+    pastedImagesRef.current.forEach((img) => URL.revokeObjectURL(img.url));
+  }, []);
   useEffect(() => { localStorage.setItem('codex-web-follow-up', followUpMode); }, [followUpMode]);
   useEffect(() => {
     if (!isRunning) return;
@@ -141,22 +150,55 @@ export default function DesktopApp() {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
         e.preventDefault(); createNewChat();
       }
-      if (e.key === 'Escape') { setSearchOpen(false); setPopup(null); setGoalEditor(false); }
+      if (e.key === 'Escape') {
+        setSearchOpen(false); setPopup(null); setGoalEditor(false); setImageViewer(null);
+      }
     }
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
   }, []);
   function closeOnMobile() { if (mobileLayout()) setSidebarOpen(false); }
+  function clearImages() {
+    pastedImagesRef.current.forEach((img) => URL.revokeObjectURL(img.url));
+    pastedImagesRef.current = [];
+    setPastedImages([]);
+  }
+  function addImages(files: File[]) {
+    const supported = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'];
+    if (!files.length) return;
+    if (files.length + pastedImagesRef.current.length > 4) {
+      setNotice('每条消息最多粘贴或选择 4 张图片'); return;
+    }
+    if (files.some((file) => !supported.includes(file.type) || file.size > 8 * 1024 * 1024 || file.size < 8)) {
+      setNotice('图片需为 PNG、JPG、WebP、GIF 或 BMP，单张不超过 8 MB'); return;
+    }
+    const incoming = files.map((file) => ({ id: file.name + ':' + Date.now() + ':' + Math.random(),
+      file, url: URL.createObjectURL(file) }));
+    pastedImagesRef.current = [...pastedImagesRef.current, ...incoming];
+    setPastedImages(pastedImagesRef.current);
+  }
+  function handlePaste(e: ReactClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .flatMap((item) => { const file = item.getAsFile(); return file ? [file] : []; });
+    if (files.length) { e.preventDefault(); addImages(files); }
+  }
+  function removeImage(id: string) {
+    const image = pastedImagesRef.current.find((entry) => entry.id === id);
+    if (image) URL.revokeObjectURL(image.url);
+    pastedImagesRef.current = pastedImagesRef.current.filter((entry) => entry.id !== id);
+    setPastedImages(pastedImagesRef.current);
+  }
   function createNewChat(host = newHost, project: string | null = null) {
     setNewHost(host); setNewProject(project); setActiveId(null); setView('chat');
-    setAttachments([]); setPopup(null); setGoal(''); setPlan(false); closeOnMobile();
+    clearImages(); setPopup(null); setGoal(''); setPlan(false); closeOnMobile();
     window.setTimeout(() => composeRef.current?.focus(), 0);
   }
   function chooseConversation(hostId: HostId, id: string) {
     const item = conversations.find((c) => c.hostId === hostId && c.id === id);
     if (!item) return;
     setActiveId(conversationKey(hostId, id)); setNewHost(item.hostId); setNewProject(item.project);
-    setView('chat'); setPopup(null); setSearchOpen(false); setAttachments([]);
+    setView('chat'); setPopup(null); setSearchOpen(false); clearImages();
     void live.select(item.hostId, id).catch(() => setNotice('读取该电脑的实际聊天记录失败，请检查连接后刷新'));
     closeOnMobile();
   }
@@ -167,16 +209,22 @@ export default function DesktopApp() {
     if (sendBusy.current) return;
     if (live.status[currentHost] !== 'online') { setNotice('电脑尚未连接，消息仍保留在输入框'); return; }
     const value = draft.trim();
-    if (!value) {
-      if (attachments.length) setNotice('附件仅显示名称，当前无法上传');
-      return;
+    if (!value && !pastedImages.length) return;
+    if (pastedImages.length && active?.running) {
+      setNotice('当前轮次正在运行，图片请在下一轮发送'); return;
     }
-    if (attachments.length) { setNotice('真实附件上传尚未接入，请先移除附件'); return; }
+    if (pastedImages.length && active && followUpMode === 'queue') {
+      setNotice('排队模式暂不支持图片，请切换为引导并等待轮次结束'); return;
+    }
     sendBusy.current = true;
     setSubmitting(true);
+    setUploadProgress(pastedImages.length ? 0 : null);
     void live.send(currentHost, active?.id ?? null, currentProject, value, {
       model: selectedModel?.id, effort: effectiveEffort || undefined,
       permissionMode: permission, plan, goal: active ? undefined : goal, followUpMode,
+      images: pastedImages.map((entry) => entry.file),
+      onUploadProgress: (received, total) =>
+        setUploadProgress(total > 0 ? Math.round(received / total * 100) : null),
       onCreated: (threadId) => {
         setActiveId(conversationKey(currentHost, threadId));
         setDrafts((items) => ({ ...items, ['thread:' + conversationKey(currentHost, threadId)]: value }));
@@ -186,11 +234,12 @@ export default function DesktopApp() {
         setDrafts((items) => ({ ...items, [draftKey]: '',
           ['thread:' + conversationKey(currentHost, result.threadId)]: '' }));
         if (!active) setGoal('');
+        clearImages();
         setPopup(null);
         setNotice(result.queued ? '消息已进入 App Server 的真实队列'
           : result.goalFailed ? '消息已发送，但目标设置失败，请单独重试' : 'Codex 已确认接收请求');
-      }).catch(() => setNotice('服务器未确认提交结果，草稿已保留；请先刷新历史记录，不要直接重发'))
-      .finally(() => { sendBusy.current = false; setSubmitting(false); });
+      }).catch(() => setNotice('图片上传或服务器提交未确认，草稿与图片已保留；请先刷新历史，避免重复发送'))
+      .finally(() => { sendBusy.current = false; setSubmitting(false); setUploadProgress(null); });
   }
   function stopTurn() {
     if (!active?.activeTurnId || submitting) return;
@@ -231,8 +280,8 @@ export default function DesktopApp() {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   }
   function handleFiles(e: ChangeEvent<HTMLInputElement>) {
+    addImages(Array.from(e.target.files ?? []));
     e.target.value = '';
-    setNotice('网页端真实附件上传尚未接入；不会读取或发送文件');
   }
   function conversationRow(item: Conversation, nested = false) {
     return <button key={conversationKey(item.hostId,item.id)} className={'conversation-row' + (nested ? ' nested' : '') +
@@ -361,7 +410,15 @@ export default function DesktopApp() {
           {active ? <div className="message-scroller" key={active.hostId + active.id}><div className="messages-wrap">
             <div className="chat-context"><span><Monitor size={13}/>{active.hostId}</span>{active.project && <span><Folder size={13}/>{getProjectName(active.project, active.hostId)}</span>}<button className="context-refresh" onClick={() => void live.refresh(active.hostId).then(() => live.select(active.hostId, active.id)).then(() => setNotice('已从电脑同步实际会话')).catch(() => setNotice('刷新失败，请检查连接'))}>刷新真实记录</button></div>
             {active.messages.map((message) => <article key={message.id} className={'message message-' + message.role}>
-              {message.role === 'user' ? <div className="user-bubble">{message.content}</div> :
+              {message.role === 'user' ? <div className="user-bubble">
+                {message.content && <div>{message.content}</div>}
+                {message.images?.length ? <div className="message-image-grid">
+                  {message.images.map(({ itemId, imageIndex }) =>
+                    <MessageImage key={itemId + ':' + imageIndex}
+                      hostId={active.hostId} threadId={active.id} itemId={itemId}
+                      imageIndex={imageIndex} readImage={live.readImage} onOpen={setImageViewer}/>)}
+                </div> : null}
+              </div> :
                 message.kind ? <details className={'activity-card native-activity' + (message.failed ? ' activity-failed' : '')} open={message.kind === 'reasoning' ? true : undefined}>
                   <summary>{message.complete ? <Check size={16}/> : <span className="activity-spinner"/>}{message.title ?? '工具调用'}{message.failed && <span className="activity-error">失败</span>}<ChevronDown size={15}/></summary>
                   {(message.content || message.detail) && <div className="activity-native-body">
@@ -426,14 +483,27 @@ export default function DesktopApp() {
               </div>
             </div>}
             <div className="composer-box">
-              {(plan || attachments.length > 0) && <div className="attachment-list">
+              {(plan || pastedImages.length > 0) && <div className="attachment-list">
                 {plan && <button className="attachment-chip" onClick={() => setPlan(false)}><ListTodo size={14}/>计划模式 <X size={13}/></button>}
-                {attachments.map((name) => <button key={name} className="attachment-chip" onClick={() => setAttachments((items) => items.filter((v) => v !== name))}><Paperclip size={14}/><span>{name}</span><X size={13}/></button>)}
+                {pastedImages.map((entry) => <div key={entry.id} className="pasted-image">
+                  <button type="button" onClick={() => setImageViewer(entry.url)} title="查看待发送图片">
+                    <img src={entry.url} alt="待发送图片"/>
+                  </button>
+                  <button type="button" className="pasted-image-remove" aria-label="移除图片" disabled={submitting}
+                    onClick={() => removeImage(entry.id)}><X size={14}/></button>
+                </div>)}
               </div>}
-              <textarea ref={composeRef} rows={2} aria-label="消息输入框" value={draft} placeholder="询问任何问题" onChange={(e) => setDrafts((items) => ({ ...items, [draftKey]: e.target.value }))} onKeyDown={handleEnter}/>
+              <textarea ref={composeRef} rows={2} aria-label="消息输入框" value={draft}
+                placeholder="询问任何问题，也可以 Ctrl+V 粘贴图片"
+                onPaste={handlePaste}
+                onChange={(e) => setDrafts((items) => ({ ...items, [draftKey]: e.target.value }))} onKeyDown={handleEnter}/>
+              {submitting && uploadProgress !== null && <div className="image-upload-progress" role="status">
+                {uploadProgress < 100 ? '正在上传图片 · ' + uploadProgress + '%' : '图片已上传，正在等待 Codex 接收'}
+                <div className="image-upload-track"><span style={{ width: uploadProgress + '%' }}/></div>
+              </div>}
               <div className="composer-actions">
                 <div className="composer-actions-left">
-                  <input ref={fileRef} type="file" multiple hidden onChange={handleFiles}/>
+                  <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden onChange={handleFiles}/>
                   <button className="composer-tool" title="添加内容" aria-label="添加内容" onClick={() => setPopup(popup === 'add' ? null : 'add')}><Plus size={23}/></button>
                   <button className="composer-tool" title="选择权限" aria-label="选择权限" onClick={() => setPopup(popup === 'permission' ? null : 'permission')}><Hand size={22}/></button>
                   <button className="model-selector" title="模型与思考强度" onClick={() => setPopup(popup === 'model' ? null : 'model')}>{selectedModel?.name ?? '选择模型'} · {effortLabels[effectiveEffort] ?? '默认'} <ChevronDown size={14}/></button>
@@ -441,11 +511,11 @@ export default function DesktopApp() {
                 <div className="composer-actions-right">
                   <button className="composer-host-selector" onClick={() => setPopup(popup === 'project' ? null : 'project')} title="选择电脑或项目"><Monitor size={14}/>{currentHost}<ChevronDown size={13}/></button>
                   {isRunning && <button className="stop-turn" disabled={!active?.activeTurnId || submitting} onClick={stopTurn} title="中断正在运行的轮次" aria-label="中断运行"><Square size={15}/></button>}
-                  <button className="send-button" disabled={!draft.trim() || submitting || live.status[currentHost] !== 'online'} aria-label={submitting ? '发送中' : '发送消息'} title={live.status[currentHost] === 'online' ? '发送到 ' + currentHost : '电脑未连接'} onClick={send}>{submitting ? <span className="send-spinner"/> : <ArrowUp size={21}/>}</button>
+                  <button className="send-button" disabled={(!draft.trim() && !pastedImages.length) || submitting || live.status[currentHost] !== 'online'} aria-label={submitting ? '发送中' : '发送消息'} title={live.status[currentHost] === 'online' ? '发送到 ' + currentHost : '电脑未连接'} onClick={send}>{submitting ? <span className="send-spinner"/> : <ArrowUp size={21}/>}</button>
                 </div>
               </div>
               {popup === 'add' && <div className="popover composer-popover add-popover"><span className="popover-heading">添加到消息</span>
-                <button onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片 / 文件</button>
+                <button onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片 / 图片</button>
                 <button onClick={() => { setPlan(!plan); setPopup(null); }}><ListTodo size={18}/>{plan ? '退出计划模式' : '计划模式'}</button>
                 <button onClick={() => { setGoalDraft(displayedGoal); setGoalEditor(true); setPopup(null); }}><Target size={18}/>目标</button>
               </div>}
@@ -489,6 +559,12 @@ export default function DesktopApp() {
           </button>)}
         </div><div className="search-shortcut">Ctrl / ⌘ + K 搜索 <span>ESC 关闭</span></div>
       </div>
+    </div>}
+
+    {imageViewer && <div className="image-viewer" role="dialog" aria-modal="true" aria-label="查看图片原图"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) setImageViewer(null); }}>
+      <button className="image-viewer-close" onClick={() => setImageViewer(null)} aria-label="关闭图片查看"><X size={22}/></button>
+      <img src={imageViewer} alt="原图"/>
     </div>}
 
     {live.approval && <div className="approval-overlay"><div className="approval-dialog">
