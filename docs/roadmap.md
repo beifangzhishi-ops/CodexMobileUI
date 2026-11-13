@@ -39,6 +39,8 @@
 - [x] Gateway OAuth PKCE, authenticated WSS and restricted native RPC relay.
 - [x] Prior double-host native API tests used disposable project-assigned threads, plus filesystem creation.
 - [x] Android visual-first interface integrated as a single native source: animated sidebar, nested projects, session menu, model/effort selector, composer animation, icon assets and local visual editor.
+- [x] Sidebar native pull-to-refresh wired to authenticated thread/project synchronization, including archived threads and active conversation readback. Offline swipes request reconnection; concurrent gestures are deduplicated.
+- [ ] Verify sidebar pull distance, spinner placement, offline reconnection and refreshed conversation/project ordering on a physical Android device.
 - [x] Connected UI actions to host-scoped OAuth/session state and native thread/project APIs for rename, pin (local), archive/unarchive, delete, move, first send and project creation; server model/effort choices are requested from native model/list, while Full Access cannot be set from a mobile UI control.
 - [x] Removed the separate local simulated conversation data model and fake replies; visually matched native screen components now render real message IDs and content.
 - [x] Updated Android app identity to 0.1.6 / versionCode 8 while preserving `dev.codexmobileui.app`, `codexmobileui` OAuth scheme, the previous signing key and independent backend/Gateway. Native Expo prebuild completed on 6v.

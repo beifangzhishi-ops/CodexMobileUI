@@ -8,7 +8,9 @@
 
 Personal Android front end for a **dedicated Codex App Server** running on a Windows host. The Android app uses native Codex thread/turn/project RPCs through a narrowly allowlisted OAuth PKCE Gateway; SQLite holds local caches and unsent drafts.
 
-## Current status (2026-11-13; Android 0.1.6 / versionCode 8 native UI integration)
+## Current status (2026-11-13; Android 0.1.7 source / 0.1.6 verified release)
+
+- **0.1.7 sidebar pull-to-refresh:** The native sidebar `ScrollView` now exposes Android/iOS `RefreshControl`, using a dark circular activity indicator below the fixed header. A completed pull calls the existing authenticated `session.refresh()` to reload native threads, archived threads, active messages and projects; offline pull requests reconnection instead of pretending to fetch data. The gesture is guarded against duplicate in-flight refreshes. On-device swipe and indicator placement still require physical verification.
 
 - The Windows host source now implements an independently managed App Server and a private `CODEX_HOME`. It draws executables from the installed Codex Desktop runtime but **does not launch the Desktop app or share its live process**.
 - Default private data home: `%LOCALAPPDATA%\CodexMobileUI\CodexHome`. The everyday Desktop profile `%USERPROFILE%\.codex` is untouched. No existing sessions, projects, configuration or model credentials are copied.

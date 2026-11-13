@@ -206,6 +206,22 @@ function MainApp() {
     } else prepare(project?.roots[0] ?? null);
   };
 
+  const refreshSidebar = async () => {
+    if (!currentHost || !authorized) {
+      Alert.alert('尚未连接', '请先连接并授权电脑端 Gateway');
+      return;
+    }
+    if (session.status !== 'online') {
+      if (session.status === 'offline') session.reconnectNow();
+      return;
+    }
+    try {
+      await session.refresh();
+    } catch (error) {
+      reportError('下拉刷新失败', error);
+    }
+  };
+
   const updateDraft = (text: string) => {
     if (!hostId || !selectedId || draftReadyFor !== workingKey) return;
     setDraft(text);
@@ -421,7 +437,8 @@ function MainApp() {
       includeProjectConversations={preferences.includeProjectConversations}
       onIncludeProjectConversations={(value) => setPreferences((old) =>
         ({ ...old, includeProjectConversations: value }))}
-      onClose={() => setSidebar(false)} onNew={newConversation} onChoose={chooseConversation}
+      onClose={() => setSidebar(false)} onRefresh={refreshSidebar}
+      onNew={newConversation} onChoose={chooseConversation}
       onAccount={() => { setSidebar(false); setScreen('account'); }}
       onTasks={() => { setSidebar(false); setScreen('tasks'); }}
       onProjectCreate={(name) => void session.createProject(name)

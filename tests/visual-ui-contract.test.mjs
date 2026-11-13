@@ -26,6 +26,12 @@ test('visual baseline controls, drawer animation and design tokens are retained'
   assert.match(sidebar, /sidebarSlideDurationMs/);
   assert.match(sidebar, /sortConversations\(conversations\)/);
   assert.match(sidebar, /sortProjects\(projects\)/);
+  assert.match(sidebar, /<RefreshControl/);
+  assert.match(sidebar, /refreshing=\{refreshing\}/);
+  assert.match(sidebar, /onRefresh=\{\(\) => \{ void handleRefresh\(\); \}\}/);
+  assert.match(app, /onRefresh=\{refreshSidebar\}/);
+  assert.match(app, /await session\.refresh\(\)/);
+  assert.match(app, /session\.reconnectNow\(\)/);
   assert.match(sidebar, /onLongPress/);
   assert.match(chat, /ChatSetupPicker/);
   assert.match(picker, /onChooseHost/);

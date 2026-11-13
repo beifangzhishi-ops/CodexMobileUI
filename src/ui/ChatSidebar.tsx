@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Animated, Easing, LayoutAnimation, Modal, Pressable,
-  ScrollView, StyleSheet, Text, TextInput, View,
+  RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
@@ -30,6 +30,7 @@ type Props = {
   includeProjectConversations: boolean;
   onIncludeProjectConversations: (value: boolean) => void;
   onClose: () => void;
+  onRefresh: () => Promise<void>;
   onNew: (projectId?: string) => void;
   onChoose: (id: string) => void;
   onAccount: () => void;
@@ -82,7 +83,7 @@ export function ChatSidebar(props: Props) {
   const {
     visual,
     visible, selectedId, selectedHostId, conversations, projects,
-    includeProjectConversations, onIncludeProjectConversations, onClose, onNew,
+    includeProjectConversations, onIncludeProjectConversations, onClose, onRefresh, onNew,
     onChoose, onAccount, onTasks, onProjectCreate, onProjectAction,
     onProjectRules, onConversationAction,
   } = props;
@@ -96,6 +97,8 @@ export function ChatSidebar(props: Props) {
   const [dialogText, setDialogText] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlight = useRef(false);
   const [mounted, setMounted] = useState(visible);
   const [modalReady, setModalReady] = useState(false);
   const drawerProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
@@ -131,6 +134,18 @@ export function ChatSidebar(props: Props) {
 
   useEffect(() => { setRecentLimit(10); }, [includeProjectConversations, selectedHostId]);
   useEffect(() => { if (!visible) { setMenu(null); setSearchOpen(false); setSearch(''); } }, [visible]);
+
+  const handleRefresh = async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      refreshInFlight.current = false;
+      setRefreshing(false);
+    }
+  };
 
   const sortedProjects = useMemo(() =>
     sortProjects(projects).filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase())),
@@ -242,6 +257,14 @@ export function ChatSidebar(props: Props) {
       <SafeAreaView edges={['top', 'bottom']} style={styles.panel}>
         <ScrollView
           style={styles.scroll}
+          refreshControl={<RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { void handleRefresh(); }}
+            colors={['#e2e2e2']}
+            tintColor="#e2e2e2"
+            progressBackgroundColor="#353535"
+            progressViewOffset={visual.sidebarTopHeight + 56}
+          />}
           contentContainerStyle={[styles.scrollContent, {
             // Let the task row sit just below the heading, rather than leaving
             // an entire second toolbar's worth of empty space at scroll top.
