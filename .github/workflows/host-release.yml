@@ -17,7 +17,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci --ignore-scripts
+      # The mobile project has upstream Storybook/React-Native peer mismatches;
+      # the host bundle uses only TS + ws. Do not mutate the Android lockfile.
+      - run: npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
       - run: npm run typecheck:gateway
       - run: npm run build:gateway
       - name: Create host-only bundle and checksums

@@ -86,11 +86,16 @@ function Test-Manifest([string]$directory) {
 
 function Get-ReleaseTag {
   if ($Tag) { Assert-RelativeRelease $Tag; return $Tag }
-  $found = & gh.exe release view --repo $Repository --json tagName --jq .tagName 2>$null
-  if ($LASTEXITCODE -ne 0 -or -not $found) {
-    throw 'No published GitHub Host release found. Commit stable 6v source and publish a host-v* tag first.'
+  # A future Android/APK release must not be mistaken for a Host-only update.
+  $json = & gh.exe release list --repo $Repository --limit 100 --json tagName,isDraft,isPrerelease,publishedAt
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot query GitHub Releases with the current account.' }
+  $candidates = @($json | ConvertFrom-Json | Where-Object {
+    $_.tagName -match '^host-v[0-9A-Za-z._-]+$' -and -not $_.isDraft -and -not $_.isPrerelease
+  } | Sort-Object publishedAt -Descending)
+  if ($candidates.Count -eq 0) {
+    throw 'No published Host-only release yet. Stable 6v source must be committed and tagged first.'
   }
-  $value = ([string]$found).Trim()
+  $value = [string]$candidates[0].tagName
   Assert-RelativeRelease $value
   return $value
 }
@@ -154,6 +159,7 @@ function Invoke-Host([string]$directory, [string]$operation) {
                             'Gateway owned by this directory: True', 'Gateway health: True')) {
       if (-not $joined.Contains($expected)) { throw "Host status incomplete: $expected" }
     }
+    Write-Output 'Host process ownership and both health probes: PASS'
   }
 }
 
