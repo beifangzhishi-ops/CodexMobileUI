@@ -16,6 +16,7 @@ import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
 import { defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences } from './sidebarPreferences';
 import { sidebarPullDistance, SIDEBAR_PULL_THRESHOLD } from './sidebarPullRefresh';
 import { useLiveCodex } from './useLiveCodex';
+import { useThreadSearch } from './useThreadSearch';
 import { MessageImage } from './MessageImage';
 import { ToolImage } from './ToolImage';
 import { findToolLogo, parseToolLogos, toolDisplayName, type ToolLogo } from '../../shared/toolVisuals';
@@ -525,14 +526,14 @@ export default function DesktopApp() {
     pinnedIds.includes(conversationKey(item.hostId, item.id)) && !item.archived &&
     (hostFilter === 'all' || item.hostId === hostFilter))
     .sort((a, b) => b.updatedAt - a.updatedAt), [sidebarConversations, pinnedIds, hostFilter]);
-  const searchResults = useMemo(() => {
-    if (!searchOpen) return [];
-    const term = query.trim().toLocaleLowerCase();
-    return [...conversations].filter((item) =>
-      !term || item.title.toLocaleLowerCase().includes(term) || item.hostId.includes(term) ||
-      item.messages.some((message) => message.content.toLocaleLowerCase().includes(term))
-    ).sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [searchOpen, query, conversations]);
+  const searchTerm = query.trim();
+  const threadSearch = useThreadSearch(searchOpen, searchTerm, live.status, live.request);
+  const disconnectedSearchHosts = hosts.filter(({ id }) => live.status[id] !== 'online');
+  const searchConnected = disconnectedSearchHosts.length < hosts.length;
+  const searchResults = !searchOpen || !searchConnected ? [] : searchTerm ? threadSearch.hits : conversations
+    .filter((item) => !item.archived && live.status[item.hostId] === 'online')
+    .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 25)
+    .map((conversation) => ({ conversation, snippet: undefined }));
   // Compute completed-turn actions once per message snapshot, rather than
   // scanning the entire history for each item on every streaming delta.
   const turnActions = useMemo(() => {
@@ -831,8 +832,8 @@ export default function DesktopApp() {
     clearImages(); setPopup(null); setGoal(''); setPlan(false); closeOnMobile();
     window.setTimeout(() => composeRef.current?.focus(), 0);
   }
-  function chooseConversation(hostId: HostId, id: string) {
-    const item = conversations.find((c) => c.hostId === hostId && c.id === id);
+  function chooseConversation(hostId: HostId, id: string, searchHit?: Conversation) {
+    const item = conversations.find((c) => c.hostId === hostId && c.id === id) ?? searchHit;
     if (!item) return;
     setActiveId(conversationKey(hostId, id)); setNewHost(item.hostId); setNewProject(item.project);
     setUnreadThreads((old) => {
@@ -843,7 +844,7 @@ export default function DesktopApp() {
     });
     setView('chat'); setPopup(null); setSearchOpen(false); setRenaming(false); clearImages();
     setChatFind((old) => old?.key === conversationKey(hostId, id) ? old : null);
-    void live.select(item.hostId, id).then((messages) => {
+    void live.select(item.hostId, id, searchHit).then((messages) => {
       setOptimisticSubmissions((old) => reconcileOptimisticAfterRead(
         old, 'thread:' + conversationKey(item.hostId, id), messages));
     }).catch(() => setNotice('读取该电脑的实际聊天记录失败，请检查连接后刷新'));
@@ -1885,13 +1886,22 @@ export default function DesktopApp() {
       onClose={() => setProjectCreateOpen(false)}/>}
     {searchOpen && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setSearchOpen(false); }}>
       <div role="dialog" aria-modal="true" aria-label="搜索所有聊天" className="search-dialog">
-        <div className="search-input-row"><Search size={20}/><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索所有电脑的项目和聊天…"/><button aria-label="关闭搜索" onClick={() => setSearchOpen(false)}><X size={20}/></button></div>
-        <div className="search-results"><span className="popover-heading">{query.trim() ? '搜索结果 · ' + searchResults.length : '最近对话'}</span>
-          {searchResults.length === 0 && <p className="search-empty">没有匹配的对话</p>}
-          {searchResults.map((item) => <button className="search-result"
-            key={conversationKey(item.hostId,item.id)} onClick={() => chooseConversation(item.hostId,item.id)}>
-            <FileText size={19}/><span><strong>{item.title}</strong><small>{item.hostId} · {getProjectName(item.project, item.hostId) ?? '无项目'} · {dateLabel(item.updatedAt)}</small></span><ChevronRight size={17}/>
+        <div className="search-input-row"><Search size={20}/><input ref={searchRef} value={query} maxLength={200} onChange={(e) => setQuery(e.target.value)} placeholder="搜索所有电脑的聊天标题和正文…"/><button aria-label="关闭搜索" onClick={() => setSearchOpen(false)}><X size={20}/></button></div>
+        <div className="search-results">
+          {!searchConnected && <p className="search-empty" role="status">服务器未连接</p>}
+          {searchConnected && <>
+            <span className="popover-heading">{searchTerm ? '搜索结果 · ' + searchResults.length : '最近对话'}</span>
+            {disconnectedSearchHosts.length > 0 && <span className="popover-heading" role="status">{disconnectedSearchHosts.map(({ displayName }) => displayName).join('、')} 服务器未连接</span>}
+            {threadSearch.pending && <p className="search-empty" role="status">搜索中</p>}
+            {!threadSearch.pending && threadSearch.error && <p className="search-empty" role="status">{threadSearch.error}</p>}
+            {!threadSearch.pending && !threadSearch.error && searchResults.length === 0 &&
+              <p className="search-empty" role="status">{searchTerm ? '没有匹配的对话' : '没有最近对话'}</p>}
+          </>}
+          {searchResults.map(({ conversation: item, snippet }) => <button className="search-result"
+            key={conversationKey(item.hostId,item.id)} onClick={() => chooseConversation(item.hostId, item.id, item)}>
+            <FileText size={19}/><span><strong>{item.title}</strong>{snippet && <small>{snippet}</small>}<small>{item.hostId} · {getProjectName(item.project, item.hostId) ?? '无项目'} · {dateLabel(item.updatedAt)}</small></span><ChevronRight size={17}/>
           </button>)}
+          {threadSearch.hasMore && <button className="search-result" disabled={threadSearch.pending} onClick={threadSearch.loadMore}>加载更多</button>}
         </div><div className="search-shortcut">Ctrl / ⌘ + K 搜索 <span>ESC 关闭</span></div>
       </div>
     </div>}

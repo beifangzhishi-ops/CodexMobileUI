@@ -218,7 +218,11 @@ export function useLiveCodex() {
     return goal;
   }, [request]);
 
-  const select = useCallback(async (hostId: HostId, threadId: string) => {
+  const select = useCallback(async (hostId: HostId, threadId: string, searchHit?: Conversation) => {
+    if (searchHit?.id === threadId && searchHit.hostId === hostId) {
+      setConversations((all) => all.some((item) => item.hostId === hostId && item.id === threadId)
+        ? all : [...all, searchHit]);
+    }
     active.current = { hostId, threadId };
     const messages = await readThread(hostId, threadId);
     const key = threadKey(hostId, threadId);

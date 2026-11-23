@@ -361,6 +361,18 @@ function allowedFrame(msg) {
   if (msg.method === 'project/list') return subset(p, ['limit', 'cursor']) &&
     (p.limit === undefined || Number.isInteger(p.limit) && p.limit >= 1 && p.limit <= 100) &&
     (p.cursor === undefined || validId(p.cursor));
+  if (msg.method === 'thread/search' || (msg.method === 'thread/list' && p.searchTerm !== undefined)) {
+    const keys = ['searchTerm', 'limit', 'cursor', 'archived', 'sortKey', 'sourceKinds'];
+    const titlesOnly = msg.method === 'thread/list';
+    return subset(p, titlesOnly ? [...keys, 'modelProviders', 'useStateDbOnly'] : keys) &&
+      typeof p.searchTerm === 'string' && p.searchTerm.trim().length > 0 &&
+      p.searchTerm.length <= 200 && !/[\x00-\x1f\x7f]/.test(p.searchTerm) &&
+      Number.isInteger(p.limit) && p.limit >= 1 && p.limit <= 50 &&
+      p.archived === false && p.sortKey === 'recency_at' &&
+      Array.isArray(p.sourceKinds) && p.sourceKinds.length === 0 &&
+      (p.cursor === undefined || validId(p.cursor)) &&
+      (!titlesOnly || p.useStateDbOnly === true && Array.isArray(p.modelProviders) && p.modelProviders.length === 0);
+  }
   if (msg.method === 'thread/list') return subset(p, ['limit', 'cursor', 'archived', 'sortKey', 'modelProviders']) &&
     p.limit === 100 && p.sortKey === 'recency_at' && Array.isArray(p.modelProviders) && p.modelProviders.length === 0 &&
     (p.archived === undefined || p.archived === true) && (p.cursor === undefined || validId(p.cursor));

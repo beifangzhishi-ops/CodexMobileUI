@@ -10,6 +10,14 @@ Conversation history displays native turn failures, including errors recovered
 from `thread/read`. During a running turn, consecutive reconnect notices update
 one row. The terminal turn event replaces or clears that row.
 
+## Conversation search
+
+The shared sidebar searches online 6v and noha App Servers over the private
+Web Coordinator. It uses native `thread/search` for content and native
+`thread/list` with a search term for titles. Results can open conversations
+beyond the current sidebar, and the search dialog identifies disconnected
+hosts. With neither host connected it displays `服务器未连接`.
+
 ## Conversation titles
 
 The shared chat UI shows up to 60 characters of first-message preview while
