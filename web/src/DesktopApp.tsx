@@ -276,7 +276,6 @@ export default function DesktopApp() {
   const [chosenMentions, setChosenMentions] = useState<Record<string, Mention[]>>({});
   const searchRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
   const documentRef = useRef<HTMLInputElement>(null);
   const active = conversations.find((item) => conversationKey(item.hostId, item.id) === activeId) ?? null;
   const browserNotifications = useBrowserNotifications(view === 'chat' && active
@@ -1609,6 +1608,12 @@ export default function DesktopApp() {
                       imageIndex={imageIndex} readImage={live.readImage} onOpen={setImageViewer}/>)}
                 </div> : null}
               </div> :
+                message.kind === 'turnError' ? <div className={'turn-error' + (message.failed ? ' activity-failed' : '')}
+                  role={message.failed ? 'alert' : 'status'}>
+                  <span>{message.failed ? '本轮失败' : '正在重连'}</span>
+                  {message.content !== '正在重连' && <p>{message.content}</p>}
+                  {message.detail && <details><summary>错误详情</summary><pre>{message.detail}</pre></details>}
+                </div> :
                 message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') + (message.failed ? ' activity-failed' : '')} open={message.kind === 'reasoning' ? true : undefined}>
                   <summary>{message.complete ? <Check size={16}/> : <span className="activity-spinner"/>}
                     {isTool ? <>
@@ -1770,8 +1775,6 @@ export default function DesktopApp() {
               <div className="composer-actions">
                 <div className="composer-actions-left">
                   <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden onChange={handleFiles}/>
-                  <input ref={cameraRef} type="file" accept="image/*" capture="environment"
-                    hidden onChange={handleFiles}/>
                   <input ref={documentRef} type="file" accept=".txt,.md,.json,.jsonl,.csv,.log,.yaml,.yml,.xml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sh,.ps1,.java,.kt,.rs,.go,.c,.cpp,.h,.pdf,.docx,.xlsx,.pptx,.zip"
                     multiple hidden onChange={handleDocuments}/>
                   <button data-popup-trigger className="composer-tool" title="添加内容" aria-label="添加内容" onClick={() => setPopup(popup === 'add' ? null : 'add')}><Plus size={23}/></button>
@@ -1813,8 +1816,7 @@ export default function DesktopApp() {
                 </div>
               </div>
               {popup === 'add' && <div className="popover composer-popover add-popover"><span className="popover-heading">添加到消息</span>
-                <button onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片 / 图片</button>
-                <button className="mobile-camera-action" onClick={() => { cameraRef.current?.click(); setPopup(null); }}><Image size={18}/>拍照</button>
+                <button onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片</button>
                 <button onClick={() => { documentRef.current?.click(); setPopup(null); }}><FileText size={18}/>上传文件</button>
                 <button onClick={() => { setPlan(!plan); setPopup(null); }}><ListTodo size={18}/>{plan ? '退出计划模式' : '计划模式'}</button>
                 <button onClick={() => { setGoalDraft(displayedGoal); setGoalEditor(true); setPopup(null); }}><Target size={18}/>目标</button>
@@ -1844,7 +1846,9 @@ export default function DesktopApp() {
               {popup === 'project' && <div className="popover composer-popover target-popover"><span className="popover-heading">新聊天目标电脑 / 项目</span>
                 {hosts.map((host) => <button key={host.id} onClick={() => { createNewChat(host.id); }}><Monitor size={17}/>{host.id}{!active && newHost === host.id && <Check className="check-icon" size={16}/>}</button>)}
                 <div className="popover-divider"/>{projects.filter((p) => p.hostId === currentHost).map((p) =>
-                  <button key={p.id} onClick={() => createNewChat(p.hostId, p.id)}><Folder size={16}/>{p.name}</button>)}
+                  <button key={p.id} aria-pressed={!active && newProject === p.id} onClick={() => createNewChat(p.hostId, p.id)}>
+                    <Folder size={16}/>{p.name}{!active && newProject === p.id && <Check className="check-icon" size={16}/>}
+                  </button>)}
                 <p className="popover-footnote">已有会话不可直接更换所属电脑。</p>
               </div>}
             </div>

@@ -325,7 +325,11 @@ button:hover { transition: background-color 100ms; }
   width: 24px; height: 24px; border-radius: 50%; color: var(--soft); }
 .document-attachment > button:disabled { opacity: .4; }
 .document-attachment > button:not(:disabled):hover { background: var(--selected); }
-.mobile-camera-action { display: none !important; }
+.turn-error { color: var(--dim); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.turn-error > span { font-weight: 600; }
+.turn-error.activity-failed > span { color: #e78b85; }
+.turn-error p { margin: 4px 0; white-space: pre-wrap; }
+.turn-error pre { white-space: pre-wrap; }
 .goal-pill { margin: 0 0 13px 0; display: flex; align-items: center; gap: 8px; background: var(--surface); border-radius: 23px; padding: 10px 15px; max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .goal-editor { background: var(--surface); border-radius: 19px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--stroke); }
 .goal-editor-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -524,7 +528,6 @@ button:hover { transition: background-color 100ms; }
 @media (max-width: 800px) {
   .chat-file-tile .chat-file-path { display: none; }
   .chat-file-tile .chat-file-name { display: block; }
-  .add-popover .mobile-camera-action { display: flex !important; }
   .project-create-dialog { max-height: calc(100dvh - 24px); padding: 14px; }
   .automations-view { padding: 18px 13px 90px; }
   .shared-settings { padding: 15px; max-height: calc(100dvh - 18px); }

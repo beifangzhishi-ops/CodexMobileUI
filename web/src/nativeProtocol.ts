@@ -212,6 +212,16 @@ function merge(list: readonly Message[], message: Message): Message[] {
 }
 const nextOrdinal = (items: readonly Message[]) => items.reduce((value, item) => Math.max(value, item.ordinal ?? -1), -1) + 1;
 
+function turnError(turnId: string, raw: unknown, ordinal: number, willRetry = false): Message {
+  const error = obj(raw);
+  return {
+    id: turnId + ':turn-error', turnId, ordinal, role: 'assistant', kind: 'turnError',
+    content: clip(text(error.message).trim() || (willRetry ? '正在重连' : '本轮运行失败')),
+    detail: clip(text(error.additionalDetails)),
+    complete: !willRetry, failed: !willRetry,
+  };
+}
+
 export function parseSnapshot(raw: unknown, expectedThreadId: string): Snapshot {
   const thread = obj(obj(raw).thread);
   if (text(thread.id) && thread.id !== expectedThreadId) throw Error('DIFFERENT_THREAD');
@@ -227,6 +237,9 @@ export function parseSnapshot(raw: unknown, expectedThreadId: string): Snapshot 
         activityFromItem(item, turnId, turnIndex * 100_000 + index, finished);
       if (message) messages.push({ ...message, turnStatus: text(turn.status) });
     }
+    if (turn.status === 'failed') {
+      messages.push({ ...turnError(turnId, turn.error, turnIndex * 100_000 + turn.items.length), turnStatus: 'failed' });
+    }
   }
   const last = obj(thread.turns.at(-1));
   const running = ['inProgress','in_progress','running'].includes(text(last.status));
@@ -241,9 +254,27 @@ export function applyNotice(previous: readonly Message[], notice: NativeNotice):
   const p = obj(notice.params), turnId = text(p.turnId) || text(obj(p.turn).id);
   if (!turnId) return [...previous];
   const item = obj(p.item), itemId = text(p.itemId) || text(item.id);
+  const errorId = turnId + ':turn-error';
+  if (notice.method === 'error') {
+    if (previous.some((m) => m.turnId === turnId &&
+        (m.failed && m.kind === 'turnError' || ['completed', 'interrupted', 'failed'].includes(m.turnStatus ?? '')))) {
+      return [...previous];
+    }
+    return merge(previous, turnError(turnId, p.error, nextOrdinal(previous), p.willRetry === true));
+  }
   if (notice.method === 'turn/completed' && turnId) {
-    const status = text(obj(p.turn).status) || 'completed';
-    return previous.map((m) => m.turnId === turnId ? { ...m, complete: true, turnStatus: status } : m);
+    const turn = obj(p.turn), status = text(turn.status) || 'completed';
+    const messages = previous.filter((m) => m.id !== errorId)
+      .map((m) => m.turnId === turnId ? { ...m, complete: true, turnStatus: status } : m);
+    if (status === 'failed') {
+      const liveError = previous.find((m) => m.id === errorId && m.failed);
+      const ordinal = nextOrdinal(messages);
+      const error = !turn.error && liveError ? liveError : turnError(turnId, turn.error, ordinal);
+      let index = messages.length;
+      while (index > 0 && messages[index - 1].turnId !== turnId) index--;
+      messages.splice(index || messages.length, 0, { ...error, ordinal, turnStatus: status });
+    }
+    return messages;
   }
   if (!itemId) return [...previous];
   const id = turnId + ':' + itemId;

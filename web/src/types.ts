@@ -12,7 +12,7 @@ export type Message = {
   timestampMs?: number;
   ordinal?: number;
   complete?: boolean;
-  kind?: 'reasoning' | 'tool' | 'plan';
+  kind?: 'reasoning' | 'tool' | 'plan' | 'turnError';
   activityType?: string;
   pluginId?: string;
   appId?: string;

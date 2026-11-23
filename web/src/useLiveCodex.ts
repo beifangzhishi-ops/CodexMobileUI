@@ -194,8 +194,13 @@ export function useLiveCodex() {
       // Do not overwrite newer streaming messages with an older asynchronous read.
       return snapshot.messages;
     }
-    setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
-      ? { ...item, ...snapshot, status: snapshot.running ? 'running' : 'idle', syncPending: false } : item));
+    setConversations((all) => all.map((item) => {
+      if (item.hostId !== hostId || item.id !== threadId) return item;
+      const liveError = snapshot.activeTurnId && item.messages.find((message) =>
+        message.kind === 'turnError' && message.turnId === snapshot.activeTurnId);
+      const messages = liveError ? [...snapshot.messages, liveError] : snapshot.messages;
+      return { ...item, ...snapshot, messages, status: snapshot.running ? 'running' : 'idle', syncPending: false };
+    }));
     return snapshot.messages;
   }, [request]);
 
@@ -392,7 +397,7 @@ export function useLiveCodex() {
               return { ...c, messages: applyNotice(c.messages, { method: frame.method!, params }),
                 ...(completed ? { status: 'idle' as const, running: false, activeTurnId: null, runningSinceMs: null } : {}) };
             }));
-          } else if (frame.method === 'item/started' || frame.method === 'item/completed' ||
+          } else if (frame.method === 'error' || frame.method === 'item/started' || frame.method === 'item/completed' ||
                      frame.method === 'item/agentMessage/delta' || frame.method === 'item/reasoning/summaryTextDelta' ||
                      frame.method === 'item/plan/delta' || frame.method === 'item/commandExecution/outputDelta') {
             setConversations((all) => all.map((c) => c.hostId === hostId && c.id === threadId

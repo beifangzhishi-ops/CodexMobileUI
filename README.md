@@ -1,5 +1,15 @@
 # CodexMobileUI
 
+## Composer and turn errors
+
+The shared new-chat menu shows the selected host and project. The attachment
+menu opens the system image picker from Photos. Android builds configure
+WebView to open that picker directly without offering camera capture.
+
+Conversation history displays native turn failures, including errors recovered
+from `thread/read`. During a running turn, consecutive reconnect notices update
+one row. The terminal turn event replaces or clears that row.
+
 ## Conversation titles
 
 The shared chat UI shows up to 60 characters of first-message preview while

@@ -13,6 +13,33 @@ test('native projects recognize path objects and preserve host ownership', () =>
   assert.throws(() => parseProjects({ bogus: [] }, '6v'), /INVALID_PROJECT_LIST/);
 });
 
+test('turn errors coalesce across retry and terminal events and reappear from history', () => {
+  const turnId = 'turn';
+  const error = (message, willRetry) => ({
+    method: 'error', params: { turnId, willRetry, error: { message } },
+  });
+  const finish = (status, terminalError) => ({
+    method: 'turn/completed', params: { turn: { id: turnId, status, error: terminalError } },
+  });
+  const first = applyNotice([], error('Reconnecting… 1/5', true));
+  const retry = applyNotice(first, error('Reconnecting… 2/5', true));
+  assert.equal(retry.length, 1);
+  assert.equal(retry[0].content, 'Reconnecting… 2/5');
+  assert.equal(retry[0].complete, false);
+  assert.deepEqual(applyNotice(retry, finish('completed')), []);
+  const terminalError = { message: 'Connection failed', additionalDetails: 'Upstream closed' };
+  const live = applyNotice(retry, error(terminalError.message, false));
+  const failed = applyNotice(live, finish('failed', terminalError));
+  const history = parseSnapshot({ thread: { id: 't', turns: [
+    { id: turnId, status: 'failed', error: terminalError, items: [] },
+  ] } }, 't');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].detail, terminalError.additionalDetails);
+  assert.deepEqual(failed, history.messages);
+  assert.deepEqual(applyNotice(failed, error('Late retry', true)), failed);
+  assert.equal(applyNotice(live, finish('failed'))[0].content, terminalError.message);
+});
+
 test('active and archived histories use distinct native IDs and timestamps', () => {
   const raw = { data: [{ id: 'thread-a', name: 'Example', projectId: 'p1', recencyAt: 1700000000, status: 'running' }] };
   const result = parseThreads(raw, '6v');
