@@ -86,6 +86,7 @@
 - Interactive native Codex authentication inside each dedicated home remains required for model turns. The Android WebView reaches the existing private Tailnet Web Coordinator; it does not perform a separate Gateway OAuth flow.
 
 ## Quality and delivery
+- Before packaging a release, check the release version records in `docs/roadmap.md` and follow any one-time entry there. Remove that entry only after its packages are verified and delivered.
 - This project is developed in parallel across multiple conversations and machines. Do not build/package the Android App, generate an APK, or trigger APK delivery as an automatic follow-up to code changes, tests, or completion of another task. Only do so when the user explicitly requests an App build. Preserve concurrent work and do not overwrite other developers' uncommitted changes.
 - For Web changes, run `npm.cmd --prefix web run build` as well as the existing repository checks. Do not claim visual acceptance without a real browser rendering check.
 - Read AGENTS.md, README.md and relevant modules before editing. Run `npm.cmd run check` and `npm.cmd run build:gateway` after changes; check actual host behavior separately.

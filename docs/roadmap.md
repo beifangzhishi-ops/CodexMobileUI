@@ -1,5 +1,20 @@
 # CodexMobileUI implementation and acceptance
 
+## Release version records
+
+Use `app.json` (`expo.version`) as the release version for Android and Windows.
+Keep the root `package.json` and both root version entries in `package-lock.json`
+in sync. Increment Android's `expo.android.versionCode` for each release and use
+the stable builder to sync the generated Gradle metadata. Verify the APK's
+embedded version and version code. For Windows, use the same release version in
+the portable package name and verify the EXE's ProductVersion and FileVersion.
+
+### Next release only
+
+- [ ] Release Android and Windows as **0.2.0**. The next Android version code is
+  **27**. Delete this subsection after the new packages are built, verified, and
+  delivered.
+
 ## 2026-11-21 Windows desktop first implementation
 
 - [x] Reuse the unified React UI through a Windows Electron window, without a
