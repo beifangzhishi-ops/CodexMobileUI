@@ -5,6 +5,8 @@
 The shared new-chat menu shows the selected host and project. The attachment
 menu opens the system image picker from Photos. Android builds configure
 WebView to open that picker directly without offering camera capture.
+On narrow screens the composer add menu uses 60 px rows and scrolls within
+the available viewport when the keyboard reduces vertical space.
 
 Conversation history displays native turn failures, including errors recovered
 from `thread/read`. During a running turn, consecutive reconnect notices update
@@ -21,8 +23,10 @@ hosts. With neither host connected it displays `服务器未连接`.
 ## Conversation titles
 
 The shared chat UI shows up to 60 characters of first-message preview while
-an unnamed conversation waits for its title. The host title task uses the
-language of the first message and accepts a title of up to 36 characters.
+an unnamed conversation waits for its title. The host title task follows the
+desktop title-writing rules, uses the language of the first message and
+accepts a title of up to 36 characters. The structured response includes a
+keyword summary, while the native title write persists only the title.
 Attachment-only first messages keep the default label. Existing names take
 precedence over automatic titles and previews.
 

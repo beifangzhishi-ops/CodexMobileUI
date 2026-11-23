@@ -641,6 +641,21 @@ button:hover { transition: background-color 100ms; }
   .model-selector { font-size: 12px; }
   .composer-host-selector { font-size: 11px; }
   .composer-popover { min-width: 210px; }
+  .add-popover {
+    width: min(264px, calc(100vw - 48px));
+    max-height: min(400px, var(--add-menu-height, 70dvh));
+    padding: 8px;
+    overscroll-behavior: contain;
+  }
+  .add-popover button { min-height: 60px; gap: 12px; padding: 8px 10px; font-size: 16px; }
+  .add-popover button > svg {
+    flex: none;
+    width: 42px;
+    height: 42px;
+    padding: 10px;
+    border-radius: 50%;
+    background: var(--surface);
+  }
 }
 @keyframes sidebar-refresh-spin { to { transform: rotate(360deg); } }
 @media (max-width: 420px) {

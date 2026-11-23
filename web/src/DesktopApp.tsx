@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent as ReactClipboardEvent, KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from 'react';
 import {
@@ -176,6 +176,29 @@ export default function DesktopApp() {
   const sidebarTouchStart = useRef<{ x: number; y: number } | null>(null);
   const sidebarPullLatest = useRef(0);
   const [popup, setPopup] = useState<Popup>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = addMenuRef.current;
+    if (popup !== 'add' || !menu) return;
+    const viewport = window.visualViewport;
+    const fitMenu = () => {
+      const available = menu.getBoundingClientRect().bottom - (viewport?.offsetTop ?? 0) - 12;
+      menu.style.setProperty('--add-menu-height', Math.max(0, available) + 'px');
+    };
+    const composer = menu.parentElement;
+    const observer = new ResizeObserver(fitMenu);
+    if (composer) observer.observe(composer);
+    window.addEventListener('resize', fitMenu);
+    viewport?.addEventListener('resize', fitMenu);
+    viewport?.addEventListener('scroll', fitMenu);
+    fitMenu();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', fitMenu);
+      viewport?.removeEventListener('resize', fitMenu);
+      viewport?.removeEventListener('scroll', fitMenu);
+    };
+  }, [popup]);
   const [quotaDetail, setQuotaDetail] = useState<'fiveHour' | 'weekly' | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
@@ -1816,7 +1839,7 @@ export default function DesktopApp() {
                   </button>
                 </div>
               </div>
-              {popup === 'add' && <div className="popover composer-popover add-popover"><span className="popover-heading">添加到消息</span>
+              {popup === 'add' && <div ref={addMenuRef} className="popover composer-popover add-popover"><span className="popover-heading">添加到消息</span>
                 <button onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片</button>
                 <button onClick={() => { documentRef.current?.click(); setPopup(null); }}><FileText size={18}/>上传文件</button>
                 <button onClick={() => { setPlan(!plan); setPopup(null); }}><ListTodo size={18}/>{plan ? '退出计划模式' : '计划模式'}</button>
