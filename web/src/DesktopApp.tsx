@@ -24,7 +24,8 @@ import { ProjectCreateDialog } from './ProjectCreateDialog';
 import { AutomationView } from './AutomationView';
 import { useBrowserNotifications } from './useBrowserNotifications';
 import { SettingsView } from './SettingsView';
-import { downloadPublication, parsePublishedFiles, type PublishedFile } from './publicationDownload';
+import { downloadPublication, hasNativePublicationDownload, parsePublishedFiles, type PublishedFile } from './publicationDownload';
+import { localFileName, localFilePathKey } from '../../shared/localFileLinks';
 import { documentFileAllowed } from './documentUpload';
 import { useFollowLatest } from './useFollowLatest';
 import type { PermissionMode, FollowUpMode } from './useLiveCodex';
@@ -224,6 +225,9 @@ export default function DesktopApp() {
   };
   const [published, setPublished] = useState<{ key: string; items: PublishedFile[] }>({ key: '', items: [] });
   const [downloading, setDownloading] = useState<{ id: string; percent: number } | null>(null);
+  const [downloadPage, setDownloadPage] = useState<{
+    key: string; path: string; file?: PublishedFile | null; error?: string;
+  } | null>(null);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewMode>('chat');
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
@@ -391,15 +395,15 @@ export default function DesktopApp() {
     }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [publicationKey, active?.messages.length, isRunning, live.request]);
-  async function downloadAssistantFile(path: string) {
+  async function downloadAssistantFile(path: string, selectedFile?: PublishedFile) {
     if (!active || downloading) return;
     setDownloading({ id: path, percent: 0 });
     try {
-      const files = published.key === publicationKey ? published.items :
+      const files = selectedFile ? [selectedFile] : published.key === publicationKey ? published.items :
         parsePublishedFiles(await live.request(active.hostId, 'web/publication', {
           method: 'workspace/publication/list', params: { threadId: active.id },
         }), active.id);
-      const file = files.find((item) => item.path === path);
+      const file = files.find((item) => localFilePathKey(item.path) === localFilePathKey(path));
       if (!file) { setNotice('服务器未找到对应的发布文件'); return; }
       if (file.status === 'quarkUploaded') { setNotice('文件已上传夸克，请在夸克中查看'); return; }
       if (file.status === 'quarkUploading') { setNotice('文件正在上传夸克'); return; }
@@ -412,6 +416,26 @@ export default function DesktopApp() {
       setNotice('文件下载或保存未完成，请刷新后重试');
     } finally { setDownloading(null); }
   }
+  function openAssistantFile(path: string, itemId?: string) {
+    if (!hasNativePublicationDownload()) {
+      void downloadAssistantFile(path);
+      return;
+    }
+    if (!active) return;
+    const page = { key: publicationKey, path };
+    setDownloadPage(page);
+    void live.request(active.hostId, 'web/publication', {
+      method: 'workspace/publication/list', params: { threadId: active.id },
+    }).then((response) => {
+      const file = parsePublishedFiles(response, active.id).find((item) =>
+        (!itemId || item.itemId === itemId) && localFilePathKey(item.path) === localFilePathKey(path));
+      setDownloadPage((current) => current === page ? { ...page, file: file ?? null } : current);
+    }).catch(() => {
+      setDownloadPage((current) => current === page ? { ...page, error: '无法获取文件状态' } : current);
+    });
+  }
+  const visibleDownloadPage = downloadPage?.key === publicationKey ? downloadPage : null;
+  const downloadPageFile = visibleDownloadPage?.file;
   async function revealHostFile(hostId: HostId, filePath: string) {
     const native = desktopBridge();
     if (!native) return;
@@ -668,11 +692,13 @@ export default function DesktopApp() {
       if (e.key === 'Escape') {
         setSearchOpen(false); setPopup(null); setGoalEditor(false); setImageViewer(null);
         setProjectCreateOpen(false); setContextMenu(null); setRenameTarget(null); setChatFind(null);
+        setDownloadPage(null);
       }
     }
     function nativeBack(event: Event) {
       // Reply synchronously to Android: consuming root back would leave users stuck.
       if (imageViewer) { setImageViewer(null); event.preventDefault(); }
+      else if (visibleDownloadPage) { setDownloadPage(null); event.preventDefault(); }
       else if (renameTarget) { setRenameTarget(null); event.preventDefault(); }
       else if (projectCreateOpen) { setProjectCreateOpen(false); event.preventDefault(); }
       else if (settingsOpen) {
@@ -709,7 +735,7 @@ export default function DesktopApp() {
       window.removeEventListener('codexdesktop:toggle-sidebar', nativeToggleSidebar);
       window.removeEventListener('codexdesktop:search', nativeSearch);
     };
-  }, [imageViewer, renameTarget, projectCreateOpen, settingsOpen, quotaDetail,
+  }, [imageViewer, visibleDownloadPage, renameTarget, projectCreateOpen, settingsOpen, quotaDetail,
     searchOpen, contextMenu, inlineRename, chatFind, goalEditor, renaming,
     popup, sidebarOpen, view]);
   useEffect(() => {
@@ -1612,7 +1638,7 @@ export default function DesktopApp() {
                   hostId={active.hostId} threadId={active.id}
                   itemId={message.id.slice(message.id.indexOf(':') + 1)}
                   readAssistantImage={live.readAssistantImage} onOpenImage={setImageViewer}
-                  onOpenFile={(path) => { void downloadAssistantFile(path); }}
+                  onOpenFile={(path) => openAssistantFile(path, message.id.slice(message.id.indexOf(':') + 1))}
                   onRevealFile={desktopBridge() ? (path) => { void revealHostFile(active.hostId, path); } : undefined}
                   displayPath={(path) => pathForViewer(path, active.hostId, viewerHost, pathHosts)}
                   imageReady={message.complete !== false}
@@ -1957,7 +1983,7 @@ export default function DesktopApp() {
           {desktopBridge() ? contextOption('在资源管理器中定位', FolderOpen,
             () => void revealHostFile(contextMenu.hostId, contextMenu.id)) :
             contextMenu.origin === 'assistant' && contextOption('下载文件', ArrowDown,
-              () => void downloadAssistantFile(contextMenu.id))}
+              () => openAssistantFile(contextMenu.id))}
         </> : contextMenu.kind === 'image' ? <>
           <div className="context-menu-caption">图片操作</div>
           {contextOption('查看原图', Image, () => setImageViewer(contextMenu.id))}
@@ -1999,7 +2025,24 @@ export default function DesktopApp() {
       </div>
     </div></div>}
 
-    {downloading && <div className="publication-download-progress" role="status">
+    {visibleDownloadPage && <section className="publication-download-page"
+      role="dialog" aria-modal="true" aria-labelledby="publication-download-title">
+      <header>
+        <button type="button" autoFocus onClick={() => setDownloadPage(null)}>返回对话</button>
+        <h2 id="publication-download-title">文件下载</h2>
+      </header>
+      <p className="publication-download-name">{downloadPageFile?.name ?? localFileName(visibleDownloadPage.path)}</p>
+      {!!downloadPageFile?.size && <p>{new Intl.NumberFormat('zh-CN').format(downloadPageFile.size)} 字节</p>}
+      <p role="status">{visibleDownloadPage.error ?? (downloadPageFile?.status === 'ready' ?
+        (downloading ? '正在下载 · ' + downloading.percent + '%' : '可以下载') :
+        downloadPageFile?.status === 'quarkUploaded' ? '文件已上传夸克，请在夸克中查看' :
+        downloadPageFile?.status === 'quarkUploading' ? '文件正在上传夸克' :
+        downloadPageFile?.status === 'quarkFailed' ? '夸克上传失败' :
+        downloadPageFile === undefined ? '正在读取文件状态' : '文件暂未开放下载')}</p>
+      {downloadPageFile?.status === 'ready' && <button type="button" disabled={!!downloading}
+        onClick={() => void downloadAssistantFile(visibleDownloadPage.path, downloadPageFile)}>下载</button>}
+    </section>}
+    {downloading && !visibleDownloadPage && <div className="publication-download-progress" role="status">
       正在下载文件 · {downloading.percent}%
     </div>}
     {notice && <div className="toast" role="status">{notice}<button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={15}/></button></div>}

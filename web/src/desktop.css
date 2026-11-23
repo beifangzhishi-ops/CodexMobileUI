@@ -514,13 +514,16 @@ button:hover { transition: background-color 100ms; }
 .assistant-file-download { font-size: 11px; border: 1px solid var(--stroke); border-radius: 7px;
   padding: 4px 9px; background: var(--surface); color: var(--soft); }
 .assistant-file-download:hover { background: var(--selected); }
+.publication-download-page { position: fixed; inset: 0; z-index: 89; overflow: auto; background: var(--canvas); color: var(--text); padding: 24px; }
+.publication-download-page header { display: flex; align-items: center; gap: 16px; }
+.publication-download-page button { border: 1px solid var(--stroke); border-radius: 8px; padding: 8px 12px; }
+.publication-download-page .publication-download-name { overflow-wrap: anywhere; font-weight: 600; }
 .publication-download-progress { position: fixed; z-index: 90; bottom: 20px; left: 50%;
   transform: translateX(-50%); border: 1px solid var(--stroke); background: var(--menu);
   padding: 10px 15px; border-radius: 10px; font-size: 12px; }
 @media (max-width: 800px) {
   .chat-file-tile .chat-file-path { display: none; }
   .chat-file-tile .chat-file-name { display: block; }
-  .assistant-image-reference .assistant-image-path { display: none; }
   .add-popover .mobile-camera-action { display: flex !important; }
   .project-create-dialog { max-height: calc(100dvh - 24px); padding: 14px; }
   .automations-view { padding: 18px 13px 90px; }

@@ -19,6 +19,10 @@ function bridge(): NativeBridge | null {
   const native = (window as Window & { ReactNativeWebView?: NativeBridge }).ReactNativeWebView;
   return typeof native?.postMessage === 'function' ? native : null;
 }
+
+export function hasNativePublicationDownload(): boolean {
+  return bridge() !== null;
+}
 function nativeExchange(message: Record<string, unknown>, id: string, seq: number): Promise<void> {
   const native = bridge();
   if (!native) return Promise.reject(Error('ANDROID_BRIDGE_MISSING'));

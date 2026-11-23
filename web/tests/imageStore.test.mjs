@@ -187,7 +187,9 @@ test('assistant Markdown image previews are scoped to the native agent item and 
     assert.equal(preview.images.length, 2);
     assert.deepEqual(preview.images.map((image) => image.kind), ['image','link']);
     assert.equal(preview.images[0].path, file);
-    assert.equal(preview.markdown.includes('assistant-image/1'), true);
+    assert.equal(preview.markdown, '![示意图](https://codexmobile.invalid/assistant-image/0)\n\n' + link);
+    assert.equal(renderAssistantImageReferences(link + '\n\n' + imageLink).markdown,
+      link + '\n\n![示意图](https://codexmobile.invalid/assistant-image/1)');
     let offset = 0;
     const chunks = [];
     while (offset < bytes.length) {

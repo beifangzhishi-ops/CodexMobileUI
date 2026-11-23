@@ -1,5 +1,5 @@
-// Pure browser/server parser: only explicit Markdown links to drive-local
-// image files qualify. Text paths, fenced code, and URLs do not.
+// Keep native reference indices stable for clients using the image-read RPC.
+// Only Markdown image syntax is rewritten for inline display.
 const IMAGE_EXTENSION = /\.(?:png|jpe?g|webp|gif|bmp)$/i;
 // Historical assistant messages may embed images from a managed upload folder
 // relative to the Web/App Server workdir. No other relative path is allowed.
@@ -80,9 +80,10 @@ export function renderAssistantImageReferences(markdown) {
   const images = assistantImageReferences(markdown);
   let rendered = '', previous = 0;
   images.forEach((ref, index) => {
+    if (ref.kind !== 'image') return;
     rendered += markdown.slice(previous, ref.start);
     const marker = `https://codexmobile.invalid/assistant-image/${index}`;
-    rendered += `${ref.kind === 'image' ? '!' : ''}[${ref.label}](${marker})`;
+    rendered += `![${ref.label}](${marker})`;
     previous = ref.end;
   });
   return { markdown: rendered + markdown.slice(previous), images };

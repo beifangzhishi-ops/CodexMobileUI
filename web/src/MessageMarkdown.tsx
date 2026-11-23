@@ -6,7 +6,7 @@ import 'katex/dist/katex.min.css';
 import type { HostId } from './types';
 import { MessageImage } from './MessageImage';
 import { localFileName, renderableLocalFileLinks } from '../../shared/localFileLinks';
-import { desktopBridge } from './desktopBridge';
+import { hasNativePublicationDownload } from './publicationDownload';
 import { renderAssistantImageReferences } from '../server/assistantImageRefs.mjs';
 
 /** Local assistant paths stay native in history and render as filenames. */
@@ -26,6 +26,13 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
 }) {
   const preview = renderAssistantImageReferences(text);
   const parsed = renderableLocalFileLinks(preview.markdown);
+  const mobile = hasNativePublicationDownload() && !onRevealFile;
+  const copyPath = (path: string) => onCopyPath?.(displayPath?.(path) ?? path);
+  const activatePath = (path: string) => {
+    if (mobile) onOpenFile?.(path);
+    else if (onRevealFile) onRevealFile(path);
+    else copyPath(path);
+  };
   function imagePreview(index: number) {
     const ref = preview.images[index];
     if (!ref) return null;
@@ -35,36 +42,30 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
         ? <MessageImage hostId={hostId} threadId={threadId} itemId={itemId}
             imageIndex={index} readImage={readAssistantImage} onOpen={onOpenImage}/>
         : <span className="unresolved-file-link">图片预览不可用</span>}
-      <button className="assistant-image-path" type="button" title="复制图片绝对路径"
-        onClick={() => onCopyPath?.(displayPath?.(ref.path) ?? ref.path)}>{localFileName(ref.path)}</button>
+      {!mobile && <button className="assistant-image-path" type="button" title={displayPath?.(ref.path) ?? ref.path}
+        onClick={() => activatePath(ref.path)}>{localFileName(ref.path)}</button>}
+      {onRevealFile && <button type="button" className="assistant-file-download"
+        aria-label="复制图片路径" onClick={() => copyPath(ref.path)}>复制</button>}
     </span>;
   }
   return <div className="message-markdown">
     <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}
       components={{
         a: ({ href, children }) => {
-          const image = /^https:\/\/codexmobile\.invalid\/assistant-image\/(\d+)$/.exec(href ?? '');
-          if (image) return imagePreview(Number(image[1]));
           const link = href ? parsed.targets[href] : undefined;
           if (link) {
             const { path, location } = link;
-            const copyPath = displayPath?.(path) ?? path;
-            const mobile = !desktopBridge() && typeof window !== 'undefined' &&
-              (window.matchMedia('(max-width: 800px)').matches ||
-                typeof (window as Window & { ReactNativeWebView?: {
-                  postMessage: (data: string) => void
-                } }).ReactNativeWebView?.postMessage === 'function');
             return <span className="assistant-file-actions context-press-target"
               data-context-kind="file" data-context-host={hostId} data-context-id={path}
               data-context-origin="assistant">
               <button className="local-file-link" type="button"
-                title={mobile ? '下载文件' : onRevealFile ? '在资源管理器中定位' : '复制绝对路径'}
-                onClick={() => mobile ? onOpenFile?.(path) : onRevealFile ? onRevealFile(path) : onCopyPath?.(copyPath)}>
-                {localFileName(path)}{location}
+                title={mobile ? '打开下载页' : displayPath?.(path) ?? path}
+                onClick={() => activatePath(path)}>
+                {mobile ? children : <>{localFileName(path)}{location}</>}
               </button>
               {!mobile && onRevealFile && <button type="button" className="assistant-file-download"
                 title="复制当前电脑可读路径" aria-label="复制路径"
-                onClick={() => onCopyPath?.(copyPath)}>复制</button>}
+                onClick={() => copyPath(path)}>复制</button>}
               {!mobile && onOpenFile && <button type="button" className="assistant-file-download"
                 title="下载文件" aria-label="下载文件" onClick={() => onOpenFile(path)}>下载</button>}
             </span>;
