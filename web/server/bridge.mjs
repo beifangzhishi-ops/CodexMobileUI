@@ -421,6 +421,8 @@ function allowedFrame(msg) {
     return subset(p, ['threadId']) && validId(p.threadId);
   }
   if (msg.method === 'thread/delete') return subset(p, ['threadId']) && validId(p.threadId);
+  if (msg.method === 'thread/metadata/update') return subset(p, ['threadId','projectId']) &&
+    validId(p.threadId) && (p.projectId === '' || validId(p.projectId));
   if (msg.method === 'thread/name/set') return subset(p, ['threadId','name']) &&
     validId(p.threadId) && typeof p.name === 'string' &&
     [...p.name.trim()].length >= 1 && [...p.name.trim()].length <= 80 &&
@@ -647,7 +649,7 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_REQUEST_REJECTED' } })));
     } else if ((msg.method === 'turn/start' || msg.method === 'turn/steer') && !remotePeer &&
-      msg.params.input.slice(1).some((item) => !images.owns(item.path))) {
+      msg.params.input.some((item) => item.type === 'localImage' && !images.owns(item.path))) {
       safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_NOT_UPLOADED_ON_THIS_CONNECTION' } }));
     } else if (msg.method === 'web/permissionFromConfig' && !remotePeer) {
       void (async () => {

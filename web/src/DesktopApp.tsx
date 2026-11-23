@@ -29,6 +29,7 @@ import { downloadPublication, hasNativePublicationDownload, parsePublishedFiles,
 import { localFileName, localFilePathKey } from '../../shared/localFileLinks';
 import { documentFileAllowed } from './documentUpload';
 import { useFollowLatest } from './useFollowLatest';
+import { ThinkingIndicator } from './ThinkingIndicator';
 import type { PermissionMode, FollowUpMode } from './useLiveCodex';
 import { copyToClipboard, localMessageId } from './browserHelpers';
 import { desktopBridge } from './desktopBridge';
@@ -268,6 +269,7 @@ export default function DesktopApp() {
   const [submitting, setSubmitting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionMode | null>(null);
+  const [nextPermissions, setNextPermissions] = useState<Partial<Record<string, PermissionMode>>>({});
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [editingThread, setEditingThread] = useState(false);
@@ -287,7 +289,6 @@ export default function DesktopApp() {
   const [followUpMode, setFollowUpMode] = useState<FollowUpMode>(() =>
     localStorage.getItem('codex-web-follow-up') === 'queue' ? 'queue' : 'steer');
   const [workingQueue, setWorkingQueue] = useState<string | null>(null);
-  const [elapsedTick, setElapsedTick] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(() =>
     localStorage.getItem('codex-web-visual-theme') === 'light' ? 'light' : 'dark');
@@ -482,8 +483,11 @@ export default function DesktopApp() {
     });
     return () => { liveEffect = false; };
   }, [currentHost, live.status[currentHost]]);
-  const currentPermission = active ? live.threadPermissions[conversationKey(active.hostId, active.id)] : permission;
-  const CurrentPermissionIcon = permissionIcons[currentPermission ?? 'custom'];
+  const permissionKey = active ? conversationKey(active.hostId, active.id) : null;
+  const nextPermission = permissionKey ? nextPermissions[permissionKey] : undefined;
+  const currentPermission = permissionKey ? live.threadPermissions[permissionKey] : permission;
+  const selectedPermission = nextPermission ?? currentPermission;
+  const CurrentPermissionIcon = permissionIcons[selectedPermission ?? 'custom'];
   const { prepareAttachments } = live;
   const connected = live.status[currentHost] === 'online';
   const [retryUpload, setRetryUpload] = useState(0);
@@ -495,11 +499,12 @@ export default function DesktopApp() {
   } | null>(null);
   const [preparingProgress, setPreparingProgress] = useState<number | null>(null);
   const [preparingFailed, setPreparingFailed] = useState(false);
+  const attachmentsDisabled = Boolean(active && followUpMode === 'queue');
   const hasDraftAttachments = pastedImages.length + pastedDocuments.length > 0;
   const readyAttachments = prepared?.host === currentHost && prepared.images === pastedImages &&
     prepared.documents === pastedDocuments ? prepared.result : undefined;
   useEffect(() => {
-    if (!connected || !hasDraftAttachments || readyAttachments) return;
+    if (!connected || attachmentsDisabled || !hasDraftAttachments || readyAttachments) return;
     const controller = new AbortController();
     setPreparingProgress(0);
     setPreparingFailed(false);
@@ -517,11 +522,11 @@ export default function DesktopApp() {
         if (!controller.signal.aborted) setPreparingFailed(true);
       });
     return () => controller.abort();
-  }, [connected, currentHost, hasDraftAttachments, pastedImages, pastedDocuments,
+  }, [connected, currentHost, attachmentsDisabled, hasDraftAttachments, pastedImages, pastedDocuments,
     pathHosts, prepareAttachments, readyAttachments, retryUpload]);
   const canSend = Boolean(draft.trim() || pastedImages.length || pastedDocuments.length);
   const stopMode = isRunning && !canSend;
-  const composerBusy = submitting || stopping || goalWorking;
+  const composerBusy = submitting || stopping || goalWorking || pendingPermission !== null;
   const permissionLabels: Record<PermissionMode, string> = {
     default: '默认权限', 'auto-review': '自动审查', 'read-only': '只读',
     'full-access': '完整访问权限', custom: '自定义（config.toml）',
@@ -700,11 +705,6 @@ export default function DesktopApp() {
     } catch { /* No storage available in this WebView/browser profile. */ }
   }, [showAllRecent, hostCollapsed, openedProjects, collapsedSections, sidebarOpen]);
   useEffect(() => {
-    if (!isRunning) return;
-    const timer = window.setInterval(() => setElapsedTick((v) => v + 1), 1000);
-    return () => clearInterval(timer);
-  }, [isRunning]);
-  useEffect(() => {
     function keydown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault(); setQuery(''); setSearchOpen(true); setPopup(null);
@@ -792,6 +792,7 @@ export default function DesktopApp() {
     setPastedImages(next);
   }
   function addImages(files: File[]) {
+    if (attachmentsDisabled) return;
     const supported = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'];
     if (!files.length) return;
     if (files.length + pastedImagesRef.current.length + pastedDocumentsRef.current.length > 4) {
@@ -806,6 +807,7 @@ export default function DesktopApp() {
     setPastedImages(pastedImagesRef.current);
   }
   function addDocuments(files: File[]) {
+    if (attachmentsDisabled) return;
     if (!files.length) return;
     if (files.length + pastedImagesRef.current.length + pastedDocumentsRef.current.length > 4) {
       setNotice('每条消息最多添加 4 个文件或图片'); return;
@@ -984,13 +986,12 @@ export default function DesktopApp() {
       if (action === 'archive') await live.request(target.hostId,
         item.archived ? 'thread/unarchive' : 'thread/archive', { threadId: target.id });
       else if (action === 'delete') await live.request(target.hostId, 'thread/delete', { threadId: target.id });
-      else await live.request(target.hostId, 'thread/metadata/update', {
-        threadId: target.id, projectId: projectId ?? '',
-      });
+      else await live.moveThread(target.hostId, target.id, projectId ?? '');
       if (action === 'delete') live.forgetDeletedThread(target.hostId, target.id);
       if ((action === 'delete' || action === 'archive') &&
           activeId === conversationKey(target.hostId, target.id)) createNewChat(target.hostId);
-      await live.refresh(target.hostId);
+      await live.refresh(target.hostId).catch(() =>
+        setNotice(action === 'move' ? '已移动对话，列表刷新失败' : '操作已确认，列表刷新失败'));
     } catch { setNotice('服务器未确认该操作，请刷新列表核对后重试'); }
     finally { setContextBusy(false); }
   }
@@ -1044,18 +1045,15 @@ export default function DesktopApp() {
     toggle(collapsedSections, id, setCollapsedSections);
   }
   function send() {
-    if (sendBusy.current || stopping) return;
+    if (sendBusy.current || stopping || pendingPermission) return;
     if (stopMode) { stopTurn(); return; }
     if (live.status[currentHost] !== 'online') { setNotice('电脑尚未连接，消息仍保留在输入框'); return; }
     const value = draft.trim();
     const nativeMentions = selectedNativeMentions(value, chosenMentions[mentionSelectionKey] ?? []);
     if (!value && !hasDraftAttachments) return;
     if (hasDraftAttachments && !readyAttachments) return;
-    if ((pastedImages.length || pastedDocuments.length) && active?.running) {
-      setNotice('当前轮次正在运行，图片请在下一轮发送'); return;
-    }
-    if ((pastedImages.length || pastedDocuments.length) && active && followUpMode === 'queue') {
-      setNotice('排队模式暂不支持图片，请切换为引导并等待轮次结束'); return;
+    if (hasDraftAttachments && attachmentsDisabled) {
+      setNotice('排队模式只支持文本，请切换到引导以发送附件'); return;
     }
     sendBusy.current = true;
     setSubmitting(true);
@@ -1078,7 +1076,16 @@ export default function DesktopApp() {
       pathHosts,
       model: selectedModel?.id, effort: effectiveEffort || undefined,
       mentions: nativeMentions,
-      permissionMode: permission, plan, goal: active ? undefined : goal, followUpMode,
+      permissionMode: permission, nextPermission, plan, goal: active ? undefined : goal, followUpMode,
+      onPermissionApplied: () => {
+        if (!permissionKey) return;
+        setNextPermissions((old) => {
+          if (old[permissionKey] !== nextPermission) return old;
+          const next = { ...old };
+          delete next[permissionKey];
+          return next;
+        });
+      },
       preparedAttachments: readyAttachments,
       images: pastedImages.map((entry) => entry.file),
       documents: pastedDocuments.map((entry) => entry.file),
@@ -1143,6 +1150,11 @@ export default function DesktopApp() {
           setNotice('同一个绝对路径在两台电脑都存在，请改用明确的网络共享路径后再发送');
           return;
         }
+        if (error instanceof Error && error.message === 'NEXT_PERMISSION_UNCONFIRMED') {
+          setOptimisticSubmissions((old) => old.filter((item) => item.id !== localId));
+          setNotice('下一轮的权限未获确认，草稿和权限选择已保留');
+          return;
+        }
         const knownRejection = error instanceof Error && [
           'TEXT_OR_IMAGE_REQUIRED_OR_TOO_LONG', 'IMAGE_FORMAT_OR_SIZE_UNSUPPORTED',
           'DOCUMENT_FORMAT_OR_SIZE_UNSUPPORTED', 'DOCUMENT_REFERENCES_TOO_LONG',
@@ -1184,7 +1196,11 @@ export default function DesktopApp() {
       return;
     }
     if (mode === 'full-access' && !window.confirm('完整访问权限允许 Codex 在对应电脑上执行高风险操作。确认在后续消息中使用？')) return;
-    if (active) {
+    if (active && permissionKey && (active.running || active.syncPending || nextPermission)) {
+      setNextPermissions((old) => ({ ...old, [permissionKey]: mode }));
+      setPopup(null);
+      setNotice('权限将在下次从输入框启动轮次时应用');
+    } else if (active) {
       setPendingPermission(mode);
       void live.setThreadPermission(active.hostId, active.id, mode)
         .then(() => setPopup((opened) => opened === 'permission' ? null : opened))
@@ -1690,9 +1706,7 @@ export default function DesktopApp() {
               </Fragment>;
             })}
             {optimisticPositions.get(active.messages.length)?.map(renderOptimisticSubmission)}
-            {isRunning && <div className="thinking-row" aria-live="polite"><span className="activity-spinner"/>
-              正在思考 · 已进行 {Math.max(0, Math.floor((Date.now() - (active.runningSinceMs ?? Date.now())) / 1000)) + (elapsedTick * 0)} 秒
-            </div>}
+            {isRunning && <ThinkingIndicator key={active.activeTurnId} startedAt={active.runningSinceMs}/>}
             </div></div>
             {showJump && <button className="jump-to-latest" type="button"
               title="跳转到最新消息" aria-label="跳转到最新消息" onClick={jumpToLatest}>
@@ -1798,11 +1812,11 @@ export default function DesktopApp() {
               </div>}
               <div className="composer-actions">
                 <div className="composer-actions-left">
-                  <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden onChange={handleFiles}/>
+                  <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden disabled={attachmentsDisabled} onChange={handleFiles}/>
                   <input ref={documentRef} type="file" accept=".txt,.md,.json,.jsonl,.csv,.log,.yaml,.yml,.xml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sh,.ps1,.java,.kt,.rs,.go,.c,.cpp,.h,.pdf,.docx,.xlsx,.pptx,.zip"
-                    multiple hidden onChange={handleDocuments}/>
+                    multiple hidden disabled={attachmentsDisabled} onChange={handleDocuments}/>
                   <button data-popup-trigger className="composer-tool" title="添加内容" aria-label="添加内容" onClick={() => setPopup(popup === 'add' ? null : 'add')}><Plus size={23}/></button>
-                  <button data-popup-trigger className="composer-tool" title="选择权限" aria-label="选择权限" onClick={() => setPopup(popup === 'permission' ? null : 'permission')}><CurrentPermissionIcon size={22} color={currentPermission === 'full-access' ? '#ce922f' : undefined}/></button>
+                  <button data-popup-trigger className="composer-tool" title="选择权限" aria-label={nextPermission ? "选择权限，下一轮生效" : "选择权限"} onClick={() => setPopup(popup === 'permission' ? null : 'permission')}><CurrentPermissionIcon size={22} color={selectedPermission === 'full-access' ? '#ce922f' : undefined}/></button>
                   <button data-popup-trigger className="model-selector" title="模型与思考强度" onClick={() => setPopup(popup === 'model' ? null : 'model')}>
                     <span className="model-selector-text">{selectedModel?.name ?? '选择模型'} · {effortLabels[effectiveEffort] ?? '默认'}</span>
                     <ChevronDown size={14}/>
@@ -1832,26 +1846,28 @@ export default function DesktopApp() {
                     <div>占用 {contextPercent}% · 剩余 {100 - contextPercent}%</div>
                   </div>}
                   <button className={'send-button' + (stopMode ? ' stop-mode' : '')}
-                    disabled={composerBusy || (stopMode ? !active?.activeTurnId : !canSend || (hasDraftAttachments && !readyAttachments)) || live.status[currentHost] !== 'online'}
+                    disabled={composerBusy || (stopMode ? !active?.activeTurnId : !canSend || (hasDraftAttachments && (attachmentsDisabled || !readyAttachments))) || live.status[currentHost] !== 'online'}
                     aria-label={composerBusy ? '等待服务器确认' : stopMode ? '停止当前轮次' : '发送消息'}
                     title={stopMode ? '停止当前轮次' : '发送到 ' + currentHost} onClick={send}>
                     {composerBusy ? <span className="send-spinner"/> : stopMode ? <Square size={16} fill="currentColor"/> : <ArrowUp size={21}/>}
                   </button>
                 </div>
               </div>
-              {popup === 'add' && <div ref={addMenuRef} className="popover composer-popover add-popover"><span className="popover-heading">添加到消息</span>
-                <button onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片</button>
-                <button onClick={() => { documentRef.current?.click(); setPopup(null); }}><FileText size={18}/>上传文件</button>
+              {popup === 'add' && <div ref={addMenuRef} className="popover composer-popover add-popover"><span className="popover-heading">{attachmentsDisabled ? "排队模式只支持文本" : "添加到消息"}</span>
+                <button disabled={attachmentsDisabled} onClick={() => { fileRef.current?.click(); setPopup(null); }}><Image size={18}/>照片</button>
+                <button disabled={attachmentsDisabled} onClick={() => { documentRef.current?.click(); setPopup(null); }}><FileText size={18}/>上传文件</button>
                 <button onClick={() => { setPlan(!plan); setPopup(null); }}><ListTodo size={18}/>{plan ? '退出计划模式' : '计划模式'}</button>
                 <button onClick={() => { setGoalDraft(displayedGoal); setGoalEditor(true); setPopup(null); }}><Target size={18}/>目标</button>
               </div>}
-              {popup === 'permission' && <div className="popover composer-popover permission-popover"><span className="popover-heading">审批权限</span>
+              {popup === 'permission' && <div className="popover composer-popover permission-popover"><span className="popover-heading">{nextPermission && followUpMode === "queue"
+                ? "服务器排队消息沿用当前权限" : "审批权限"}</span>
                 {(['default','auto-review','read-only','full-access','custom'] as PermissionMode[]).map((mode) => {
                   const PermissionIcon = permissionIcons[mode];
                   return <button key={mode} disabled={submitting || pendingPermission !== null} onClick={() => selectPermission(mode)}>
                     <PermissionIcon size={17} color={mode === 'full-access' ? '#ce922f' : undefined}/>{permissionLabels[mode]}
+                    {nextPermission === mode && <small>下一轮生效</small>}
                     {pendingPermission === mode ? <span className="activity-spinner check-icon"/>
-                      : currentPermission === mode && <Check className="check-icon" size={16}/>}
+                      : selectedPermission === mode && <Check className="check-icon" size={16}/>}
                   </button>;
                 })}
               </div>}

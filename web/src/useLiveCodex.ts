@@ -29,6 +29,8 @@ export type SendOptions = {
   model?: string;
   effort?: string;
   permissionMode?: PermissionMode;
+  nextPermission?: PermissionMode;
+  onPermissionApplied?: () => void;
   plan?: boolean;
   goal?: string;
   followUpMode?: FollowUpMode;
@@ -76,6 +78,7 @@ export function useLiveCodex() {
   // A very fast model can finish before the turn/start acknowledgement is
   // processed. Never revive a completed turn as "running" on late ack.
   const completedTurnIds = useRef(new Map<string, string>());
+  const startingTurns = useRef(new Set<string>());
   const refreshTimer = useRef(new Map<string, number>());
   const pollQueued = useRef(new Map<string, number>());
   const alive = useRef(false);
@@ -199,7 +202,10 @@ export function useLiveCodex() {
       const liveError = snapshot.activeTurnId && item.messages.find((message) =>
         message.kind === 'turnError' && message.turnId === snapshot.activeTurnId);
       const messages = liveError ? [...snapshot.messages, liveError] : snapshot.messages;
-      return { ...item, ...snapshot, messages, status: snapshot.running ? 'running' : 'idle', syncPending: false };
+      const runningSinceMs = snapshot.activeTurnId && snapshot.activeTurnId === item.activeTurnId
+        ? item.runningSinceMs ?? snapshot.runningSinceMs : snapshot.runningSinceMs;
+      return { ...item, ...snapshot, messages, runningSinceMs,
+        status: snapshot.running ? 'running' : 'idle', syncPending: false };
     }));
     return snapshot.messages;
   }, [request]);
@@ -389,9 +395,14 @@ export function useLiveCodex() {
           changed.current.set(key, (changed.current.get(key) ?? 0) + 1);
           if (frame.method === 'turn/started') {
             const turn = obj(params.turn);
+            const turnId = text(turn.id);
+            const now = performance.timeOrigin + performance.now();
+            const startedAt = !startingTurns.current.has(key) && typeof turn.startedAt === 'number'
+              ? Math.min(turn.startedAt * 1000, now) : now;
             setConversations((all) => all.map((c) => c.hostId === hostId && c.id === threadId
               ? { ...c, status: 'running', running: true, syncPending: false,
-                activeTurnId: text(turn.id) || c.activeTurnId, runningSinceMs: typeof turn.startedAt === 'number' ? turn.startedAt * 1000 : Date.now() } : c));
+                activeTurnId: turnId || c.activeTurnId,
+                runningSinceMs: turnId === c.activeTurnId ? c.runningSinceMs ?? startedAt : startedAt } : c));
           } else if (frame.method === 'turn/completed') {
             const turnId = text(obj(params.turn).id);
             if (turnId) completedTurnIds.current.set(key, turnId);
@@ -516,6 +527,43 @@ export function useLiveCodex() {
     return { imagePaths, uploadedDocuments };
   }, [request, uploadImage]);
 
+  const setThreadPermission = useCallback(async (hostId: HostId, threadId: string, mode: PermissionMode) => {
+    const key = threadKey(hostId, threadId);
+    permissionEpochs.current.set(key, (permissionEpochs.current.get(key) ?? 0) + 1);
+    if (mode === 'custom') {
+      // The host, not the browser, resolves config.toml and verifies the exact
+      // sandbox, policy and reviewer on the persisted thread before replying.
+      const applied = obj(await request(hostId, 'web/permissionFromConfig', { threadId }, 90_000));
+      if (!['user', 'auto_review', 'guardian_subagent'].includes(text(applied.reviewer))) {
+        throw Error('PERMISSION_NOT_CONFIRMED');
+      }
+      permissionSelections.current.set(key, {
+        mode, profile: text(applied.profile) || null, reviewer: text(applied.reviewer),
+      });
+      setThreadPermissions((all) => ({ ...all, [key]: mode }));
+      return;
+    }
+    const expected = permissionParams(mode);
+    if (!permissions[hostId].some((p) => p.id === expected.permissions && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
+    await request(hostId, 'thread/settings/update', { threadId, ...expected }, 30_000);
+    const actual = obj(await request(hostId, 'thread/resume', { threadId }));
+    if (text(obj(actual.activePermissionProfile).id) !== expected.permissions ||
+        text(actual.approvalsReviewer) !== expected.approvalsReviewer) throw Error('PERMISSION_NOT_CONFIRMED');
+    permissionSelections.current.set(key, {
+      mode, profile: text(obj(actual.activePermissionProfile).id) || null,
+      reviewer: text(actual.approvalsReviewer) || null,
+    });
+    setThreadPermissions((all) => ({ ...all, [key]: mode }));
+  }, [permissions, request]);
+
+  const moveThread = useCallback(async (hostId: HostId, threadId: string, projectId: string) => {
+    const response = obj(await request(hostId, 'thread/metadata/update', { threadId, projectId }));
+    const thread = obj(response.thread);
+    if (thread.id !== threadId || (thread.projectId ?? '') !== projectId) throw Error('MOVE_UNCONFIRMED');
+    setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
+      ? { ...item, project: projectId || null } : item));
+  }, [request]);
+
   const send = useCallback(async (hostId: HostId, existingId: string | null,
     projectId: string | null, value: string, options: SendOptions) => {
     const messageText = value.trim();
@@ -619,11 +667,21 @@ export function useLiveCodex() {
     const running = Boolean(currentThread?.running);
     if (running && !currentThread?.activeTurnId) throw Error('RUNNING_TURN_SYNC_PENDING');
     if (running && (options.plan || options.goal)) throw Error('WAIT_FOR_NEXT_TURN');
-    const response = running
-      ? obj(await request(hostId, 'turn/steer', { threadId: id,
-        input: nativeInput, expectedTurnId: currentThread!.activeTurnId }, 30_000))
-      : obj(await request(hostId, 'turn/start', { threadId: id,
-        input: nativeInput, ...settings }, 30_000));
+    const key = threadKey(hostId, id);
+    if (!running && existingId && options.nextPermission) {
+      try {
+        await setThreadPermission(hostId, id, options.nextPermission);
+      } catch {
+        throw Error('NEXT_PERMISSION_UNCONFIRMED');
+      }
+      options.onPermissionApplied?.();
+    }
+    if (!running) startingTurns.current.add(key);
+    const response = await (running
+      ? request(hostId, 'turn/steer', { threadId: id,
+        input: nativeInput, expectedTurnId: currentThread!.activeTurnId }, 30_000)
+      : request(hostId, 'turn/start', { threadId: id, input: nativeInput, ...settings }, 30_000))
+      .then(obj).finally(() => { if (!running) startingTurns.current.delete(key); });
     const nativeTurnId = running ? text(response.turnId) || currentThread!.activeTurnId! : text(obj(response.turn).id);
     if (!nativeTurnId) throw Error('TURN_UNCONFIRMED');
     if (pathChanges.length) {
@@ -632,12 +690,14 @@ export function useLiveCodex() {
         changes: pathChanges }).catch(() => undefined);
     }
     options.onAccepted?.(id, nativeTurnId, running);
-    const alreadyCompleted = completedTurnIds.current.get(threadKey(hostId, id)) === nativeTurnId;
+    const alreadyCompleted = completedTurnIds.current.get(key) === nativeTurnId;
+    const acknowledgedAt = performance.timeOrigin + performance.now();
     setConversations((all) => all.map((item) => item.hostId === hostId && item.id === id ? {
       ...item, status: alreadyCompleted ? 'idle' : 'running',
       running: !alreadyCompleted, syncPending: false,
       activeTurnId: alreadyCompleted ? null : nativeTurnId,
-      runningSinceMs: alreadyCompleted ? null : item.runningSinceMs ?? Date.now(),
+      runningSinceMs: alreadyCompleted ? null : item.activeTurnId === nativeTurnId
+        ? item.runningSinceMs ?? acknowledgedAt : acknowledgedAt,
       updatedAt: Date.now(),
     } : item));
     // The browser-only optimistic bubble remains visible until the native
@@ -652,7 +712,7 @@ export function useLiveCodex() {
       } catch { return { threadId: id, queued: false, goalFailed: true }; }
     }
     return { threadId: id, queued: false };
-  }, [models, permissions, conversations, request, readThread, refreshGoal, refreshQueue, status, prepareAttachments]);
+  }, [models, permissions, conversations, request, readThread, refreshGoal, refreshQueue, status, prepareAttachments, setThreadPermission]);
 
   const renameThread = useCallback(async (hostId: HostId, threadId: string, name: string) => {
     await request(hostId, 'thread/name/set', { threadId, name });
@@ -669,35 +729,6 @@ export function useLiveCodex() {
     await request(hostId, 'turn/interrupt', { threadId, turnId: item.activeTurnId });
     void readThread(hostId, threadId).catch(() => undefined);
   }, [conversations, readThread, request]);
-
-  const setThreadPermission = useCallback(async (hostId: HostId, threadId: string, mode: PermissionMode) => {
-    const key = threadKey(hostId, threadId);
-    permissionEpochs.current.set(key, (permissionEpochs.current.get(key) ?? 0) + 1);
-    if (mode === 'custom') {
-      // The host, not the browser, resolves config.toml and verifies the exact
-      // sandbox, policy and reviewer on the persisted thread before replying.
-      const applied = obj(await request(hostId, 'web/permissionFromConfig', { threadId }, 90_000));
-      if (!['user', 'auto_review', 'guardian_subagent'].includes(text(applied.reviewer))) {
-        throw Error('PERMISSION_NOT_CONFIRMED');
-      }
-      permissionSelections.current.set(key, {
-        mode, profile: text(applied.profile) || null, reviewer: text(applied.reviewer),
-      });
-      setThreadPermissions((all) => ({ ...all, [key]: mode }));
-      return;
-    }
-    const expected = permissionParams(mode);
-    if (!permissions[hostId].some((p) => p.id === expected.permissions && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
-    await request(hostId, 'thread/settings/update', { threadId, ...expected }, 30_000);
-    const actual = obj(await request(hostId, 'thread/resume', { threadId }));
-    if (text(obj(actual.activePermissionProfile).id) !== expected.permissions ||
-        text(actual.approvalsReviewer) !== expected.approvalsReviewer) throw Error('PERMISSION_NOT_CONFIRMED');
-    permissionSelections.current.set(key, {
-      mode, profile: text(obj(actual.activePermissionProfile).id) || null,
-      reviewer: text(actual.approvalsReviewer) || null,
-    });
-    setThreadPermissions((all) => ({ ...all, [key]: mode }));
-  }, [permissions, request]);
 
   const forkThread = useCallback(async (hostId: HostId, threadId: string, lastTurnId: string) => {
     const original = conversations.find((c) => c.hostId === hostId && c.id === threadId);
@@ -754,6 +785,6 @@ export function useLiveCodex() {
     contextUsages, clearContextUsage,
     request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,
     readAssistantImage, readToolImage,
-    send, interrupt, renameThread, setThreadPermission, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,
+    send, interrupt, renameThread, moveThread, setThreadPermission, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,
   };
 }
