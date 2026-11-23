@@ -3,9 +3,16 @@ import { createReadStream, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, join, extname, sep } from 'node:path';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createImageStore, isValidImageRpc } from './imageStore.mjs';
+import { validDocumentUploadRpc, documentUploadGatewayMethod } from './attachmentProtocol.mjs';
+import { webContentSecurityPolicy } from './securityPolicy.mjs';
+import { resolveSelectedFile, resolveUserTextDetailed, validatePathHosts } from './pathResolver.mjs';
+import { PathSettingsStore } from './pathSettings.mjs';
+import { PathOverlayStore } from './pathOverlays.mjs';
+import { respondLocalIdentity } from './localIdentity.mjs';
+import { NotificationFeed, watchNativeCompletions } from './notificationFeed.mjs';
 
 // This file is copied unchanged to noha's host-only bundle for agent mode.
 // Neither endpoint ever listens on a non-loopback interface.
@@ -13,19 +20,94 @@ const mode = process.argv[2];
 if (!['coordinator', 'agent'].includes(mode)) throw Error('Expected coordinator or agent');
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 process.chdir(mode === 'coordinator' ? resolve(scriptDir, '../..') : resolve(scriptDir, '..'));
+const { WebTitleService } =
+  await import(pathToFileURL(resolve('dist/gateway/webTitleService.js')).href);
+// The browser uses the same native config resolution and strict read-back
+// verification as the mobile Gateway; no client-supplied policy or cwd.
+const { settingsFromNativeDefault, verifyNativePermissionApplied } =
+  await import(pathToFileURL(resolve('dist/gateway/nativePermission.js')).href);
+const { listProjectDirectories, resolveProjectDirectory } =
+  await import(pathToFileURL(resolve('dist/gateway/projectDirectories.js')).href);
+const { createAttachmentUploader } =
+  await import(pathToFileURL(resolve('dist/gateway/attachments.js')).href);
+const { SidebarPinsStore } = mode === 'coordinator'
+  ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
+  : { SidebarPinsStore: null };
+const titleService = new WebTitleService(resolve('.state'));
 const config = JSON.parse(readFileSync(resolve('.state/web-bridge.json'), 'utf8').replace(/^\uFEFF/, ''));
 const credential = readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
 if (!/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');
 const coordinator = mode === 'coordinator';
-if (coordinator && (config.origin !== 'http://100.76.74.124:4190' ||
+const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state')) : null;
+const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json')) : null;
+const pathOverlays = coordinator ? new PathOverlayStore(resolve('.state/file-path-overlays.json')) : null;
+const notificationFeed = coordinator
+  ? new NotificationFeed(resolve('.state/mobile-notification-events.json')) : null;
+if (coordinator && (!/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net:4190$/.test(config.origin) ||
   config.peerUrl !== 'ws://100.96.30.32:4191/peer')) throw Error('Invalid private IP configuration');
 const port = coordinator ? 4190 : 4191;
-const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024, perMessageDeflate: false });
+const automationMethods = new Set([
+  'automation/list', 'automation/inbox', 'automation/runs', 'automation/read',
+  'automation/create', 'automation/update', 'automation/toggle',
+  'automation/delete', 'automation/run',
+]);
+/**
+ * Scheduler is owned by the per-host private Gateway. The Web Bridge must
+ * never open a competing SchedulerService / SQLite writer.
+ */
+async function requestLocalGateway(method, params) {
+  const roster = JSON.parse(readFileSync(resolve('.state/mobile-tailnet-hosts.json'), 'utf8'));
+  const machine = coordinator ? '6v' : 'noha';
+  const entry = Array.isArray(roster) && roster.find((item) => item?.name === machine);
+  const target = new URL(entry?.url ?? '');
+  const parts = target.hostname.split('.').map(Number);
+  if (target.protocol !== 'http:' || target.port !== '48889' ||
+      parts.length !== 4 || parts[0] !== 100 || parts[1] < 64 || parts[1] > 127 ||
+      parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    throw Error('GATEWAY_NOT_CONFIGURED');
+  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    const ws = new WebSocket('ws://' + target.host + '/connect?host=' + machine, {
+      handshakeTimeout: 10000, perMessageDeflate: false,
+    });
+    let settled = false;
+    let sent = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.close();
+      if (error) rejectPromise(error);
+      else resolvePromise(result);
+    };
+    const timer = setTimeout(() => finish(Error('GATEWAY_TIMEOUT')), 45000);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'connect' })));
+    ws.on('message', (frame, binary) => {
+      if (binary) return;
+      let data;
+      try { data = JSON.parse(String(frame)); } catch { return; }
+      if (!sent && data?.type === 'ready') {
+        sent = true;
+        ws.send(JSON.stringify({ id: 1, method, params }));
+      } else if (sent && data?.id === 1 && !data.method) {
+        finish(data.error ? Error(data.error.message || 'AUTOMATION_REQUEST_FAILED') : null,
+          data.result);
+      }
+    });
+    ws.on('error', () => finish(Error('GATEWAY_UNAVAILABLE')));
+    ws.on('close', () => finish(Error('GATEWAY_DISCONNECTED')));
+  });
+}
+const wss = new WebSocketServer({ noServer: true, maxPayload: 384 * 1024, perMessageDeflate: false });
 const assets = resolve('web/dist');
+// Only the coordinator serves browser assets. The private noha agent does not
+// configure a public browser origin and must not evaluate browser-only CSP.
+const contentSecurityPolicy = coordinator ? webContentSecurityPolicy(config.origin) : null;
 const allowedAssets = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.js', 'text/javascript; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'], ['.svg', 'image/svg+xml'],
   ['.png', 'image/png'], ['.ico', 'image/x-icon'],
+  ['.woff2', 'font/woff2'], ['.woff', 'font/woff'], ['.ttf', 'font/ttf'],
 ]);
 let currentConnections = 0;
 function safeEqual(a, b) {
@@ -35,7 +117,7 @@ function safeEqual(a, b) {
 }
 function browserAuthorized(req) {
   // The browser has no login. Restrict the HTTP Host to the chosen private
-  // Tailscale IP:port; the tailnet TCP forwarder is its only remote listener.
+  // Tailscale Serve authority; the Coordinator itself stays on loopback.
   return coordinator && req.headers.host === new URL(config.origin).host;
 }
 function privatePeerAuthorized(req) {
@@ -53,10 +135,83 @@ const server = http.createServer((req, res) => {
   if (req.url === '/healthz' && req.socket.remoteAddress === '127.0.0.1') {
     res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok'); return;
   }
-  if (!coordinator || !browserAuthorized(req) || req.method !== 'GET') {
+  if (respondLocalIdentity(req, res, {
+    hostId: coordinator ? '6v' : 'noha', port, origin: config.origin ?? 'http://100.76.74.124:4190',
+  })) return;
+  if (!coordinator || !browserAuthorized(req)) {
     res.writeHead(403); res.end(); return;
   }
   const name = new URL(req.url ?? '/', 'http://localhost').pathname;
+  if (name === '/api/sidebar-pins' && (req.method === 'GET' || req.method === 'POST')) {
+    const reply = (status, result) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(result));
+    };
+    void (async () => {
+      if (req.method === 'GET') return sidebarPins.list();
+      if (req.headers.origin !== config.origin ||
+          !String(req.headers['content-type'] ?? '').startsWith('application/json'))
+        throw Error('INVALID_REQUEST');
+      let raw = '';
+      for await (const chunk of req) {
+        raw += chunk.toString('utf8');
+        if (raw.length > 2048) throw Error('INVALID_REQUEST');
+      }
+      const body = JSON.parse(raw);
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+          Object.keys(body).length !== 2 || !('pin' in body) || !('pinned' in body))
+        throw Error('INVALID_REQUEST');
+      return sidebarPins.set(body.pin, body.pinned);
+    })().then((result) => reply(200, result)).catch(() => reply(400, { error: 'PINS_REQUEST_FAILED' }));
+    return;
+  }
+  if (name === '/api/file-path-hosts' && (req.method === 'GET' || req.method === 'POST')) {
+    const reply = (status, result) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(result));
+    };
+    void (async () => {
+      if (req.method === 'GET') return pathSettings.read();
+      if (req.headers.origin !== config.origin ||
+          !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+        throw Error('INVALID_REQUEST');
+      }
+      let raw = '';
+      for await (const chunk of req) {
+        raw += chunk.toString('utf8');
+        if (raw.length > 512) throw Error('INVALID_REQUEST');
+      }
+      return pathSettings.save(JSON.parse(raw));
+    })().then((result) => reply(200, result))
+      .catch(() => reply(400, { error: 'PATH_HOSTS_REQUEST_FAILED' }));
+    return;
+  }
+  if (name === '/api/file-path-overlays' && (req.method === 'GET' || req.method === 'POST')) {
+    const reply = (status, result) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(result));
+    };
+    void (async () => {
+      if (req.method === 'GET') {
+        const query = new URL(req.url, config.origin);
+        return pathOverlays.read(query.searchParams.get('host'),
+          query.searchParams.get('thread'));
+      }
+      if (req.headers.origin !== config.origin ||
+          !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+        throw Error('INVALID_REQUEST');
+      }
+      let raw = '';
+      for await (const chunk of req) {
+        raw += chunk.toString('utf8');
+        if (raw.length > 20000) throw Error('INVALID_REQUEST');
+      }
+      return pathOverlays.save(JSON.parse(raw));
+    })().then((result) => reply(200, result))
+      .catch(() => reply(400, { error: 'PATH_OVERLAY_REQUEST_FAILED' }));
+    return;
+  }
+  if (req.method !== 'GET') { res.writeHead(403); res.end(); return; }
   const relative = name === '/' ? '/index.html' : name;
   let decoded;
   try { decoded = decodeURIComponent(relative); } catch { res.writeHead(400); res.end(); return; }
@@ -65,7 +220,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end(); return;
   }
   res.setHeader('Content-Type', allowedAssets.get(extname(target)));
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader('Content-Security-Policy', contentSecurityPolicy);
   createReadStream(target).on('error', () => { if (!res.headersSent) res.writeHead(500); res.end(); }).pipe(res);
 });
 
@@ -82,13 +237,34 @@ function validPermissions(p) {
 }
 function validTextInput(input, withImages = false) {
   return Array.isArray(input) && input.length >= 1 &&
-    input.length <= (withImages ? 5 : 1) && input[0]?.type === 'text' &&
-    typeof input[0]?.text === 'string' && input[0].text.trim().length > 0 &&
+    input.length <= (withImages ? 13 : 9) && input[0]?.type === 'text' &&
+    typeof input[0]?.text === 'string' && (input[0].text.trim().length > 0 || input.length > 1) &&
     input[0].text.length <= 12_000 && subset(input[0], ['type','text']) &&
-    (withImages || input.length === 1) &&
-    input.slice(1).every((item) => item?.type === 'localImage' &&
-      subset(item, ['type','path']) && typeof item.path === 'string' &&
-      item.path.length > 0 && item.path.length <= 400);
+    input.filter((item) => item?.type === 'localImage').length <= (withImages ? 4 : 0) &&
+    input.filter((item) => ['mention', 'skill'].includes(item?.type)).length <= 8 &&
+    input.slice(1).every((item) => {
+      if (!item || typeof item !== 'object') return false;
+      if (item.type === 'localImage') return withImages && subset(item, ['type','path']) &&
+        typeof item.path === 'string' && item.path.length > 0 && item.path.length <= 400;
+      if (!['mention','skill'].includes(item.type) || !subset(item, ['type','name','path']) ||
+        typeof item.name !== 'string' || item.name.length < 1 || item.name.length > 100 ||
+        typeof item.path !== 'string' || item.path.length > 4096) return false;
+      return item.type === 'mention' ? /^(app|plugin):\/\/[^\s]+$/.test(item.path)
+        : /^(?:[A-Za-z]:[\\/]|\/).+[/\\]SKILL\.md$/i.test(item.path);
+    });
+}
+/** Query-only RPCs share one minimal policy instead of per-feature bridge handlers. */
+function catalogFrame(method, p) {
+  if (!/^(skills|app|plugin)\/(list|installed)$/.test(method)) return false;
+  return Object.entries(p).every(([key, value]) => {
+    if (key === 'cwds') return Array.isArray(value) && value.length <= 1 &&
+      value.every((cwd) => typeof cwd === 'string' && cwd.length <= 4096 &&
+        (/^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith('/')));
+    if (key === 'threadId') return validId(value);
+    if (key === 'cursor') return typeof value === 'string' && value.length > 0 && value.length <= 1024;
+    if (key === 'limit') return Number.isInteger(value) && value >= 1 && value <= 100;
+    return (key === 'forceReload' || key === 'forceRefetch') && typeof value === 'boolean';
+  });
 }
 function validCollaborationMode(mode, model) {
   if (mode === undefined) return true;
@@ -111,6 +287,70 @@ function allowedFrame(msg) {
       Array.isArray(msg.params) || !subset(msg, ['id', 'method', 'params'])) return false;
   const p = msg.params;
   if (msg.method.startsWith('web/image/')) return isValidImageRpc(msg.method, p);
+  if (msg.method.startsWith('web/attachment/')) return validDocumentUploadRpc(msg.method, p);
+  if (msg.method === 'web/pathResolve') return subset(p, ['text', 'hosts']) &&
+    Object.keys(p).length === 2 && typeof p.text === 'string' &&
+    p.text.length <= 12000 && p.hosts && typeof p.hosts === 'object' &&
+    !Array.isArray(p.hosts) && JSON.stringify(p.hosts).length <= 512 &&
+    (() => { try { validatePathHosts(p.hosts); return true; } catch { return false; } })();
+  if (msg.method === 'web/pathFile') return subset(p, ['path', 'sourceHost', 'hosts']) &&
+    Object.keys(p).length === 3 && typeof p.path === 'string' &&
+    p.path.length <= 2048 && ['6v', 'noha'].includes(p.sourceHost) &&
+    p.hosts && typeof p.hosts === 'object' && !Array.isArray(p.hosts) &&
+    JSON.stringify(p.hosts).length <= 512 &&
+    (() => { try { validatePathHosts(p.hosts); return true; } catch { return false; } })();
+  if (msg.method === 'web/automation') {
+    return subset(p, ['method', 'params']) && Object.keys(p).length === 2 &&
+      automationMethods.has(p.method) && p.params && typeof p.params === 'object' &&
+      !Array.isArray(p.params) && JSON.stringify(p.params).length <= 32000;
+  }
+  if (msg.method === 'web/hostFile') {
+    if (!subset(p, ['method', 'params']) || Object.keys(p).length !== 2 ||
+        !['workspace/hostFileRead', 'workspace/hostFileWrite'].includes(p.method) ||
+        !p.params || typeof p.params !== 'object' || Array.isArray(p.params)) return false;
+    const f = p.params;
+    if (!['globalRules', 'projectRules', 'config'].includes(f.kind) ||
+        Object.keys(f).some((key) => ![
+          'kind', 'projectId', 'rootIndex', 'text', 'revision', 'filename',
+        ].includes(key))) return false;
+    if (f.kind === 'projectRules') {
+      if (typeof f.projectId !== 'string' || !/^[\w-]{1,128}$/.test(f.projectId) ||
+          (f.rootIndex !== undefined && (!Number.isInteger(f.rootIndex) ||
+          f.rootIndex < 0 || f.rootIndex > 31))) return false;
+    } else if (f.projectId !== undefined || f.rootIndex !== undefined) return false;
+    if (p.method === 'workspace/hostFileRead') return subset(f, ['kind','projectId','rootIndex']);
+    return typeof f.text === 'string' && Buffer.byteLength(f.text, 'utf8') <= 262144 &&
+      !f.text.includes(String.fromCharCode(0)) && typeof f.revision === 'string' &&
+      /^(missing|sha256:[a-f0-9]{64})$/.test(f.revision) &&
+      ['AGENTS.md', 'AGENTS.override.md', 'config.toml'].includes(f.filename);
+  }
+  if (msg.method === 'web/publication') {
+    if (!subset(p, ['method','params']) || Object.keys(p).length !== 2 ||
+        !['workspace/publication/list','workspace/publication/read'].includes(p.method) ||
+        !p.params || typeof p.params !== 'object' || Array.isArray(p.params)) return false;
+    const f = p.params;
+    if (p.method === 'workspace/publication/list') return subset(f,['threadId']) &&
+      typeof f.threadId === 'string' && /^[a-f\d-]{36}$/i.test(f.threadId);
+    return subset(f,['id','offset']) && Object.keys(f).length === 2 &&
+      typeof f.id === 'string' && /^[a-f0-9]{64}$/.test(f.id) &&
+      Number.isSafeInteger(f.offset) && f.offset >= 0;
+  }
+  if (msg.method === 'web/projectDirectories') {
+    return subset(p, ['locator']) &&
+      (p.locator === undefined || typeof p.locator === 'string' &&
+        /^r\d{1,2}(?:\/[\w%.-]+){0,13}$/.test(p.locator) && p.locator.length <= 1600);
+  }
+  if (msg.method === 'web/projectCreate') {
+    return subset(p, ['name', 'locator', 'idempotencyKey']) &&
+      Object.keys(p).length === 3 &&
+      typeof p.name === 'string' && [...p.name.trim()].length >= 1 &&
+      [...p.name].length <= 80 && !/[\x00-\x1f]/.test(p.name) &&
+      typeof p.locator === 'string' && /^r\d{1,2}(?:\/[\w%.-]+){0,13}$/.test(p.locator) &&
+      p.locator.length <= 1600 &&
+      typeof p.idempotencyKey === 'string' &&
+      /^\d{13}-[a-f0-9]{16,40}$/.test(p.idempotencyKey);
+  }
+  if (catalogFrame(msg.method, p)) return true;
   if (msg.method === 'web/start') return subset(p, ['projectId','permissions','approvalsReviewer']) &&
     (p.projectId === null || validId(p.projectId)) &&
     validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => key !== 'projectId')));
@@ -125,10 +365,18 @@ function allowedFrame(msg) {
   if (msg.method === 'thread/read') return subset(p, ['threadId', 'includeTurns']) &&
     validId(p.threadId) && p.includeTurns === true;
   if (msg.method === 'thread/resume') return subset(p, ['threadId']) && validId(p.threadId);
+  if (msg.method === 'web/permissionFromConfig') return subset(p, ['threadId']) &&
+    typeof p.threadId === 'string' && /^[0-9a-f-]{36}$/i.test(p.threadId);
+  if (msg.method === 'thread/fork') return subset(p, ['threadId','lastTurnId','excludeTurns']) &&
+    validId(p.threadId) && validId(p.lastTurnId) && p.excludeTurns === true;
+  if (msg.method === 'thread/settings/update') return subset(p, ['threadId','permissions','approvalsReviewer']) &&
+    validId(p.threadId) && typeof p.permissions === 'string' &&
+    validPermissions({ permissions: p.permissions, approvalsReviewer: p.approvalsReviewer });
   if (msg.method === 'project/read') return subset(p, ['projectId']) && validId(p.projectId);
   if (msg.method === 'model/list') return subset(p, ['limit', 'cursor']) &&
     (p.limit === undefined || p.limit === 100) && (p.cursor === undefined || validId(p.cursor));
   if (msg.method === 'permissionProfile/list') return Object.keys(p).length === 0;
+  if (msg.method === 'account/rateLimits/read') return Object.keys(p).length === 0;
   if (msg.method === 'turn/start') return subset(p, ['threadId','input','model','effort',
     'permissions','approvalsReviewer','collaborationMode']) &&
     validId(p.threadId) && validTextInput(p.input, true) &&
@@ -137,7 +385,7 @@ function allowedFrame(msg) {
     validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => ['permissions','approvalsReviewer'].includes(key)))) &&
     validCollaborationMode(p.collaborationMode, p.model);
   if (msg.method === 'turn/steer') return subset(p, ['threadId','input','expectedTurnId']) &&
-    validId(p.threadId) && validId(p.expectedTurnId) && validTextInput(p.input);
+    validId(p.threadId) && validId(p.expectedTurnId) && validTextInput(p.input, true);
   if (msg.method === 'thread/queue/list') return subset(p, ['threadId','limit','cursor']) &&
     validId(p.threadId) && p.limit === 100 && (p.cursor === undefined || validId(p.cursor));
   if (msg.method === 'thread/queue/add') return subset(p, ['threadId','clientUserMessageId','input']) &&
@@ -158,6 +406,11 @@ function allowedFrame(msg) {
   if (msg.method === 'thread/archive' || msg.method === 'thread/unarchive') {
     return subset(p, ['threadId']) && validId(p.threadId);
   }
+  if (msg.method === 'thread/delete') return subset(p, ['threadId']) && validId(p.threadId);
+  if (msg.method === 'thread/name/set') return subset(p, ['threadId','name']) &&
+    validId(p.threadId) && typeof p.name === 'string' &&
+    [...p.name.trim()].length >= 1 && [...p.name.trim()].length <= 80 &&
+    !/[\x00-\x1f]/.test(p.name);
   return false;
 }
 
@@ -167,6 +420,8 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   let upstreamReady = false;
   const pendingApprovals = new Set();
   const pendingInternal = new Map();
+  const createdHere = new Map();
+  const firstTurnRequests = new Map();
   let internalId = 1_000_000_000;
   const internalRequest = (method, params) => new Promise((resolvePromise, rejectPromise) => {
     if (!upstreamReady) { rejectPromise(Error('HOST_OFFLINE')); return; }
@@ -179,9 +434,17 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   // noha Agent validates uploaded-file ownership on its own local connection.
   const images = remotePeer ? null : createImageStore(resolve('.state'), (threadId) =>
     internalRequest('thread/read', { threadId, includeTurns: true }));
+  const documents = remotePeer ? null : createAttachmentUploader();
   const safeSend = (frame) => {
     if (browser.readyState === WebSocket.OPEN) browser.send(String(frame), { binary: false });
   };
+  function titleInput(input) {
+    const raw = Array.isArray(input) && typeof input[0]?.text === 'string' ? input[0].text : '';
+    const delimiter = '\n\n## My request for Codex:\n\n';
+    const visible = raw.startsWith('# Files mentioned by the user:\n\n')
+      ? raw.split(delimiter).slice(1).join(delimiter) : raw;
+    return /^请查看我附带的图片[。]?$/.test(visible.trim()) ? '' : visible.trim();
+  }
   async function prepareStart(request) {
     const projectId = request.params.projectId;
     let cwd;
@@ -208,8 +471,12 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
           !profiles.data.some((profile) => profile?.id === requested.permissions && profile.allowed === true))
         throw Error('PERMISSION_NOT_ALLOWED');
     }
-    return internalRequest('thread/start', { cwd, ...(projectId ? { projectId } : {}),
-      ...requested, ...(!projectId && !requested.permissions ? { sandbox: 'workspace-write', approvalPolicy: 'on-request' } : {}) });
+    // Omitted permission fields always mean the effective native config.toml,
+    // including for a new chat without a named project.
+    const started = await internalRequest('thread/start', { cwd, ...(projectId ? { projectId } : {}),
+      ...requested });
+    if (started?.thread?.id) createdHere.set(started.thread.id, { cwd });
+    return started;
   }
   upstream.on('open', () => {
     upstreamReady = !remotePeer;
@@ -219,6 +486,13 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     if (binary) return;
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
+    if (notificationFeed && msg?.method === 'turn/completed') {
+      const hostId = remotePeer ? 'noha' : '6v';
+      void notificationFeed.observe(hostId, msg.params,
+        (host, thread, turnId) => notificationFeed.titleReaders.get(host)?.(host, thread, turnId)
+          ?? internalRequest('thread/read', { threadId: thread, includeTurns: true }))
+        .catch(() => undefined);
+    }
     if (remotePeer && msg.type === 'ready') upstreamReady = true;
     if (Number.isSafeInteger(msg.id) && typeof msg.method === 'string' &&
       ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(msg.method)) {
@@ -231,10 +505,19 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       else pending.resolvePromise(msg.result);
       return;
     }
+    if (typeof msg.id === 'number' && firstTurnRequests.has(msg.id)) {
+      const pending = firstTurnRequests.get(msg.id);
+      firstTurnRequests.delete(msg.id);
+      if (!msg.error && (msg.result?.turn?.id || pending.goal && msg.result)) {
+        try { if (pending.message) titleService.enqueue(pending.threadId, pending.cwd, pending.message); }
+        catch { /* Title is optional; an accepted turn must remain accepted. */ }
+        createdHere.delete(pending.threadId);
+      }
+    }
     safeSend(data);
   });
   browser.on('message', (data, binary) => {
-    if (binary || data.length > 128 * 1024) { browser.close(1008); return; }
+    if (binary || data.length > 384 * 1024) { browser.close(1008); return; }
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { browser.close(1008); return; }
     if (Number.isSafeInteger(msg?.id) && pendingApprovals.has(msg.id) &&
@@ -251,13 +534,108 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       return;
     }
     if (!upstreamReady) { safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'HOST_OFFLINE' } })); return; }
-    if (msg.method.startsWith('web/image/') && !remotePeer) {
+    if (!remotePeer && msg.method === 'thread/name/set') {
+      // A requested manual rename takes precedence even if an independent
+      // background title generation is already in flight.
+      titleService.cancel(msg.params.threadId);
+    }
+    if (!remotePeer && (msg.method === 'turn/start' || msg.method === 'thread/goal/set')) {
+      const owned = createdHere.get(msg.params.threadId);
+      if (owned && msg.method === 'turn/start') {
+        const firstMessage = titleInput(msg.params.input);
+        firstTurnRequests.set(msg.id, {
+          threadId: msg.params.threadId, cwd: owned.cwd, message: firstMessage, goal: false,
+        });
+      } else if (owned && msg.method === 'thread/goal/set' && msg.params.objective) {
+        firstTurnRequests.set(msg.id, {
+          threadId: msg.params.threadId, cwd: owned.cwd, message: msg.params.objective, goal: true,
+        });
+      }
+    }
+    if (msg.method.startsWith('web/attachment/') && !remotePeer) {
+      const method = documentUploadGatewayMethod(msg.method);
+      void documents.handle(method, method === 'workspace/attachmentStart'
+        ? { ...msg.params, kind: 'file' } : msg.params)
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: {
+          code: -32602, message: 'DOCUMENT_UPLOAD_REJECTED',
+        } })));
+    } else if (msg.method === 'web/pathResolve' && !remotePeer) {
+      void resolveUserTextDetailed(msg.params.text, coordinator ? '6v' : 'noha',
+        validatePathHosts(msg.params.hosts))
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: {
+          code: -32602, message: 'PATH_RESOLVE_FAILED',
+        } })));
+    } else if (msg.method === 'web/pathFile' && !remotePeer) {
+      void resolveSelectedFile(msg.params.path, msg.params.sourceHost,
+        coordinator ? '6v' : 'noha', validatePathHosts(msg.params.hosts))
+        .then((path) => safeSend(JSON.stringify({ id: msg.id, result: { path } })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, result: { path: null } })));
+    } else if (['web/automation', 'web/hostFile', 'web/publication'].includes(msg.method) && !remotePeer) {
+      void requestLocalGateway(msg.params.method, msg.params.params)
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch((error) => safeSend(JSON.stringify({ id: msg.id, error: {
+          code: -32000, message: error.message || 'AUTOMATION_UNCONFIRMED',
+        } })));
+    } else if (msg.method === 'web/projectDirectories' && !remotePeer) {
+      void listProjectDirectories(msg.params.locator)
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: {
+          code: -32602, message: 'PROJECT_DIRECTORIES_UNAVAILABLE',
+        } })));
+    } else if (msg.method === 'web/projectCreate' && !remotePeer) {
+      void (async () => {
+        const cwd = await resolveProjectDirectory(msg.params.locator);
+        return internalRequest('project/create', {
+          name: msg.params.name.trim(), roots: [{ path: cwd }],
+          idempotencyKey: msg.params.idempotencyKey,
+        });
+      })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: {
+          code: -32000, message: 'PROJECT_CREATE_UNCONFIRMED',
+        } })));
+    } else if (msg.method.startsWith('web/image/') && !remotePeer) {
       void images.handle(msg.method, msg.params)
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_REQUEST_REJECTED' } })));
-    } else if (msg.method === 'turn/start' && !remotePeer &&
+    } else if ((msg.method === 'turn/start' || msg.method === 'turn/steer') && !remotePeer &&
       msg.params.input.slice(1).some((item) => !images.owns(item.path))) {
       safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_NOT_UPLOADED_ON_THIS_CONNECTION' } }));
+    } else if (msg.method === 'web/permissionFromConfig' && !remotePeer) {
+      void (async () => {
+        const threadId = msg.params.threadId;
+        const snapshot = await internalRequest('thread/read', { threadId, includeTurns: true });
+        const thread = snapshot?.thread;
+        if (thread?.id !== threadId || typeof thread.cwd !== 'string' || !thread.cwd) {
+          throw Error('THREAD_NOT_FOUND');
+        }
+        const turns = Array.isArray(thread.turns) ? thread.turns : [];
+        if (['inProgress', 'running', 'in_progress'].includes(String(turns.at(-1)?.status))) {
+          throw Error('THREAD_BUSY');
+        }
+        const resolved = settingsFromNativeDefault(await internalRequest('thread/start', {
+          cwd: thread.cwd, ephemeral: true,
+        }));
+        await internalRequest('thread/settings/update', { threadId, ...resolved.update });
+        return verifyNativePermissionApplied(
+          await internalRequest('thread/resume', { threadId }), resolved.expected);
+      })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch((error) => {
+          const known = new Set(['THREAD_NOT_FOUND', 'THREAD_BUSY',
+            'NATIVE_DEFAULT_UNAVAILABLE', 'NATIVE_PERMISSION_NOT_CONFIRMED']);
+          const message = known.has(error?.message) ? error.message : 'CUSTOM_PERMISSION_UPDATE_FAILED';
+          safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message } }));
+        });
+    } else if (msg.method === 'thread/settings/update' && !remotePeer) {
+      void internalRequest('permissionProfile/list', {}).then((profiles) => {
+        if (!Array.isArray(profiles?.data) || !profiles.data.some((profile) =>
+          profile?.id === msg.params.permissions && profile.allowed === true)) {
+          throw Error('PERMISSION_NOT_ALLOWED');
+        }
+        return internalRequest('thread/settings/update', msg.params);
+      }).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'PERMISSION_UPDATE_REJECTED' } })));
     } else if (msg.method === 'web/start' && !remotePeer) {
       void prepareStart(msg).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'THREAD_START_UNCONFIRMED' } })));
@@ -266,6 +644,7 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   const close = () => {
     upstreamReady = false;
     images?.dispose();
+    documents?.dispose();
     for (const pending of pendingInternal.values()) { clearTimeout(pending.timer); pending.rejectPromise(Error('DISCONNECTED')); }
     pendingInternal.clear();
     if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) upstream.close();
@@ -279,13 +658,18 @@ server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (currentConnections >= 12) { reject(socket, 429); return; }
   if (coordinator) {
-    if (url.pathname !== '/api/connect' || !browserAuthorized(req) ||
-        req.headers.origin !== config.origin ||
-        !['6v', 'noha'].includes(url.searchParams.get('host'))) { reject(socket); return; }
+    if (!browserAuthorized(req) || req.headers.origin !== config.origin ||
+        (url.pathname === '/api/connect'
+          ? !['6v', 'noha'].includes(url.searchParams.get('host'))
+          : url.pathname !== '/api/notifications')) { reject(socket); return; }
   } else if (url.pathname !== '/peer' || !privatePeerAuthorized(req)) { reject(socket); return; }
   wss.handleUpgrade(req, socket, head, (client) => {
     currentConnections++;
     client.once('close', () => { currentConnections--; });
+    if (coordinator && url.pathname === '/api/notifications') {
+      notificationFeed.subscribe(client);
+      return;
+    }
     if (coordinator && url.searchParams.get('host') === 'noha') {
       attachRelay(client, config.peerUrl, { Authorization: 'Bearer ' + credential });
     } else attachRelay(client, 'ws://127.0.0.1:45891');
@@ -293,3 +677,9 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(port, '127.0.0.1', () => { console.log('Web bridge mode=' + mode + ' listening on loopback port ' + port); });
+if (notificationFeed) {
+  watchNativeCompletions(notificationFeed, '6v', 'ws://127.0.0.1:45891');
+  watchNativeCompletions(notificationFeed, 'noha', config.peerUrl, {
+    Authorization: 'Bearer ' + credential,
+  });
+}

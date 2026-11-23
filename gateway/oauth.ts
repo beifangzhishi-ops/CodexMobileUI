@@ -1,10 +1,12 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export const PUBLIC_CLIENT_ID = 'codexmobileui-android';
 const ACCESS_MS = 15 * 60_000;
 const REFRESH_MS = 30 * 24 * 60 * 60_000;
+// The old refresh credential can only recover the SAME unfinished exchange.
+const PENDING_REFRESH_MS = 30 * 60_000;
 const AUTHORIZATION_CODE_MS = 10 * 60_000;
 
 export interface AuthorizationRequest {
@@ -28,6 +30,14 @@ interface StoredToken {
 interface StoredState {
   access: Record<string, StoredToken>;
   refresh: Record<string, StoredToken>;
+  pending?: Record<string, PendingRefresh>;
+}
+
+interface PendingRefresh {
+  family: string;
+  requestHash: string;
+  nextRefreshHash: string;
+  expires: number;
 }
 
 export interface Tokens {
@@ -35,6 +45,7 @@ export interface Tokens {
   access_token: string;
   refresh_token: string;
   expires_in: number;
+  refresh_confirmation_required?: boolean;
 }
 
 function random(): string {
@@ -71,6 +82,7 @@ export class OAuthStore {
     this.state = existsSync(stateFile)
       ? JSON.parse(readFileSync(stateFile, 'utf8')) as StoredState
       : { access: {}, refresh: {} };
+    this.state.pending ??= {};
     this.codeFile = stateFile + '.codes';
     this.codes = existsSync(this.codeFile)
       ? JSON.parse(readFileSync(this.codeFile, 'utf8')) as Record<string, Code>
@@ -132,16 +144,87 @@ export class OAuthStore {
     return this.mint(random());
   }
 
-  refresh(token: string): Tokens {
+  refresh(token: string, requestId?: string): Tokens {
     const id = hash(token);
     const item = this.state.refresh[id];
     if (!item || item.expires < this.now()) {
-      delete this.state.refresh[id];
       throw new AuthorizationError('invalid_grant');
     }
+    if (requestId !== undefined) {
+      if (!/^[a-f0-9]{64}$/.test(requestId)) throw new AuthorizationError('invalid_request');
+      const requestHash = hash(requestId);
+      const pending = this.state.pending![id];
+      if (pending) {
+        if (pending.expires <= this.now() || pending.requestHash !== requestHash) {
+          throw new AuthorizationError('invalid_grant');
+        }
+        const repeated = this.derivedTokens(token, requestId);
+        const access = this.state.access[hash(repeated.access_token)];
+        if (!access || access.family !== pending.family) throw new AuthorizationError('invalid_grant');
+        // Replays must return the SAME credentials, but a lost reply may have
+        // consumed part of the original 15-minute access-token lifetime.
+        access.expires = this.now() + ACCESS_MS;
+        this.persist();
+        return repeated;
+      }
+      // A staged new credential must be acknowledged before it can rotate again.
+      if (Object.values(this.state.pending!).some((value) =>
+        value.nextRefreshHash === id && value.expires > this.now())) {
+        throw new AuthorizationError('invalid_grant');
+      }
+      const next = this.derivedTokens(token, requestId);
+      this.state.access[hash(next.access_token)] = {
+        family: item.family, expires: this.now() + ACCESS_MS,
+      };
+      this.state.refresh[hash(next.refresh_token)] = {
+        family: item.family, expires: this.now() + REFRESH_MS,
+      };
+      this.state.pending![id] = {
+        family: item.family, requestHash,
+        nextRefreshHash: hash(next.refresh_token), expires: this.now() + PENDING_REFRESH_MS,
+      };
+      this.cleanup();
+      this.persist();
+      return next;
+    }
+    // Older installed APKs still use the original one-shot refresh protocol.
+    if (this.state.pending![id]) throw new AuthorizationError('invalid_grant');
     delete this.state.refresh[id];
     const next = this.mint(item.family);
     return next;
+  }
+
+  /** The phone calls this ONLY after its new token pair is persisted. */
+  confirmRefresh(token: string, requestId: string): void {
+    if (!/^[a-f0-9]{64}$/.test(requestId) || !token || token.length > 256) {
+      throw new AuthorizationError('invalid_request');
+    }
+    const id = hash(token);
+    const active = this.state.refresh[id];
+    if (!active || active.expires <= this.now()) throw new AuthorizationError('invalid_grant');
+    for (const [oldId, pending] of Object.entries(this.state.pending!)) {
+      if (pending.nextRefreshHash !== id) continue;
+      if (pending.requestHash !== hash(requestId)) throw new AuthorizationError('invalid_grant');
+      delete this.state.pending![oldId];
+      delete this.state.refresh[oldId];
+      this.persist();
+      return;
+    }
+    // An ACK may be retried after the server persisted the first ACK.
+    // The live new refresh credential is sufficient proof for an idempotent ACK.
+  }
+
+  private derivedTokens(token: string, requestId: string): Tokens {
+    const derive = (purpose: 'access' | 'refresh') =>
+      createHmac('sha256', this.approvalSecret)
+        .update(JSON.stringify(['mobile-refresh-v1', purpose, token, requestId]))
+        .digest('base64url');
+    return {
+      token_type: 'Bearer',
+      access_token: derive('access'), refresh_token: derive('refresh'),
+      expires_in: ACCESS_MS / 1000,
+      refresh_confirmation_required: true,
+    };
   }
 
   verify(token: string): boolean {
@@ -159,6 +242,9 @@ export class OAuthStore {
     }
     for (const key of Object.keys(this.state.refresh)) {
       if (this.state.refresh[key].family === record.family) delete this.state.refresh[key];
+    }
+    for (const key of Object.keys(this.state.pending!)) {
+      if (this.state.pending![key].family === record.family) delete this.state.pending![key];
     }
     this.persist();
   }
@@ -188,6 +274,13 @@ export class OAuthStore {
     for (const bucket of [this.state.access, this.state.refresh]) {
       for (const [id, item] of Object.entries(bucket)) {
         if (item.expires < this.now()) delete bucket[id];
+      }
+    }
+    for (const [id, item] of Object.entries(this.state.pending!)) {
+      if (item.expires <= this.now()) {
+        // Never allow a timed-out old token to start a second rotation.
+        delete this.state.refresh[id];
+        delete this.state.pending![id];
       }
     }
   }

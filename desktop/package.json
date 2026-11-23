@@ -1,0 +1,18 @@
+{
+  "name": "codex-mobile-ui-desktop",
+  "productName": "CodexMobileUI",
+  "version": "0.1.0",
+  "description": "Private Windows desktop shell for the shared CodexMobileUI React client",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test --test-isolation=none tests/*.test.cjs",
+    "smoke": "electron smoke.cjs",
+    "package:win": "node package-win.cjs"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "@electron/packager": "^19.0.0"
+  }
+}

@@ -94,7 +94,8 @@ const invalidPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 
 export type OAuthAuditEvent =
   'consent_denied' | 'consent_granted' | 'authorization_invalid' |
-  'oauth_invalid_grant' | 'oauth_token_issued' | 'oauth_token_refreshed';
+  'oauth_invalid_grant' | 'oauth_token_issued' | 'oauth_token_refreshed' |
+  'oauth_token_confirmed';
 
 /** No consent values, URLs, codes, access tokens, refresh tokens or secrets. */
 function defaultAudit(event: OAuthAuditEvent): void {
@@ -201,11 +202,23 @@ export function createHttpHandler(
         const tokens = grantType === 'authorization_code'
           ? store.exchange(data.get('code') ?? '', data.get('code_verifier') ?? '', data.get('redirect_uri') ?? '')
           : grantType === 'refresh_token'
-            ? store.refresh(data.get('refresh_token') ?? '')
+            ? store.refresh(data.get('refresh_token') ?? '',
+              data.has('refresh_request_id') ? data.get('refresh_request_id') ?? '' : undefined)
             : null;
         if (!tokens) throw new AuthorizationError('unsupported_grant_type');
         recordAudit(grantType === 'refresh_token' ? 'oauth_token_refreshed' : 'oauth_token_issued');
         send(res, 200, tokens);
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/oauth/refresh/confirm') {
+        const data = await body(req);
+        if (data.get('client_id') !== PUBLIC_CLIENT_ID) {
+          throw new AuthorizationError('invalid_client');
+        }
+        store.confirmRefresh(data.get('refresh_token') ?? '',
+          data.get('refresh_request_id') ?? '');
+        recordAudit('oauth_token_confirmed');
+        send(res, 200, { confirmed: true });
         return;
       }
       if (req.method === 'POST' && url.pathname === '/oauth/revoke') {

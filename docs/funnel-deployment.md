@@ -1,4 +1,20 @@
-# MobileUI Gateway and Tailscale Funnel
+# MobileUI Gateway and Tailscale Funnel (retired mobile public entry)
+
+**Current configuration, 2026-11-20:** Android no longer uses Funnel or
+OAuth to reach MobileUI Gateways. The single entry is
+`http://100.76.74.124:48889` within the Tailnet. Both hosts listen
+on their Tailnet interfaces and localhost at port 48889; neither
+listens at 48888. The former mobile HTTPS Funnel at 8443 has been
+explicitly disabled on **both 6v and noha**, with unrelated Funnel
+and Tailscale Serve configurations preserved. The historical public
+deployment notes below describe the *retired* topology, not a
+fallback. New Android APK/device testing remains outstanding.
+
+The new assistant file publication snapshots remain accessible only through
+the existing authenticated WSS connection and bounded publication RPCs.
+They are not CCM public links, do not introduce an unauthenticated file URL,
+and do not alter Funnel routing. Publishing source code does not activate the
+RPCs on either host until a separately approved Gateway deployment.
 
 ## Network topology and current state
 
@@ -13,7 +29,7 @@ Android HTTPS/WSS :8443 -> Tailscale Funnel
 
 Only the Gateway is eligible for public Funnel routing. The native App Server is always loopback-only. Do not change unrelated existing Funnel port mappings, Windows proxy settings or any other client processes. The Gateway and native backend are separately managed; see [mobile-host.md](mobile-host.md).
 
-**Deployment state (2026-11-12):** 6v's private native backend is healthy and independently signed into Codex. The existing Gateway listens at 48888 and its upstream targets only the dedicated native backend at 45891. A real public HTTPS Funnel 8443 test succeeded for OAuth wrong-key retry, PKCE token exchange, authenticated WSS and native thread/list and thread/read. A single completed native model turn was saved in the independent private home and its user/assistant messages were read back over the public authorized relay. This is host-side verification, **not physical Android app acceptance**. On noha, the owner paused private backend deployment; existing services and Funnel routing remain unchanged.
+**Deployment state (2026-11-13):** 6v's private native backend is healthy and independently signed into Codex. Its previously verified public HTTPS Funnel 8443 passed OAuth PKCE, authenticated WSS and native thread/list/read. On noha, the local backend and OAuth Gateway were consolidated from `host-runtime` into the single Host-only checkout root: both listeners were healthy on 45891 and 48888, the Gateway was moved to a Limited Windows user scheduled task, and both resulting processes had `TokenIsRestricted=0`. noha's host-local `.env` and OAuth state were preserved byte-for-byte; its Tailscale Funnel settings were not altered. The **noha public HTTPS/PKCE/WSS path has not been retested after this migration**, nor has physical Android acceptance.
 
 ## Local private configuration
 
@@ -53,7 +69,8 @@ For host-side backend switching, first run the private backend on its dedicated 
 - [x] 6v native Codex model login completed in the isolated profile.
 - [x] 6v existing OAuth secret and Funnel routes preserved.
 - [x] 6v Gateway 48888 started and public Funnel authentication relayed native thread/list to 45891.
-- [ ] noha separate backend, login, Gateway cutover and HTTPS Funnel/WSS relay verification.
+- [x] noha separate private backend and root-only Gateway cutover, healthy loopback listeners, Windows normal-user tokens and preserved local OAuth state.
+- [ ] noha post-migration public HTTPS Funnel / OAuth PKCE / authenticated WSS verification.
 - [ ] Real Android login, project selection, new chat, inference and recovery tested end to end.
 
 The earlier OAuth and public-network checks validated the Gateway design, but do not imply this new isolated backend has already passed end-to-end testing.

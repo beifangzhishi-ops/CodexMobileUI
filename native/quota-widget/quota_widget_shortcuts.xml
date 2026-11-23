@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="add_quota_widget"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/quota_widget_shortcut_short"
+        android:shortcutLongLabel="@string/quota_widget_shortcut_long">
+        <intent
+            android:action="dev.codexmobileui.app.action.PIN_QUOTA_WIDGET"
+            android:targetPackage="dev.codexmobileui.app"
+            android:targetClass="dev.codexmobileui.app.QuotaWidgetPinActivity" />
+    </shortcut>
+</shortcuts>

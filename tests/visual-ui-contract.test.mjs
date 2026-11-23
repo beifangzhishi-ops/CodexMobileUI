@@ -2,76 +2,103 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const read = (relative) => readFileSync(new URL('../' + relative, import.meta.url), 'utf8');
+const read = (path) => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 const app = read('App.tsx');
-const chat = read('src/ui/ChatView.tsx');
-const sidebar = read('src/ui/ChatSidebar.tsx');
-const picker = read('src/ui/ChatSetupPicker.tsx');
-const menu = read('src/ui/ConversationMenu.tsx');
-const account = read('src/ui/AccountScreen.tsx');
-const session = read('src/session/useCodexSession.ts');
-const preferences = read('src/ui/preferences.ts');
-const rpcPolicy = read('gateway/rpcPolicy.ts');
+const webApp = read('web/src/DesktopApp.tsx');
+const uiStyle = read('web/src/desktop.css');
+const client = read('web/src/useLiveCodex.ts');
+const bridge = read('web/server/bridge.mjs');
 const config = JSON.parse(read('app.json'));
 const packageFile = JSON.parse(read('package.json'));
 
-test('visual baseline controls, drawer animation and design tokens are retained', () => {
-  assert.match(app, /useVisualTokens\(\)/);
-  assert.match(app, /ReferenceIcon name="menu"/);
-  assert.match(app, /ReferenceIcon name="ellipsis"/);
-  assert.match(app, /<ChatSidebar/);
-  assert.match(app, /<ChatView/);
-  assert.match(chat, /Animated\.spring\(composerRise/);
-  assert.match(sidebar, /Animated\.timing\(drawerProgress/);
-  assert.match(sidebar, /sidebarSlideDurationMs/);
-  assert.match(sidebar, /sortConversations\(conversations\)/);
-  assert.match(sidebar, /sortProjects\(projects\)/);
-  assert.match(sidebar, /onLongPress/);
-  assert.match(chat, /ChatSetupPicker/);
-  assert.match(picker, /onChooseHost/);
-  assert.match(picker, /onChooseProject/);
-  assert.match(menu, /copy-id/);
-  assert.match(menu, /archive/);
-  assert.match(menu, /delete/);
-  assert.match(account, /连接新的电脑/);
+test('one React UI owns conversations on browser, Android and future desktop', () => {
+  assert.match(app, /<WebView<WebViewProps>/);
+  assert.match(app, /unifiedWebUrl\(coordinator\)/);
+  assert.match(app, /originWhitelist=\{\[origin\]\}/);
+  assert.match(app, /onShouldStartLoadWithRequest=\{allowNavigation\}/);
+  assert.doesNotMatch(app, /<ChatView|<ChatSidebar|<AccountScreen|useCodexSession/);
+  assert.match(webApp, /const live = useLiveCodex\(\)/);
+  assert.match(webApp, /<MessageMarkdown/);
+  assert.match(webApp, /className="sidebar-rail"/);
+  assert.match(uiStyle, /@media \(max-width: 800px\)/);
 });
 
-test('visual screens use the real native Codex profile rather than local simulation', () => {
-  assert.match(app, /useCodexSession\(authorized \? currentHost : null\)/);
-  assert.match(app, /<OAuthLogin host=\{currentHost\}/);
-  assert.match(app, /session\.threads/);
-  assert.match(app, /session\.archivedThreads/);
-  assert.match(app, /session\.messages/);
-  assert.match(app, /session\.send\(draft\.trim\(\), expected, settings\)/);
-  assert.match(app, /session\.createThread/);
-  assert.match(app, /session\.moveThread/);
-  assert.match(app, /session\.renameProject/);
-  assert.match(app, /session\.archiveThread/);
-  assert.match(app, /session\.deleteThread/);
-  assert.match(app, /session\.createProject/);
-  assert.doesNotMatch(app, /demoReducer|initialDemoState|setTimeout\(\(\) => \{\s*dispatch\(\{ type: 'reply'/);
-  assert.doesNotMatch(chat, /DemoConversation|demoReducer|src\/demo/);
-});
-
-test('model and reasoning controls use native catalog, permission never grants fake Full Access', () => {
-  assert.match(session, /connection\.request\('model\/list'/);
-  assert.match(chat, /availableModels\.map/);
-  assert.match(chat, /settingsForTurn/);
-  assert.match(session, /turn\/start/);
-  assert.match(chat, /当前 Gateway 不允许手机客户端改变审批或沙箱权限/);
-  assert.match(rpcPolicy, /case 'turn\/start'/);
-  assert.doesNotMatch(chat, /GPT-6\.1 Sol/);
-});
-
-test('visual preferences do not overwrite native threads, and mobile identity is unchanged', () => {
-  assert.match(preferences, /codexmobileui-ui-settings\.db/);
-  assert.match(preferences, /pinnedThreads/);
-  assert.match(preferences, /projectRules/);
-  assert.match(app, /loadHosts\(\)/);
+test('Android retains Tailnet onboarding and a safe retry screen, but not the old UI', () => {
+  assert.match(app, /loadCoordinatorUrl\(\)/);
+  assert.match(app, /discoverTailnetHosts\(/);
+  assert.match(app, /storeDiscoveredHosts\(selected, hosts\)/);
+  assert.match(app, /new URL\(navigation\.url\)\.origin === origin/);
+  assert.match(app, /onError=\{\(\) => setError/);
+  assert.match(app, /codexmobileui:back/);
+  assert.match(webApp, /codexmobileui:configure/);
+  assert.doesNotMatch(app, /OAuthLogin|src\/ui\/ChatView|src\/session\/useCodexSession/);
   assert.equal(config.expo.android.package, 'dev.codexmobileui.app');
   assert.equal(config.expo.scheme, 'codexmobileui');
   assert.equal(config.expo.version, packageFile.version);
-  assert.equal(config.expo.icon, './assets/icon.png');
-  assert.equal(config.expo.android.adaptiveIcon.backgroundColor, '#000000');
-  assert.ok(config.expo.android.versionCode > 7);
+});
+
+test('project creation uses the chosen host and server-issued opaque directory locator', () => {
+  const modal = read('web/src/ProjectCreateDialog.tsx');
+  assert.match(webApp, /<ProjectCreateDialog/);
+  assert.match(modal, /web\/projectDirectories/);
+  assert.match(modal, /web\/projectCreate/);
+  assert.match(modal, /idempotencyKey: idem\.current/);
+  assert.match(modal, /locator: listing\.locator/);
+  assert.match(bridge, /resolveProjectDirectory\(msg\.params\.locator\)/);
+  assert.match(bridge, /internalRequest\('project\/create'/);
+  assert.doesNotMatch(modal, /fs\/createDirectory/);
+});
+
+test('automation is served by the existing per-host Gateway scheduler, never a second writer', () => {
+  const tasks = read('web/src/AutomationView.tsx');
+  assert.match(webApp, /<AutomationView/);
+  assert.match(tasks, /automation\/list/);
+  assert.match(tasks, /automation\/create/);
+  assert.match(tasks, /automation\/toggle/);
+  assert.match(tasks, /automation\/runs/);
+  assert.match(bridge, /requestLocalGateway\(msg\.params\.method, msg\.params\.params\)/);
+  assert.match(bridge, /automationMethods/);
+  assert.doesNotMatch(bridge, /new SchedulerService/);
+});
+
+test('shared settings use real host-owned files with revision checks and unsaved confirmation', () => {
+  const settings = read('web/src/SettingsView.tsx');
+  assert.match(webApp, /<SettingsView/);
+  assert.match(settings, /workspace\/hostFileRead/);
+  assert.match(settings, /workspace\/hostFileWrite/);
+  assert.match(settings, /revision: source\.revision/);
+  assert.match(settings, /askDiscard\(\)/);
+  assert.match(settings, /codexmobileui:back/);
+  assert.match(bridge, /web\/hostFile/);
+  assert.match(bridge, /workspace\/hostFileWrite/);
+  assert.doesNotMatch(bridge, /arbitraryFileRead/);
+});
+
+test('canonical assistant links preserve native Markdown and use opaque publication IDs', () => {
+  const markdown = read('web/src/MessageMarkdown.tsx');
+  const publication = read('web/src/publicationDownload.ts');
+  const nativeSink = read('src/core/nativePublicationDownload.ts');
+  assert.match(markdown, /renderableLocalFileLinks\(preview\.markdown\)/);
+  assert.match(markdown, /onOpenFile\(path\)/);
+  assert.match(webApp, /parsePublishedFiles/);
+  assert.match(webApp, /downloadPublication\(/);
+  assert.match(publication, /workspace\/publication\/read/);
+  assert.match(nativeSink, /Paths\.document/);
+  assert.match(nativeSink, /Sharing\.shareAsync/);
+  assert.match(nativeSink, /DOWNLOAD_INCOMPLETE/);
+  assert.match(bridge, /web\/publication/);
+});
+
+test('shared frontend keeps real status, events, permissions, models and image upload', () => {
+  assert.match(client, /turn\/steer/);
+  assert.match(client, /thread\/queue\/add/);
+  assert.match(client, /thread\/goal\/set/);
+  assert.match(client, /thread\/settings\/update/);
+  assert.match(client, /thread\/resume/);
+  assert.match(client, /web\/image\/start/);
+  assert.match(webApp, /<MessageImage/);
+  assert.match(webApp, /<ToolImage/);
+  assert.match(webApp, /WebQuotaRing/);
+  assert.match(webApp, /followUpMode/);
+  assert.match(webApp, /className="composer-actions"/);
 });

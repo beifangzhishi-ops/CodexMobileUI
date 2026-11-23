@@ -29,8 +29,8 @@ if ($buildRoot.Equals($sourceRoot.TrimEnd('\'), [System.StringComparison]::Ordin
     throw 'The persistent Android build directory must be outside the source checkout.'
 }
 
-$app = Get-Content -LiteralPath (Join-Path $sourceRoot 'app.json') -Raw | ConvertFrom-Json
-$package = Get-Content -LiteralPath (Join-Path $sourceRoot 'package.json') -Raw | ConvertFrom-Json
+$app = Get-Content -LiteralPath (Join-Path $sourceRoot 'app.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$package = Get-Content -LiteralPath (Join-Path $sourceRoot 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $appVersion = [string]$app.expo.version
 $appCode = [string]$app.expo.android.versionCode
 $appId = [string]$app.expo.android.package
@@ -48,6 +48,12 @@ if (-not (Test-Path -LiteralPath $nativeFile)) {
 # changing the fixed build command or regenerating Gradle/CMake caches.
 & node.exe (Join-Path $sourceRoot 'scripts\sync-android-native-version.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize Android native version metadata.' }
+& node.exe (Join-Path $sourceRoot 'scripts\sync-quota-widget-native.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize quota widget native files.' }
+& node.exe (Join-Path $sourceRoot 'scripts\sync-notifications-native.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize task notification native files.' }
+& node.exe (Join-Path $sourceRoot 'scripts\sync-app-navigation-native.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize native Android navigation.' }
 $nativeText = Get-Content -LiteralPath $nativeFile -Raw
 $nativeCode = [regex]::Match($nativeText, '(?m)^\s*versionCode\s+(\d+)').Groups[1].Value
 $nativeVersion = [regex]::Match($nativeText, '(?m)^\s*versionName\s+"([^"]+)"').Groups[1].Value
@@ -152,27 +158,71 @@ try {
                 $dependenciesCurrent = (Get-DependencyLockContent $sourceLock) -ceq
                     (Get-DependencyLockContent $stagedLock)
             }
+            if ($dependenciesCurrent) {
+                # A failed npm ci can leave Expo present while newer plugins
+                # are missing. Lock equality alone does not prove completeness.
+                $rootPackages = @($package.dependencies.PSObject.Properties.Name) +
+                    @($package.devDependencies.PSObject.Properties.Name)
+                foreach ($name in $rootPackages) {
+                    $manifest = Join-Path $buildRoot ('node_modules\' + $name.Replace('/', '\') + '\package.json')
+                    if (-not (Test-Path -LiteralPath $manifest)) {
+                        Write-Host "Incomplete build dependency install: $name"
+                        $dependenciesCurrent = $false
+                        break
+                    }
+                }
+            }
             Write-Host "Synchronizing source into $buildRoot"
             Sync-Tree $sourceRoot $buildRoot @(
                 '.git', '.worktrees', '.tmp', '.npm-cache', '.local-home', '.expo', '.expo-shared',
-                '.state', '.runtime', 'node_modules', 'android', 'dist', 'coverage'
+                '.state', '.runtime', 'node_modules', (Join-Path $sourceRoot 'android'), 'dist', 'coverage'
             )
             Sync-Tree (Join-Path $sourceRoot 'android') (Join-Path $buildRoot 'android') @(
                 '.gradle', '.cxx', 'build'
             )
             if (-not $dependenciesCurrent) {
                 Write-Host 'Installing dependency lockfile in the persistent build checkout.'
+                # npm ci runs before the Gradle builder; it must also use an
+                # isolated writable cache, never the user's global npm cache.
+                $npmCache = Join-Path $workspaceCacheRoot 'npm-cache'
+                New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
+                $previousNpmCache = [Environment]::GetEnvironmentVariable('npm_config_cache', 'Process')
                 Push-Location $buildRoot
                 try {
-                    & npm.cmd ci '--no-audit' '--no-fund' '--prefer-offline'
+                    $env:npm_config_cache = $npmCache
+                    # The checked-in lockfile is resolved without optional
+                    # Storybook peer graphs (notably react-native-windows).
+                    # Honor that graph without upgrading React Native or npm.
+                    & npm.cmd ci '--no-audit' '--no-fund' '--prefer-offline' '--legacy-peer-deps'
                     if ($LASTEXITCODE -ne 0) { throw "npm ci failed: $LASTEXITCODE" }
-                } finally { Pop-Location }
+                } finally {
+                    if ($null -eq $previousNpmCache) {
+                        Remove-Item Env:npm_config_cache -ErrorAction SilentlyContinue
+                    } else {
+                        $env:npm_config_cache = $previousNpmCache
+                    }
+                    Pop-Location
+                }
             } else {
                 Write-Host 'Reusing installed dependencies and incremental Gradle/CMake caches.'
             }
             if (-not (Test-Path -LiteralPath (Join-Path $buildRoot 'node_modules\expo-modules-autolinking\build\index.js'))) {
                 throw 'Expo Autolinking compiled JavaScript is missing.'
             }
+            # Verify the two native modules required by the active WebView shell
+            # are linked into the staged Android graph. The former diagnostic
+            # download module belonged to the removed native chat UI.
+            Push-Location $buildRoot
+            try {
+                $autolinkingJson = & node.exe 'node_modules/expo-modules-autolinking/bin/expo-modules-autolinking' resolve --platform android --json
+                if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect Android Expo module autolinking.' }
+                $autolinking = ($autolinkingJson -join '') | ConvertFrom-Json
+                foreach ($requiredModule in @('expo-file-system', 'expo-sqlite')) {
+                    if (-not (@($autolinking.modules) | Where-Object { $_.packageName -eq $requiredModule } | Select-Object -First 1)) {
+                        throw "Android WebView shell module missing from staged Expo autolinking: $requiredModule"
+                    }
+                }
+            } finally { Pop-Location }
             # The source fingerprint is checked again before publishing the APK.
             Invoke-BuildState 'phase' @($buildRoot, 'building') | Out-Null
             Write-Host "Build transcript: $logPath"
@@ -231,6 +281,10 @@ try {
                 }).Count) {
                     throw 'Release APK has no ARM64 native libraries or contains another ABI.'
                 }
+                # The retired diagnostic-download Java module is no longer part of the WebView shell.
+                # Required Expo modules are checked via staged autolinking above; ensure bytecode exists.
+                $dexEntries = @($archive.Entries | Where-Object { $_.FullName -match '^classes\d*\.dex$' -and $_.Length -gt 0 })
+                if (-not $dexEntries.Count) { throw 'Release APK has no compiled Android DEX bytecode.' }
                 Write-Host "Embedded Release JavaScript verified: $($bundled[0].Length) bytes"
             } finally { $archive.Dispose() }
         }

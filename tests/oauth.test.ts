@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { AuthorizationError, OAuthStore, PUBLIC_CLIENT_ID } from '../gateway/oauth';
 
@@ -55,6 +55,55 @@ test('refresh rotates token and persists opaque token hashes, not raw tokens', (
     assert.equal(restarted.verify(second.access_token), true);
     restarted.revoke(second.refresh_token);
     assert.equal(restarted.verify(second.access_token), false);
+  } finally { fixture.cleanup(); }
+});
+
+test('two-stage refresh survives lost replies and restart, then ACK revokes old credential', () => {
+  const fixture = setup();
+  try {
+    const code = new URL(fixture.store.approve(fixture.store.validateRequest(fixture.params), SECRET))
+      .searchParams.get('code')!;
+    const original = fixture.store.exchange(code, VERIFIER, REDIRECT);
+    const requestId = randomBytes(32).toString('hex');
+    const next = fixture.store.refresh(original.refresh_token, requestId);
+    assert.equal(next.refresh_confirmation_required, true);
+    assert.equal(fixture.store.refresh(original.refresh_token, requestId).refresh_token,
+      next.refresh_token, 'lost HTTP reply must return the exact same pair');
+    assert.throws(() => fixture.store.refresh(original.refresh_token,
+      randomBytes(32).toString('hex')), AuthorizationError);
+    assert.throws(() => fixture.store.refresh(next.refresh_token,
+      randomBytes(32).toString('hex')), AuthorizationError);
+    const persisted = readFileSync(fixture.file, 'utf8');
+    assert.doesNotMatch(persisted, new RegExp(original.refresh_token));
+    assert.doesNotMatch(persisted, new RegExp(next.refresh_token));
+    const restarted = new OAuthStore(SECRET, REDIRECT, fixture.file);
+    assert.equal(restarted.refresh(original.refresh_token, requestId).access_token,
+      next.access_token);
+    assert.equal(restarted.verify(next.access_token), true);
+    restarted.confirmRefresh(next.refresh_token, requestId);
+    restarted.confirmRefresh(next.refresh_token, requestId);
+    assert.throws(() => restarted.refresh(original.refresh_token, requestId), AuthorizationError);
+    const succeeding = restarted.refresh(next.refresh_token, randomBytes(32).toString('hex'));
+    assert.ok(succeeding.refresh_token);
+  } finally { fixture.cleanup(); }
+});
+
+test('unfinished refresh is time-bounded while the newly stored credential remains recoverable', () => {
+  let time = 1_700_000_000_000;
+  const fixture = setup(() => time);
+  try {
+    const code = new URL(fixture.store.approve(fixture.store.validateRequest(fixture.params), SECRET))
+      .searchParams.get('code')!;
+    const original = fixture.store.exchange(code, VERIFIER, REDIRECT);
+    const requestId = randomBytes(32).toString('hex');
+    const pending = fixture.store.refresh(original.refresh_token, requestId);
+    time += 31 * 60_000;
+    assert.throws(() => fixture.store.refresh(original.refresh_token, requestId), AuthorizationError);
+    // The phone has the new token but may have lost the ACK.
+    const rebooted = new OAuthStore(SECRET, REDIRECT, fixture.file, () => time);
+    rebooted.confirmRefresh(pending.refresh_token, requestId);
+    const next = rebooted.refresh(pending.refresh_token, randomBytes(32).toString('hex'));
+    assert.ok(next.refresh_token);
   } finally { fixture.cleanup(); }
 });
 

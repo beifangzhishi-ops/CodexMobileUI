@@ -8,11 +8,16 @@ export type Message = {
   role: Role;
   content: string;
   turnId?: string;
+  turnStatus?: string;
   timestampMs?: number;
   ordinal?: number;
   complete?: boolean;
   kind?: 'reasoning' | 'tool' | 'plan';
   activityType?: string;
+  pluginId?: string;
+  appId?: string;
+  toolServer?: string;
+  toolName?: string;
   title?: string;
   detail?: string;
   status?: string;
@@ -20,6 +25,8 @@ export type Message = {
   summaryParts?: string[];
   /** Image references are matched to native user item IDs, never host paths. */
   images?: { itemId: string; imageIndex: number }[];
+  /** Host-managed documents are identified through the native user item, not a browser path. */
+  files?: { itemId: string; fileIndex: number; name: string; path: string }[];
   activity?: { title: string; lines: string[] };
 };
 
@@ -27,6 +34,8 @@ export type Conversation = {
   id: string;
   hostId: HostId;
   project: string | null;
+  /** Native thread working directory, when provided by thread/list. */
+  cwd?: string | null;
   title: string;
   status: ConversationStatus;
   archived?: boolean;

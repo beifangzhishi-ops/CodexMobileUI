@@ -4,6 +4,7 @@ import {
   rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
+import { assistantImageReferences, MAX_ASSISTANT_IMAGES } from './assistantImageRefs.mjs';
 
 // One client connection owns its uploads. Never permit a browser-provided path
 // to read from or write to the Windows filesystem.
@@ -60,10 +61,15 @@ export function isValidImageRpc(method, p) {
   if (method === 'web/image/finish' || method === 'web/image/cancel') {
     return only('uploadId') && validId(p.uploadId);
   }
-  if (method === 'web/image/read') {
+  if (method === 'web/image/read' || method === 'web/image/assistantRead' ||
+      method === 'web/image/toolRead') {
+    if (method === 'web/image/toolRead') return only('threadId','turnId','itemId','offset') &&
+      validId(p.threadId) && validId(p.turnId) && validId(p.itemId) &&
+      Number.isInteger(p.offset) && p.offset >= 0 && p.offset < IMAGE_MAX_BYTES;
     return only('threadId','itemId','imageIndex','offset') &&
       validId(p.threadId) && validId(p.itemId) &&
-      Number.isInteger(p.imageIndex) && p.imageIndex >= 0 && p.imageIndex < 4 &&
+      Number.isInteger(p.imageIndex) && p.imageIndex >= 0 &&
+      p.imageIndex < (method === 'web/image/read' ? 4 : MAX_ASSISTANT_IMAGES) &&
       Number.isInteger(p.offset) && p.offset >= 0 && p.offset < IMAGE_MAX_BYTES;
   }
   return false;
@@ -74,6 +80,9 @@ export function createImageStore(root, nativeThreadRead) {
   const allowedReadRoots = [uploadRoot, resolve(root, 'mobile-uploads')];
   const partialUploads = new Map();
   const completed = new Set();
+  // Native item references are immutable. Cache only paths already verified
+  // against thread/read, so 48 KB image chunks don't re-fetch the full thread.
+  const verifiedImagePaths = new Map();
   let closed = false;
   const assertOpen = () => { if (closed) reject(); };
   const owns = (path) => typeof path === 'string' && completed.has(path) &&
@@ -124,23 +133,55 @@ export function createImageStore(root, nativeThreadRead) {
         completed.add(upload.file);
         return { path: upload.file };
       }
-      if (method === 'web/image/read') {
-        const raw = await nativeThreadRead(p.threadId);
-        if (raw?.thread?.id !== p.threadId || !Array.isArray(raw.thread.turns)) reject();
-        let path = null;
-        for (const turn of raw.thread.turns) {
-          for (const item of Array.isArray(turn.items) ? turn.items : []) {
-            if (item?.id !== p.itemId || item.type !== 'userMessage' || !Array.isArray(item.content)) continue;
-            const images = item.content.filter((part) => part?.type === 'localImage');
-            if (images.length <= p.imageIndex) reject();
-            path = images[p.imageIndex]?.path;
+      if (method === 'web/image/read' || method === 'web/image/assistantRead' ||
+          method === 'web/image/toolRead') {
+        const key = JSON.stringify([method, p.threadId, p.turnId, p.itemId, p.imageIndex]);
+        // A new read from offset zero rechecks the live native item, so
+        // removed/replaced references cannot be served from a previous view.
+        let file = p.offset > 0 ? verifiedImagePaths.get(key) : null;
+        if (!file) {
+          const raw = await nativeThreadRead(p.threadId);
+          if (raw?.thread?.id !== p.threadId || !Array.isArray(raw.thread.turns)) reject();
+          let path = null;
+          for (const turn of raw.thread.turns) {
+            for (const item of Array.isArray(turn.items) ? turn.items : []) {
+              if (item?.id !== p.itemId) continue;
+              if (method === 'web/image/toolRead') {
+                if (turn.id !== p.turnId || item.type !== 'imageView') reject();
+                path = item.path;
+              } else if (method === 'web/image/assistantRead') {
+                if (item.type !== 'agentMessage') reject();
+                const message = typeof item.text === 'string' ? item.text :
+                  Array.isArray(item.content) ? item.content
+                    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+                    .map((part) => part.text).join('\n') : '';
+                path = assistantImageReferences(message)[p.imageIndex]?.path;
+              } else {
+                if (item.type !== 'userMessage' || !Array.isArray(item.content)) reject();
+                const images = item.content.filter((part) => part?.type === 'localImage');
+                path = images[p.imageIndex]?.path;
+              }
+            }
           }
+          if (typeof path !== 'string' || path.length > 1024) reject();
+          if (method === 'web/image/toolRead' &&
+              (!/^[A-Za-z]:[\\/]/.test(path) || /[\x00-\x1f]/.test(path) ||
+               /(?:^|[\\/])\.{1,2}(?:[\\/]|$)/.test(path))) reject();
+          const managedRelative = /^\.state\/(?:mobile-uploads|web-uploads)\//i.test(path);
+          file = managedRelative ? resolve(root, path.slice('.state/'.length)) : resolve(path);
+          if (managedRelative && !allowedReadRoots.some((root) => within(file, root))) reject();
+          // Assistant previews may be elsewhere on the owning host. The path
+          // comes exclusively from its native agentMessage Markdown, not the
+          // client, and only signature-validated images can be returned.
+          if (method === 'web/image/read' &&
+              !allowedReadRoots.some((root) => within(file, root))) reject();
         }
-        if (typeof path !== 'string' || path.length > 500) reject();
-        const file = resolve(path);
-        if (!allowedReadRoots.some((root) => within(file, root))) reject();
         const { mime, size } = imageMime(file);
         if (p.offset >= size) reject();
+        if (!verifiedImagePaths.has(key)) {
+          if (verifiedImagePaths.size >= 64) verifiedImagePaths.delete(verifiedImagePaths.keys().next().value);
+          verifiedImagePaths.set(key, file);
+        }
         const fd = openSync(file, 'r');
         const bytes = Buffer.alloc(Math.min(IMAGE_CHUNK_BYTES, size - p.offset));
         try { readSync(fd, bytes, 0, bytes.length, p.offset); }
@@ -155,6 +196,7 @@ export function createImageStore(root, nativeThreadRead) {
       for (const upload of partialUploads.values()) removePartial(upload);
       partialUploads.clear();
       completed.clear();
+      verifiedImagePaths.clear();
     },
   };
 }

@@ -28,7 +28,7 @@ $sourceFiles = @(
   'scripts\mobile-launcher.ps1',
   'scripts\mobile-runtime.js',
   'scripts\gateway-only.ps1',
-  'scripts\sync-mobile-host.ps1',
+  'scripts\install-gateway-task.ps1',
   '.env.example'
 )
 $gatewayDir = Join-Path $root 'dist\gateway'
@@ -53,6 +53,16 @@ foreach ($file in $sourceFiles) {
 }
 New-Item -ItemType Directory -Path (Join-Path $destination 'dist') -Force | Out-Null
 Copy-Item -LiteralPath $gatewayDir -Destination (Join-Path $destination 'dist\gateway') -Recurse
+$quarkHelper = Join-Path $root 'gateway\quark-transfer\cloud_transfer.py'
+if (-not (Test-Path -LiteralPath $quarkHelper)) {
+  throw 'Missing standalone Quark uploader helper.'
+}
+New-Item -ItemType Directory -Path (Join-Path $destination 'dist\gateway\quark-transfer') -Force | Out-Null
+Copy-Item -LiteralPath $quarkHelper -Destination (Join-Path $destination 'dist\gateway\quark-transfer\cloud_transfer.py') -ErrorAction Stop
+$sharedDir = Join-Path $root 'dist\shared'
+if (Test-Path -LiteralPath $sharedDir) {
+  Copy-Item -LiteralPath $sharedDir -Destination (Join-Path $destination 'dist\shared') -Recurse
+}
 New-Item -ItemType Directory -Path (Join-Path $destination 'node_modules') -Force | Out-Null
 Copy-Item -LiteralPath $wsDir -Destination (Join-Path $destination 'node_modules\ws') -Recurse
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer, get } from 'node:http';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
@@ -34,6 +34,27 @@ test('gateway request log stores only allowlisted metadata', () => {
   assert.doesNotMatch(JSON.stringify(injected), /PRIVATE|secret-host/);
 });
 
+test('gateway lifecycle RPC traces whitelist method, sequence, outcome and duration only', () => {
+  const safe = sanitizeGatewayTrace({
+    event: 'rpc.completed', rpcMethod: 'thread/delete', rpcRequestId: 42,
+    rpcOutcome: 'error', elapsedMs: 25_001,
+    requestId: 3,
+    threadId: 'SECRET-THREAD-ID',
+    params: { threadId: 'SECRET-THREAD-ID' },
+    errorMessage: 'SECRET-SERVER-ERROR',
+  } as unknown as GatewayTrace);
+  assert.deepEqual(safe, {
+    event: 'rpc.completed', rpcMethod: 'thread/delete', rpcRequestId: 42,
+    rpcOutcome: 'error', elapsedMs: 25_001, requestId: 3,
+  });
+  assert.doesNotMatch(JSON.stringify(safe), /SECRET/);
+  const invalid = sanitizeGatewayTrace({
+    event: 'rpc.completed', rpcMethod: 'some/private/method',
+    rpcOutcome: 'my-private-error', rpcRequestId: -1,
+  } as unknown as GatewayTrace);
+  assert.deepEqual(invalid, { event: 'rpc.completed' });
+});
+
 test('gateway persists received/finished events before and after OAuth HTTP requests', async () => {
   const directory = resolve('.tmp', 'gateway-diagnostics-' + randomUUID());
   mkdirSync(directory, { recursive: true });
@@ -63,13 +84,22 @@ test('gateway persists received/finished events before and after OAuth HTTP requ
       code_challenge_method: 'S256',
       code_challenge: createHash('sha256').update('PRIVATE-VERIFIER').digest('base64url'),
     });
-    const response = await fetch(base + '/oauth/authorize?' + params, {
-      redirect: 'manual',
-      headers: { 'user-agent': 'Mozilla/5.0 (Android; PRIVATE-UA)' },
-    });
-    assert.equal(response.status, 302);
-    const notFound = await fetch(base + '/PRIVATE-PATH?token=PRIVATE-TOKEN');
-    assert.equal(notFound.status, 404);
+    // Native HTTP requests can use ephemeral ports that the Fetch API blocks
+    // as "bad port" (e.g. 6000); this test checks journaling, not Fetch policy.
+    const requestStatus = (url: string, headers?: Record<string, string>) =>
+      new Promise<number>((resolveStatus, rejectStatus) => {
+        const request = get(url, { headers }, (response) => {
+          response.resume();
+          response.on('end', () => resolveStatus(response.statusCode ?? 0));
+          response.on('error', rejectStatus);
+        });
+        request.on('error', rejectStatus);
+      });
+    const responseStatus = await requestStatus(base + '/oauth/authorize?' + params,
+      { 'user-agent': 'Mozilla/5.0 (Android; PRIVATE-UA)' });
+    assert.equal(responseStatus, 302);
+    const notFoundStatus = await requestStatus(base + '/PRIVATE-PATH?token=PRIVATE-TOKEN');
+    assert.equal(notFoundStatus, 404);
 
     const content = readFileSync(file, 'utf8');
     assert.doesNotMatch(content, /PRIVATE|gateway.example.test|127\.0\.0\.1/);

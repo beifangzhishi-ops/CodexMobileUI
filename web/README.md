@@ -1,18 +1,77 @@
 # Codex 多电脑 Web 工作台
 
-## 当前入口（2026-11-13）
+## 2026-11-21 与 Android 统一的附件界面（双机已部署）
 
-统一网页使用 **6v 的 Tailscale IPv4：`http://100.76.74.124:4190/`**。6v 和 noha 均可通过此地址访问同一份网页。浏览器不需要登录，也不要求 Tailscale Serve 身份头；实际网络访问由 Tailnet 的设备接入和 ACL 控制。能够连入这个端口的 Tailnet 设备就可以使用该工作台，因此应当只授权可信设备。
+0.1.16 已在 6v Web Coordinator 和 noha Web Agent/Gateway 上发布。两台机器
+均通过真实 WebSocket 的初始化、项目列表、附件开始及取消、目录读取、
+定时任务列表测试。Android 0.1.16 ARM64 APK 已在当前 ChatGPT 对话通过
+CCM publish 发布，不再上传夸克。手机实际拍照、文件选择和文件保存仍
+需要实体机验收。
 
-Tailscale 只转发 TCP，不使用旧的 HTTPS 域名 Serve。6v 的 `tcp://100.76.74.124:4190` 转发到 `127.0.0.1:4190` Web Coordinator；noha 的 `tcp://100.96.30.32:4191` 转发到 `127.0.0.1:4191` Web Agent。原生 App Server 在各自主机继续使用 `127.0.0.1:45891`。noha 的 Agent 仍要求主机间随机令牌，该令牌存放在两机私有的 `.state/web-peer-token`，**不会发送到浏览器**。旧的 HTTPS Serve 9443/9444 均已关闭，原有 Android 使用的 Funnel 与 Gateway 未修改。
+当前浏览器与 Android WebView 只使用 `web/src/DesktopApp.tsx` 的一套
+聊天组件。添加菜单支持照片、拍照（窄屏）、普通文件；文件与图片合计
+最多 4 个，单个文件最多 8 MiB。普通文件从选定主机的 Web Agent
+上传，严格复用 Gateway 的 `createAttachmentUploader` 与 Codex Desktop
+文件引用封包；不通过输入的 Windows 路径调用任意文件系统接口。
+手机聊天仅显示附件名称和助手原始文件链接标签，桌面仍可复制绝对路径。
 
-网页仅接受指定 IP:端口的 HTTP Host，WebSocket 还要求匹配的 Origin，防止普通第三方网页直接发起跨站 WebSocket。Tailscale TCP 转发及本机 App Server 继续将对外访问限制在 Tailnet 内。HTTP 链路上的数据由 Tailscale 网络加密，但浏览器是普通 HTTP，部分仅在安全上下文可用的 Web API 需要降级处理。
+**noha Web Agent 同步必须原子替换配套代码**，不可只复制
+`web/server/bridge.mjs`。源文件与目标文件对应关系：
+
+- `web/server/bridge.mjs` → `scripts/web-bridge.mjs`
+- `web/server/imageStore.mjs` → `scripts/imageStore.mjs`
+- `web/server/assistantImageRefs.mjs` → `scripts/assistantImageRefs.mjs`
+- `web/server/securityPolicy.mjs` → `scripts/securityPolicy.mjs`
+- `web/server/attachmentProtocol.mjs` → `scripts/attachmentProtocol.mjs`
+
+同时需要更新 noha host-only bundle 的编译 `dist/gateway`（尤其
+`attachments.js`、`projectDirectories.js`、`nativePermission.js`
+和 `webTitleService.js`），不要复制任何 `.state`、`.env`、
+私有证书、登录凭据或 CodexHome。6v 的网页与 Agent 在源码目录运行，
+不需复制这些相对模块。上线前分别验证 6v 和 noha 的附件上传与回读。
+
+
+## 会话标题：Web 与 Android 一致
+
+两端侧栏先显示 App Server 的 `thread.preview`（第一条用户消息预览），
+当原生 `thread.name` 存在时显示正式名称。只在本地首轮刚得到确认而
+`thread/list` 尚未同步时使用本地用户文本作临时预览；图片或文件引用仅以
+简短安全标题显示，不把文件路径传输封包展示到侧栏。
+
+Web 首轮得到 `turn/start` 确认后，由实际所属电脑的 Web Bridge
+独立排队发起临时只读自动命名，结果通过原生 `thread/name/set` 写回。
+队列存放于各主机私有的 `.state/web-title-jobs.json`，网页关闭不影响已接受任务。
+手动改名优先，且自动命名在提交前再次读取服务器名称；失败保留原生预览。
+Android 保留自己已有的临时线程自动命名，两个客户端均不另建正式标题数据库。
+
+## 2026-11-17 与 Android 交互对齐
+
+### 2026-11-23 共享长按与右键操作
+
+- 同一套 React 上下文菜单支持侧边栏对话、项目，以及消息、文件和图片。桌面使用右键，Android WebView 对侧边栏条目、文件和图片使用 450ms 长按；移动超过 12px 或滚动即取消，不叠加普通点击。
+- 对话操作包括重命名、置顶、客户端未读标记、同电脑项目归属调整、当前聊天内容查找、归档、删除、复制 ID/链接/可用工作目录、内网链接分享；项目支持新建聊天、置顶、重命名、项目规则、复制目录和删除。用户明确不需要分组、Fork、其他位置打开或新窗口打开，故不显示这些入口。
+- 项目/对话列表行禁用触摸文本选择，防止长按被 WebView 截获；**消息正文仍允许系统原生长按选字**，桌面选字右键也交给系统。消息完整复制走右键菜单和现有按钮，避免抢掉原生文本选择。不可保证纯 HTTP 内网 WebView 支持复制图片，失败时明确提示。
+- 「标为未读」只存当前客户端本地偏好，未写入 native App Server；会话链接只在能访问私有 Web Coordinator 的设备上有效。工作目录来自已校验的原生项目 roots；文件打开/下载继续走原有跨主机路径、已发布文件校验，不提供任意文件读取。
+- 此段记录源码行为；是否能通过实际 Android 设备的长按与系统选字仍需实机验收。
+
+- 保留网页的桌面式双机/项目布局，聊天正文改为 Markdown（GFM 表格、代码块、公式），工具和思考仍取自原生 App Server 事件，不能伪造推理结果。
+- 用户消息仅显示原生消息时间；助手轮次结束（含中断/失败）后在最下方显示复制及时间。早期版本曾显示 `thread/fork` 按钮，该入口已在 2026-11-23 按用户偏好移除。发送键在正在运行且输入框为空时变为停止键；发送、停止和目标创建均等待服务器确认，保留未确认发送的可见状态。
+- 已有会话权限调整通过原生 `thread/settings/update` 并由 `thread/resume` 回读后才切换勾选；自定义权限仍须电脑端配置解析，因此网页暂时不允许直接覆盖已有会话。新会话选择自定义默认继承原生配置。会话菜单对接原生重命名、归档/取消归档和删除（删除前确认）。
+- **网页文件规则（2026-11-17 最新）**：普通文件仅显示绝对路径并支持复制，不支持上传、远程文件下载或自动打开。用户粘贴绝对路径原样发给 App Server。助手返回的显式 Markdown 图片链接（PNG/JPG/WebP/GIF/BMP）是唯一的本地文件预览例外：从原生助手消息核实引用后，只读传输受 8 MB 限制的真实图片数据，在聊天中显示缩略图、点击查看原图，同时保留并可复制绝对路径。其他文件链接不下载、不读取；图片粘贴和历史用户图片继续走原有 localImage 接口。Web Bridge 不开放任意文件路径读取，web/file/* 和 web/publication/* RPC 继续禁用。
+- 最近聊天对齐 Android 的前 10 条及“加载更多对话”；网页通过原生完整分页列表区分真实保存的旧测试聊天与未完成的新线程，去除刷新时长期残留的假会话。窄屏布局中发送按钮和电脑选择器保证不溢出。
+- 本地检查包括 `web` TypeScript、协议测试和 Vite 生产构建；这些不等于双机浏览器实时操作或权限写入的端到端验证。正式网页静态入口仍由 6v Web Coordinator 的 `web/dist` 提供，noha 保留独立 Web Agent。
+
+## 当前入口（2026-11-23）
+
+6v 使用私有 Tailscale Serve 在 HTTPS 4190 端口代理回环 Web Coordinator。网页和任务通知使用同源 WSS，接入继续受 Tailnet ACL、Host 和 Origin 校验约束。noha 的私有 TCP 4191、独立 App Server 和主机间令牌沿用现有配置。
+
+在 **电脑与设置 → 浏览器任务完成通知** 启用并授予站点权限。打开标签页时支持任务完成弹窗，点击回到对应主机和会话。首次启用从当前游标开始，重连可补收离线事件。旧 Android 安装包须升级后才能填写新的私有 HTTPS 入口。
 
 网页包含按电脑分组的真实项目和会话、历史记录读取、流式文本与工具调用/思考摘要、模型与思考强度选择、运行计时和停止、真实文字消息发送。已对齐手机端最近新增的原生功能：引导运行中的轮次（`turn/steer`）、排队和队列删除（`thread/queue/*`）、目标获取/设置/清除/继续（`thread/goal/*`）、计划模式，以及由 `permissionProfile/list` 校验的命名权限档位。完整访问权限必须明确确认，不能从网页直接提交任意 sandbox/cwd。
 
 **双机真实发送已验收**：通过 noha 浏览器同款 WebSocket 路由访问统一 6v IP，分别在 6v 与 noha 独立测试工作区创建一条真实线程；`turn/start` 返回原生 turn ID，`thread/read` 确认两边轮次均完成且保存的助手回复含测试标记。消息失败/超时不会自动重试，须手动刷新核对。以上仅是安全的只读/只读权限测试消息，不代表其它权限、引导/队列/目标的写操作或实际审批交互均已逐一验收。
 
-普通文件上传/预览、创建项目时选择目录、定时任务创建、真实删除与分支仍未接通。**图片粘贴上传与历史图片预览已接通**；审批框只对当前连接收到的原生实时请求提供交互，不重放离线审批；如果服务端未提供可核对的操作详情则禁用批准。上述操作不能以本地 UI 模拟充当服务器行为。Web 侧置顶/筛选等显示偏好不与手机端 SQLite 偏好自动同步。
+普通文件上传/预览、创建项目时选择目录、定时任务创建、真实删除与分支仍未接通。**图片粘贴上传与历史图片预览已接通**；审批框只对当前连接收到的原生实时请求提供交互，不重放离线审批；如果服务端未提供可核对的操作详情则禁用批准。上述操作不能以本地 UI 模拟充当服务器行为。Web 与手机统一从 6v `.state/sidebar-pins.json` 读取置顶项目/会话；网页经同源 `/api/sidebar-pins` 访问，手机经 6v 认证 Gateway 访问。电脑筛选沿用原有逻辑，折叠状态由各端独立保存。
 
 ## 图片粘贴与历史记录
 

@@ -16,6 +16,12 @@ export type NativeQueueEntry = { id: string; text: string };
 export type Snapshot = { messages: Message[]; running: boolean; activeTurnId: string | null; runningSinceMs: number | null };
 export type NativeNotice = { method: string; params: Obj };
 
+export function threadPreviewTitle(value: string): string {
+  const preview = value.replace(/\s+/g, ' ').trim();
+  const characters = [...preview];
+  return characters.length > 60 ? characters.slice(0, 59).join('').trimEnd() + '…' : preview || '新对话';
+}
+
 export function parseProjects(data: unknown, hostId: HostId): NativeProject[] {
   const rows = obj(data).data;
   if (!Array.isArray(rows)) throw Error('INVALID_PROJECT_LIST');
@@ -39,8 +45,14 @@ export function parseThreads(data: unknown, hostId: HostId, archived = false): C
     if (!text(thread.id)) return [];
     const state = obj(thread.status);
     const running = [thread.status, state.type, state.status].some((s) => ['active', 'inProgress', 'running'].includes(text(s)));
+    const rawPreview = text(thread.preview);
+    const display = rawPreview ? displayUserText(rawPreview) : null;
+    const preview = rawPreview.startsWith('# Files mentioned by the user:')
+      ? display?.files.length ? display.content : ''
+      : /^请查看我附带的图片[。]?$/.test(rawPreview.trim()) ? '' : rawPreview;
     return [{ id: text(thread.id), hostId, project: text(thread.projectId) || null,
-      title: text(thread.name) || text(thread.title) || text(thread.preview) || '未命名对话',
+      cwd: text(thread.cwd) || null,
+      title: text(thread.name) || text(thread.title) || threadPreviewTitle(preview),
       status: running ? 'running' : 'idle', archived,
       updatedAt: unixMs(thread.recencyAt ?? thread.updatedAt ?? thread.createdAt) ?? 0,
       running, syncPending: false, activeTurnId: null, runningSinceMs: null, messages: [] }];
@@ -100,6 +112,25 @@ function contentText(item: Obj): string {
     return p.type === 'text' ? text(p.text) : '';
   }).filter(Boolean).join('\n') : '';
 }
+/** Codex Desktop's native file-reference text is a transport envelope, not visible chat prose. */
+export function displayUserText(raw: string): {
+  content: string; files: { fileIndex: number; name: string; path: string }[];
+} {
+  const header = '# Files mentioned by the user:\n\n';
+  const separator = '\n\n## My request for Codex:\n\n';
+  if (!raw.startsWith(header)) return { content: raw, files: [] };
+  const pos = raw.indexOf(separator, header.length);
+  if (pos < 0) return { content: raw, files: [] };
+  const block = raw.slice(header.length, pos);
+  const names = block.split('\n\n');
+  if (names.length < 1 || names.length > 4) return { content: raw, files: [] };
+  const files = names.flatMap((line, i) => {
+    const match = /^## ([^:\r\n]{1,100}): ((?:[A-Za-z]:[\\/]|\\\\[\w.-]+\\[\w$.-]+\\)[^\r\n]{1,400})$/.exec(line);
+    return match ? [{ fileIndex: i, name: match[1], path: match[2] }] : [];
+  });
+  if (files.length !== names.length) return { content: raw, files: [] };
+  return { content: raw.slice(pos + separator.length), files };
+}
 
 function messageFromItem(item: Obj, turnId: string, ordinal: number, startedAtMs?: number, completedAtMs?: number): Message | null {
   if (item.type !== 'userMessage' && item.type !== 'agentMessage') return null;
@@ -108,13 +139,16 @@ function messageFromItem(item: Obj, turnId: string, ordinal: number, startedAtMs
     ? item.content.filter((part) => obj(part).type === 'localImage')
       .slice(0, 4).map((_, imageIndex) => ({ itemId, imageIndex })) : [];
   const rawContent = contentText(item);
+  const displayed = item.type === 'userMessage' ? displayUserText(rawContent) : { content: rawContent, files: [] };
   // Same image-only prompt as the current Android client. Do not show
   // internal attachment instructions as visible user text.
-  const content = images.length && rawContent === '请查看我附带的图片' ? '' : rawContent;
-  if (!content && !images.length) return null;
+  const content = images.length && /^请查看我附带的图片[。]?$/.test(displayed.content)
+    ? '' : displayed.content;
+  if (!content && !images.length && !displayed.files.length) return null;
   return { id: turnId + ':' + (text(item.id) || 'item-' + ordinal), turnId, ordinal,
     role: item.type === 'userMessage' ? 'user' : 'assistant', content,
     ...(images.length ? { images } : {}),
+    ...(displayed.files.length ? { files: displayed.files.map((f) => ({ ...f, itemId })) } : {}),
     timestampMs: unixMs(item.type === 'userMessage' ? item.startedAtMs ?? startedAtMs : item.completedAtMs ?? completedAtMs ?? startedAtMs),
     complete: true };
 }
@@ -160,8 +194,13 @@ function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: 
   else if (kind === 'contextCompaction') { title = '上下文压缩'; }
   else if (kind === 'enteredReviewMode' || kind === 'exitedReviewMode') { title = kind === 'enteredReviewMode' ? '开始代码审查' : '完成代码审查'; }
   else { content = text(item.name) || kind; detail = jsonText(item.output); }
+  const pluginId = text(item.pluginId) || text(obj(item.appContext).pluginId);
+  const appId = text(item.appId) || text(obj(item.appContext).appId);
   return { ...base, kind: 'tool', activityType: kind, title, content: clip(content, 1500),
-    detail: clip(detail), status, failed };
+    detail: clip(detail), status, failed,
+    ...(pluginId ? { pluginId } : {}), ...(appId ? { appId } : {}),
+    ...(text(item.server) ? { toolServer: text(item.server) } : {}),
+    ...(text(item.tool) ? { toolName: text(item.tool) } : {}) };
 }
 
 function merge(list: readonly Message[], message: Message): Message[] {
@@ -184,7 +223,7 @@ export function parseSnapshot(raw: unknown, expectedThreadId: string): Snapshot 
       const item = obj(rawItem), finished = !['inProgress','in_progress','running'].includes(text(item.status));
       const message = messageFromItem(item, turnId, turnIndex * 100_000 + index, started, completed) ??
         activityFromItem(item, turnId, turnIndex * 100_000 + index, finished);
-      if (message) messages.push(message);
+      if (message) messages.push({ ...message, turnStatus: text(turn.status) });
     }
   }
   const last = obj(thread.turns.at(-1));
@@ -200,7 +239,10 @@ export function applyNotice(previous: readonly Message[], notice: NativeNotice):
   const p = obj(notice.params), turnId = text(p.turnId) || text(obj(p.turn).id);
   if (!turnId) return [...previous];
   const item = obj(p.item), itemId = text(p.itemId) || text(item.id);
-  if (notice.method === 'turn/completed' && turnId) return previous.map((m) => m.turnId === turnId ? { ...m, complete: true } : m);
+  if (notice.method === 'turn/completed' && turnId) {
+    const status = text(obj(p.turn).status) || 'completed';
+    return previous.map((m) => m.turnId === turnId ? { ...m, complete: true, turnStatus: status } : m);
+  }
   if (!itemId) return [...previous];
   const id = turnId + ':' + itemId;
   const existing = previous.find((m) => m.id === id);

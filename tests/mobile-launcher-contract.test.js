@@ -5,6 +5,7 @@ import test from "node:test";
 const appServer = readFileSync(new URL("../scripts/mobile-app-server.ps1", import.meta.url), "utf8");
 const mobileLauncher = readFileSync(new URL("../scripts/mobile-launcher.ps1", import.meta.url), "utf8");
 const gateway = readFileSync(new URL("../scripts/gateway-only.ps1", import.meta.url), "utf8");
+const gatewayTask = readFileSync(new URL("../scripts/install-gateway-task.ps1", import.meta.url), "utf8");
 const gatewayMain = readFileSync(new URL("../gateway/main.ts", import.meta.url), "utf8");
 const env = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
 const runtime = readFileSync(new URL("../scripts/mobile-runtime.js", import.meta.url), "utf8");
@@ -54,6 +55,18 @@ test("Gateway ownership also checks loopback PID and birth time if CIM access is
   assert.match(gateway, /TotalSeconds/);
   assert.match(gateway, /0x80041003/);
   assert.match(gateway, /Get-Command node.exe/);
+});
+
+test("Gateway starts via an interactive least-privilege Windows task, not a CCM child process", () => {
+  assert.match(gatewayTask, /New-ScheduledTaskPrincipal -UserId \$user -LogonType Interactive -RunLevel Limited/);
+  assert.match(gatewayTask, /New-ScheduledTaskTrigger -AtLogOn -User \$user/);
+  assert.match(gatewayTask, /-Action task-run/);
+  assert.match(gatewayTask, /Another or outdated scheduled task uses this name/);
+  assert.match(gateway, /Start-ScheduledTask -TaskName \$taskName/);
+  assert.match(gateway, /\[ValidateSet\('start', 'status', 'stop', 'task-run'\)\]/);
+  assert.match(gateway, /if \(\$Action -eq 'start'\)/);
+  assert.match(gateway, /Get-OwnedGateway/);
+  assert.match(gateway, /Get-ListeningGatewayPid/);
 });
 
 test("independent Codex sign-in uses the dedicated home without copying another profile", () => {

@@ -1,47 +1,98 @@
-# CodexMobileUI system architecture
+# CodexMobileUI 架构（2026-11-21 当前运行状态）
 
-## Web browser frontend (visual prototype)
+## Browser-local machine detection (2026-11-23)
 
-`web/` is an independent React/Vite frontend, separate from Android/Expo and the per-host OAuth Gateway. It renders clearly identified fictional hosts, projects and conversations; its local send action does not invoke a model. No browser API client, real server credentials or Tailscale route exists in this milestone.
+The shared web UI must **not** use the Coordinator host or selected thread host
+as the identity of the computer displaying a file link. Ordinary browsers
+identify 6v/noha by requesting `/api/local-machine` on their own loopback
+`127.0.0.1:4190` (6v Coordinator) and `127.0.0.1:4191` (noha Agent).
+Each listener returns only its own identity, only to the configured Coordinator
+Origin and only over loopback. The web CSP allows precisely those two local
+HTTP endpoints; both support Chromium private-network preflights. If exactly
+one response matches, the browser uses that computer for local-vs-UNC display
+path conversion. Otherwise the browser retains a manual choice, if any, or
+leaves paths unchanged; it must never silently default to 6v. Electron uses
+its native OS hostname detection instead. Android does not need a Windows
+identity; unrecognized devices do not guess one.
 
-The next step is an authenticated web coordinator reachable through private Tailscale Serve, which binds each request and approval to a specific host and thread and routes to each host's authenticated Gateway. Keep the raw native App Server socket bound to loopback, keep host `CODEX_HOME` databases independent, and leave the existing Android/Funnel deployment unchanged unless specifically authorized.
+This is deployed with the existing web static build and both loopback Web
+Bridge processes. noha's host-only bundle must copy `localIdentity.mjs` as
+`scripts/localIdentity.mjs` beside `scripts/web-bridge.mjs`. No EXE or APK
+rebuild is required for this shared-web-only change. Verified in actual
+headless Edge browsers on both 6v and noha after the 2026-11-23 deployment.
 
-## Authority and separation
+## Windows desktop shell (first implementation)
 
-- The dedicated Windows Codex App Server owns genuine threads, projects, turns, model settings and approvals.
-- Android SQLite owns cached snapshots, title jobs, diagnostic history and unsent drafts. `src/storage/profile.ts` namespaces conversation data for the private backend so previous mobile caches cannot surface as current sessions.
-- Android SecureStore owns OAuth tokens for connecting to a specific host Gateway; these are not native Codex model credentials.
-- The independent native `CODEX_HOME` is `%LOCALAPPDATA%\CodexMobileUI\CodexHome`. This profile is not populated with another Codex installation's sessions, settings, tokens or locks.
-- Only the verified executable/runtime package is sourced from the installed Codex Desktop kernel family, copied to an immutable fingerprinted directory in `.runtime/mobile`. No Desktop UI or external compatibility proxy is involved.
+`desktop/` adds an Electron Windows client to the existing unified UI.
+It loads only the private 6v Coordinator and never embeds a second Gateway,
+Codex App Server, browser chat implementation or native conversation store.
+Per-computer origin/host/IP/share settings and window geometry live in the
+Electron userData folder. The renderer has no Node integration and runs with
+context isolation and a Chromium sandbox. Origin-bound IPC exposes only
+reveal-in-Explorer for validated local/remote drive paths; native Save As
+handles the existing opaque publication download, not arbitrary file reads.
+6v/noha Host-only gateway deployments remain unchanged; see `desktop/README.md`.
 
-## Network and process topology
+## 单一 UI
+
+`web/src/` 的 React 应用是 **唯一** 聊天界面。Web 浏览器直接加载 6v 的 Web Coordinator；Android `App.tsx` 是极薄的 Expo/WebView 容器，只做内网入口发现、返回键和系统文件保存/分享。旧的 React Native 聊天页、账户页、侧栏、视觉编辑器、手机原生 OAuth 与独立会话状态逻辑均已删除。移动断点使用 `web/src/desktop.css`。
+
+Android `src/storage/database.ts` 仍使用原 SQLite 文件 `codexmobileui.db`，只读取/保存 `mobile_network` 的 coordinator 与 `hosts` 机器表。升级时不主动删除旧设备上的其他表或已有数据。模型和会话状态来自目标电脑 Codex App Server，不在手机中复制一份真相。
+
+## 主机和网络
 
 ```text
-Android + SecureStore -- HTTPS/WSS :8443 --> Tailscale Funnel
+浏览器或 Android WebView
+    |
+    | HTTPS / WSS 4190  （仅 Tailnet）
+    v
+6v Web Coordinator 127.0.0.1:4190
+    |                                  |
+    | 本机 6v                          | noha 私有 peer 连接/令牌
+    v                                  v
+6v Codex App Server 127.0.0.1:45891   noha Web Agent 127.0.0.1:4191
                                             |
-                                  OAuth Gateway (127.0.0.1:48888)
-                                            |
-                                  Native App Server WS (127.0.0.1:45891)
-                                            |
-                                  CODEX_HOME private persistent folder
+                                            v
+                                      noha Codex App Server 127.0.0.1:45891
 ```
 
-`scripts/mobile-app-server.ps1` is the only backend process lifecycle owner. `scripts/gateway-only.ps1` independently manages Gateway. `scripts/mobile-launcher.ps1` sequences startup and shutdown, while `Login-CodexMobile.cmd` allows separate interactive native authentication. Neither entry manages another application's processes. No native filesystem or model socket is directly published to Funnel.
+6v、noha 各自拥有独立的 Codex App Server、Gateway（48889，loopback + 自己的 Tailscale IPv4）、`.state`、`.runtime/mobile`、`%LOCALAPPDATA%\CodexMobileUI\CodexHome`、登录凭据、项目和任务调度器数据库。手机保存私有 Tailnet HTTPS 网页入口。原有 6v Gateway 的内网端口 48889 继续提供机器发现。旧的 48888 和公网 8443 Funnel 移动入口已经废弃。
 
-Native protocol: JSON-RPC `initialize` / `initialized`, cursor-paginated `thread/list` and `project/list`, `thread/resume`, `thread/read`, `thread/start`, `turn/start`, `thread/metadata/update`, `thread/name/set` and typed native turn/item notifications. The Gateway forwards only allowlisted methods and validates constrained write requests.
+所有服务均由各自主机现有的、交互用户权限级别为 Limited 的 Windows 计划任务启动。6v 项目是完整开发源码；noha 仅有 Host-only 运行包。仅发布编译后的 Gateway、同版本 Web Agent 及配套模块，绝不覆盖对方私有配置、凭据、Codex Home 或运行时。
 
-## Conversation lifecycle
+## 权限与数据边界
 
-Blank chat selection is local only. On the first actual send for a project, the phone passes an existing root plus native `projectId` into `thread/start`, then `turn/start`. For an explicit projectless chat, the authenticated Gateway chooses a fixed host-owned work path and calls native `fs/createDirectory`/`fs/getMetadata` before thread creation. Pending IDs and drafts are persisted; ambiguous commits are never silently replayed.
+Web Coordinator 只接受配置的 Tailnet HTTPS 主机与端口 和同源 WebSocket Origin，不设公开的浏览器身份系统，接入设备由 Tailnet 和 ACL 控制。浏览器与 Android 发起的 RPC 均经 Web Bridge 参数白名单和目标主机 App Server 校验。禁止让客户端任意指定 Windows 文件路径、源码目录、sandbox 对象或审批结果。项目目录使用主机颁发的 locator；修改 `AGENTS.md` 和 `config.toml` 使用专用范围内的读/写 RPC 和文件版本冲突检查。Codex 的项目、会话、工具执行、模型、权限和剩余额度以所属电脑的真实服务端结果为准。
 
-Projects and threads are isolated by native `CODEX_HOME`. No old project list is imported into the private profile. Real project moves change project metadata only, not cwd or disk files. A bounded ephemeral title thread generates a structured short title without polluting conversation history or overriding manual names.
+## 消息和文件
 
-The mobile cache host key has a dedicated profile namespace, independent of OAuth host IDs. Old Android cache records remain physically intact but are not loaded for the independent backend.
+图片作为原生 `localImage` 消息部分上传；普通用户文件通过 `web/attachment/*` 在实际主机写入服务器管理目录，以 Codex Desktop 原生文件引用格式发送，绝不添加 MobileUI 自造的读文件提示词。图片和普通文件合计最多 4 个，普通文件单个 8 MiB。上传分块并提供进度及取消，上传标识仅归当前连接拥有。
 
-## Trust boundaries
+助手显式 Markdown 文件链接保持原文；网页版可显示、复制绝对路径，手机显示文件名或链接标签并使用受限下载接口。符合条件且不超过 12 MiB 的助手文件通过 Gateway 的不可变发布快照下载，更大的助手文件沿用主机端夸克上传逻辑（**这不涉及 APK 发布**）。任何普通正文绝对路径都不会自动变成任意主机文件读取。Android 文件下载由 `src/core/nativePublicationDownload.ts` 保存到 App 私有存储并调用系统分享/保存界面。
 
-Only authenticated HTTPS/WSS reaches the Gateway. OAuth PKCE binds the browser callback and one-use code; refresh tokens rotate and secrets stay private. The Gateway rejects unknown native RPC and arbitrary host filesystem paths. A permitted turn can run privileged tools subject to Codex sandbox/approval. Choosing cwd is not a filesystem isolation guarantee. No confidential data belongs in source, tests or diagnostics.
+## 发布与验证
 
-## Verification status
+2026-11-21 的版本为 `0.1.16`、Android versionCode `18`。6v 和 noha 的 Gateway/Web 服务已部署；通过两个主机真实 WebSocket 的 `initialize`、`project/list`、`web/attachment/start` / cancel、`web/projectDirectories`、`web/automation` 列表验收。
 
-TypeScript and host contract tests check the source. They do not establish actual new-backend startup, native model authentication, on-phone login, full streaming, Windows filesystem restrictions or Desktop session behavior. Those require controlled runtime tests on each host and a real Android device. Current work preserves the owner's normal Desktop environment.
+Android ARM64 安装包通过稳定构建脚本、版本与包 ID、内置 JS、ARM64、v2 测试签名和 SHA-256 检查，并由 CCM `publish` 直接交付当前 ChatGPT 对话，**不再上传夸克**。当前 APK 的 SHA-256 为 `99A22455AFAC246DC3D1D583F2BE7A62E8DFF25EA9462F867981634636A6CC54`。
+
+电脑 WebSocket 验收不能代替实体机验收。Android 拍照、文件选择、下载/分享、键盘行为及触摸交互仍应在真实设备上测试。只有用户明确要求时才构建新的 APK。
+# 双向 SMB 路径映射（2026-11-21，待部署验收）
+
+- 共享设置保存在 6v `.state/file-path-hosts.json`（仅 IP / 共享名），
+  默认 `6v=100.76.74.124/6v1f`、`noha=100.96.30.32/noha`，
+  共享名对应各自 `C:\` 根。电脑桌面壳还保存自己的 localHost 身份。
+- 网页/Android 的用户输入只有在含绝对路径时才调用目标主机的
+  `web/pathResolve`。请求经过现有 WebSocket 白名单；目标主机通过 Node
+  受限的 stat/access 验证本机和远程 SMB 候选，唯一匹配才变换。
+  相同绝对路径同时存在于两台主机则禁止自动选择，用户需提供明确 UNC。
+- Electron 文件选择优先 `webUtils.getPathForFile` 取得本机原始位置，
+  `web/pathFile` 在目标主机核验可读后直接使用原生 Desktop 文件引用格式；
+  不能读取的文件回落到现有二进制上传。其他平台不假定浏览器 File 含真实路径。
+- 助手回复只在原有显式文件链接显示上投影本机/UNC 路径；普通文本、代码及
+  Codex 原生输出均保持不变。手机沿用原始链接拥有者的文件下载服务。
+- 6v `.state/file-path-overlays.json` 仅存 user turn 与路径替换对，浏览器
+  `thread/read` 后用它还原用户界面的原始输入，不把原始路径覆盖回模型上下文。
+- 上线时必须同步两端 Web Bridge 及 noha Agent 随附的 `pathResolver.mjs`、
+  `pathSettings.mjs`、`pathOverlays.mjs`，不修改现有私密配置。
+  对不同运行账户的 SMB 可读性、真实模型读取文件、手机文件引用/下载分别验收。

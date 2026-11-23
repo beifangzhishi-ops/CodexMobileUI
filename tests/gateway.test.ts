@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, request as httpRequest } from 'node:http';
 import { resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createHttpHandler, type OAuthAuditEvent } from '../gateway/http';
@@ -121,6 +121,11 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
         result: request.method === 'fs/getMetadata'
           ? { isDirectory: true, isSymlink: false } : { success: true },
       }));
+      if (request.method === 'thread/delete') {
+        ws.send(JSON.stringify({
+          method: 'thread/deleted', params: { threadId: 'PRIVATE-TEST-THREAD-ID' },
+        }));
+      }
     });
   });
   const gateway = createGateway({
@@ -224,6 +229,82 @@ test('OAuth PKCE → authenticated WSS gateway → actual JSON-RPC relay', async
       ws.send(JSON.stringify({ id: 20, method: 'workspace/prepare', params: { draftId: '../outside' } }));
     });
     assert.equal((invalid.error as { code: number }).code, -32603);
+    // Only directories obtained under host-approved roots can become project
+    // roots. The native create receives a verified path, never raw client path.
+    const extraRoot = resolve(directory, 'allowed-projects');
+    mkdirSync(extraRoot);
+    const previousRootSetting = process.env.MOBILE_PROJECT_ROOTS;
+    process.env.MOBILE_PROJECT_ROOTS = extraRoot;
+    const projectRequest = (id: number, method: string, params: Record<string, unknown>) =>
+      new Promise<Record<string, unknown>>((accept, reject) => {
+        const timer = setTimeout(() => reject(new Error('project RPC timed out')), 3000);
+        const handler = (bytes: unknown) => {
+          const response = JSON.parse(String(bytes)) as Record<string, unknown>;
+          if (response.id !== id) return;
+          ws.off('message', handler);
+          clearTimeout(timer);
+          accept(response);
+        };
+        ws.on('message', handler);
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    try {
+      const roots = await projectRequest(21, 'workspace/projectDirectories', {});
+      const options = (roots.result as { directories: { locator: string; path: string }[] }).directories;
+      const selected = options.find((item) => item.path === extraRoot);
+      assert.ok(selected, 'host-authorized project root should be browsable');
+      const listing = await projectRequest(22, 'workspace/projectDirectories', {
+        locator: selected.locator,
+      });
+      assert.equal((listing.result as { path: string }).path, extraRoot);
+      const created = await projectRequest(23, 'workspace/projectCreate', {
+        name: 'Gateway picker test', locator: selected.locator,
+        idempotencyKey: Date.now() + '-abcdef0123456789abcdef01',
+      });
+      assert.deepEqual(created.result, { success: true });
+      const upstreamProject = JSON.parse(upstreamMessage) as {
+        method: string; params: { roots: { path: string }[] };
+      };
+      assert.equal(upstreamProject.method, 'project/create');
+      assert.deepEqual(upstreamProject.params.roots, [{ path: extraRoot }]);
+      const acceptedUpstreamFrame = upstreamMessage;
+      const rejected = await projectRequest(24, 'workspace/projectCreate', {
+        name: 'Unsafe', locator: 'r99',
+        idempotencyKey: Date.now() + '-abcdef0123456789abcdef02',
+      });
+      assert.equal((rejected.error as { code: number }).code, -32603);
+      assert.equal(upstreamMessage, acceptedUpstreamFrame,
+        'invalid locator should not reach native server');
+    } finally {
+      if (previousRootSetting === undefined) delete process.env.MOBILE_PROJECT_ROOTS;
+      else process.env.MOBILE_PROJECT_ROOTS = previousRootSetting;
+    }
+    const deleted = await new Promise<Record<string, unknown>>((accept, reject) => {
+      const timeout = setTimeout(() => reject(new Error('delete trace relay timed out')), 2500);
+      ws.on('message', (bytes) => {
+        const response = JSON.parse(bytes.toString()) as Record<string, unknown>;
+        if (response.id === 21) {
+          clearTimeout(timeout);
+          accept(response);
+        }
+      });
+      ws.send(JSON.stringify({
+        id: 21, method: 'thread/delete', params: { threadId: 'PRIVATE-TEST-THREAD-ID' },
+      }));
+    });
+    assert.deepEqual(deleted.result, { success: true });
+    const log = readFileSync(resolve(directory, 'mobile-gateway-requests.jsonl'), 'utf8');
+    const traces = log.trim().split('\n').map((line) => JSON.parse(line) as {
+      event: string; rpcMethod?: string; rpcRequestId?: number; rpcOutcome?: string;
+    });
+    assert.ok(traces.some((event) => event.event === 'rpc.forwarded' &&
+      event.rpcMethod === 'thread/delete' && event.rpcRequestId === 21));
+    assert.ok(traces.some((event) => event.event === 'rpc.completed' &&
+      event.rpcMethod === 'thread/delete' && event.rpcRequestId === 21 &&
+      event.rpcOutcome === 'success'));
+    assert.ok(traces.some((event) => event.event === 'rpc.notification' &&
+      event.rpcMethod === 'thread/deleted'));
+    assert.doesNotMatch(log, /PRIVATE-TEST-THREAD-ID/);
   } catch (error) {
     console.error('Gateway integration failure:', error);
     throw error;
@@ -256,6 +337,81 @@ test('unauthorized websocket cannot reach upstream', async () => {
     assert.equal(code, 4001);
   } finally {
     await gateway.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('private Tailnet listener discovers machines and connects without OAuth', async () => {
+  const directory = resolve('.tmp', 'private-gateway-' + randomUUID());
+  mkdirSync(directory, { recursive: true });
+  const manifest = resolve(directory, 'hosts.json');
+  writeFileSync(manifest, JSON.stringify([
+    { name: '6v', url: 'http://100.76.74.124:48889' },
+    { name: 'noha', url: 'http://100.96.30.32:48889' },
+  ]));
+  const native = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((ok, fail) => {
+    native.once('listening', ok);
+    native.once('error', fail);
+  });
+  const nativeAddress = native.address();
+  if (!nativeAddress || typeof nativeAddress === 'string') throw Error('Unexpected native address');
+  const gateway = createGateway({
+    publicOrigin: 'https://unused.invalid', secret: SECRET,
+    redirectUri: REDIRECT, listenPort: 0, privatePort: 0,
+    privateManifestFile: manifest, stateFile: resolve(directory, 'state.json'),
+    upstream: 'ws://127.0.0.1:' + nativeAddress.port,
+  });
+  await gateway.listen();
+  let client: WebSocket | null = null;
+  const port = gateway.port();
+  const headers = { Host: '100.76.74.124:48889', Origin: 'http://100.76.74.124:48889' };
+  const read = (path: string) => new Promise<{ status: number; body: string }>((accept, reject) => {
+    // Undici's fetch sets Host from the socket URI, so this local-loopback
+    // integration test must explicitly reproduce the Tailnet proxy Host header.
+    const req = httpRequest({
+      hostname: '127.0.0.1', port, path, method: 'GET', headers,
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (part: string) => { body += part; });
+      res.on('end', () => accept({ status: res.statusCode ?? 0, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  try {
+    const list = await read('/hosts');
+    assert.equal(list.status, 200);
+    assert.deepEqual(JSON.parse(list.body), { hosts: [
+      { id: '6v', name: '6v', url: 'http://100.76.74.124:48889' },
+      { id: 'noha', name: 'noha', url: 'http://100.76.74.124:48889' },
+    ] });
+    assert.equal((await fetch('http://127.0.0.1:' + port + '/hosts')).status, 403);
+    assert.equal((await read('/oauth/authorize')).status, 404);
+    client = new WebSocket('ws://127.0.0.1:' + port + '/connect?host=6v', { headers });
+    const ready = new Promise<void>((accept, reject) => {
+      const timeout = setTimeout(() => reject(Error('Private gateway handshake timed out')), 5000);
+      client!.on('message', (data) => {
+        try {
+          const frame = JSON.parse(data.toString()) as { type?: string };
+          if (frame.type === 'ready') { clearTimeout(timeout); accept(); }
+        } catch { /* unrelated frame */ }
+      });
+      client!.on('error', (err) => { clearTimeout(timeout); reject(err); });
+      client!.on('close', (code) => {
+        clearTimeout(timeout);
+        reject(Error('Private gateway closed before ready: ' + code));
+      });
+    });
+    client.on('open', () => client!.send(JSON.stringify({ type: 'connect' })));
+    await ready;
+    assert.equal(client.readyState, WebSocket.OPEN);
+  } finally {
+    client?.terminate();
+    await gateway.close();
+    for (const client of native.clients) client.terminate();
+    await new Promise<void>((done) => native.close(() => done()));
     rmSync(directory, { recursive: true, force: true });
   }
 });

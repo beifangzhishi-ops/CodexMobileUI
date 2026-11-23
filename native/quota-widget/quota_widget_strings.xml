@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="quota_widget_shortcut_short">添加小组件</string>
+    <string name="quota_widget_shortcut_long">添加额度小组件</string>
+    <string name="quota_widget_pin_unsupported">请长按桌面空白处，在小组件列表中选择 CodexMobileUI</string>
+</resources>

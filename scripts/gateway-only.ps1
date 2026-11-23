@@ -1,7 +1,7 @@
 # Mobile HTTPS gateway lifecycle. Backend lifecycle is managed independently
 # by the MobileUI-owned local App Server launcher.
 param(
-    [ValidateSet('start', 'status', 'stop')]
+    [ValidateSet('start', 'status', 'stop', 'task-run')]
     [string]$Action = 'start'
 )
 
@@ -11,18 +11,19 @@ $root = Split-Path -Parent $PSScriptRoot
 $gateway = Join-Path $root 'dist\gateway\main.js'
 $state = Join-Path $root '.state'
 $pidFile = Join-Path $state 'mobile-gateway.pid'
-$port = 48888
+$port = 48889
+$taskName = 'CodexMobileUI Gateway'
 
 function Get-ListeningGatewayPid {
     try {
-        $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
-        if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1') { return 0 }
+        $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop |
+            Where-Object { $_.LocalAddress -eq '127.0.0.1' })
+        if ($listeners.Count -ne 1) { return 0 }
         return [int]$listeners[0].OwningProcess
     } catch {
         $pids = @()
         foreach ($line in @(netstat -ano 2>$null)) {
-            if ($line -match '^\s*TCP\s+(\S+:48888)\s+\S+\s+LISTENING\s+([0-9]+)\s*$') {
-                if ($Matches[1] -ne '127.0.0.1:48888') { return 0 }
+            if ($line -match '^\s*TCP\s+(127\.0\.0\.1:(?:48888|48889))\s+\S+\s+LISTENING\s+([0-9]+)\s*$') {
                 $pids += [int]$Matches[2]
             }
         }
@@ -61,7 +62,7 @@ function Get-OwnedGateway {
 
 function Test-GatewayHealth {
     $status = & curl.exe --noproxy '*' --silent --output NUL --write-out '%{http_code}' `
-        --connect-timeout 2 --max-time 3 'http://127.0.0.1:48888/health'
+        --connect-timeout 2 --max-time 3 'http://127.0.0.1:48889/health'
     return ($LASTEXITCODE -eq 0 -and $status -eq '200')
 }
 
@@ -70,9 +71,8 @@ function Import-GatewayEnv {
     if (-not (Test-Path -LiteralPath $envFile)) {
         throw "Missing per-host private configuration: $envFile"
     }
-    $keys = @('MOBILE_PUBLIC_ORIGIN', 'MOBILE_APPROVAL_SECRET',
-              'MOBILE_REDIRECT_URI', 'MOBILE_GATEWAY_PORT',
-              'CODEX_APP_SERVER_WS')
+    $keys = @('CODEX_APP_SERVER_WS', 'MOBILE_PROJECT_ROOTS',
+              'MOBILE_PRIVATE_GATEWAY_PORT')
     foreach ($line in (Get-Content -LiteralPath $envFile -Encoding utf8)) {
         if ($line -notmatch '^\s*([A-Z][A-Z0-9_]*)=(.*)$') { continue }
         $key = $Matches[1]
@@ -80,18 +80,9 @@ function Import-GatewayEnv {
         $value = $Matches[2].Trim()
         [Environment]::SetEnvironmentVariable($key, $value, 'Process')
     }
-    if ($env:MOBILE_PUBLIC_ORIGIN -notmatch '^https://[^/]+\.ts\.net:8443$') {
-        throw 'The independent mobile gateway expects this host HTTPS Funnel origin on port 8443.'
-    }
-    if (-not $env:MOBILE_APPROVAL_SECRET -or
-        $env:MOBILE_APPROVAL_SECRET.Length -lt 32 -or
-        $env:MOBILE_APPROVAL_SECRET.StartsWith('replace-')) {
-        throw 'Generate a private random mobile authorization secret of at least 32 characters.'
-    }
     if ($env:CODEX_APP_SERVER_WS -ne 'ws://127.0.0.1:45891' -or
-        $env:MOBILE_GATEWAY_PORT -ne '48888' -or
-        $env:MOBILE_REDIRECT_URI -ne 'codexmobileui://oauth') {
-        throw 'Unexpected dedicated MobileUI upstream, port or OAuth redirect configuration.'
+        ($env:MOBILE_PRIVATE_GATEWAY_PORT -and $env:MOBILE_PRIVATE_GATEWAY_PORT -ne '48889')) {
+        throw 'Unexpected dedicated MobileUI upstream or private port configuration.'
     }
 }
 
@@ -111,6 +102,43 @@ if ($Action -eq 'stop') {
         Write-Output 'No owned mobile gateway to stop; other processes untouched.'
     }
     return
+}
+if ($Action -eq 'start') {
+    $owner = Get-OwnedGateway
+    if ($owner) {
+        if (Test-GatewayHealth) { Write-Output 'Owned mobile gateway already healthy.'; return }
+        throw 'Owned gateway is running but unhealthy; refusing to restart or adopt.'
+    }
+    if (Test-GatewayHealth -or (Get-ListeningGatewayPid)) {
+        throw 'Gateway port is occupied by an unknown process; refusing to adopt.'
+    }
+    try {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    } catch {
+        throw 'Gateway scheduled task is missing or inaccessible; install it or run this action from a normal Windows session (CCM requires authorized escalation).'
+    }
+    if (-not $task -or $task.TaskPath -ne '\') {
+        throw 'Gateway scheduled task is not installed; run scripts/install-gateway-task.ps1 first.'
+    }
+    $expectedScript = Join-Path $PSScriptRoot 'gateway-only.ps1'
+    $taskAction = @($task.Actions)[0]
+    if (@($task.Actions).Count -ne 1 -or
+        $taskAction.Arguments -notlike ('*-File "' + $expectedScript + '" -Action task-run') -or
+        $taskAction.WorkingDirectory -ne $root -or
+        $task.Principal.LogonType -ne 'Interactive' -or
+        $task.Principal.RunLevel -ne 'Limited') {
+        throw 'Gateway scheduled task definition differs from this checkout; refusing to launch.'
+    }
+    Start-ScheduledTask -TaskName $taskName
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        if (Get-OwnedGateway -and (Test-GatewayHealth)) {
+            Write-Output 'Mobile gateway started by Windows Task Scheduler on loopback port 48889.'
+            return
+        }
+        Start-Sleep -Milliseconds 350
+    }
+    throw 'Gateway scheduled task did not start a healthy owned process.'
 }
 if (Get-OwnedGateway) {
     if (Test-GatewayHealth) { Write-Output 'Owned mobile gateway already healthy.'; return }
@@ -136,7 +164,7 @@ Set-Content -LiteralPath $pidFile -Value ([string]$process.Id) -Encoding ascii
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {
     if (Test-GatewayHealth) {
-        Write-Output 'Mobile gateway listening on loopback port 48888.'
+        Write-Output 'Mobile gateway listening on loopback port 48889.'
         return
     }
     if ($process.HasExited) { break }

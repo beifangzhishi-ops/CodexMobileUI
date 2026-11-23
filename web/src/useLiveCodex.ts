@@ -2,10 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Conversation, HostId, Message } from './types';
 import {
   applyNotice, obj, parseGoal, parseModels, parsePermissions, parseProjects, parseQueue,
-  parseSnapshot, parseThreads, text,
+  parseSnapshot, parseThreads, text, threadPreviewTitle,
 } from './nativeProtocol';
 import type { NativeGoal, NativeModel, NativePermission, NativeProject, NativeQueueEntry } from './nativeProtocol';
 import { localMessageId } from './browserHelpers';
+import type { NativeMention } from '../../shared/mentions';
+import { parseContextWindowUsage, type ContextWindowUsage } from '../../shared/contextUsage';
+import { parseRateQuota, type RateQuota } from '../../shared/rateLimits';
+import { desktopFileMessage } from '../../shared/desktopFileReferences';
+import { uploadDocument } from './documentUpload';
+import { hasAbsolutePaths, type PathHosts } from './pathHosts';
+import { displayOriginalPaths, readPathOverlays, storePathOverlay, type PathChange } from './pathOverlays';
+import { desktopBridge } from './desktopBridge';
 
 type Params = Record<string, unknown>;
 type Frame = { id?: number; method?: string; params?: Params; result?: unknown; error?: { message?: string; code?: number }; type?: string };
@@ -15,6 +23,9 @@ type HostStatus = 'connecting' | 'online' | 'offline';
 export type PermissionMode = 'default' | 'auto-review' | 'read-only' | 'full-access' | 'custom';
 export type FollowUpMode = 'steer' | 'queue';
 export type SendOptions = {
+  preparedAttachments?: { imagePaths: string[]; uploadedDocuments: { name: string; path: string }[] };
+  pathHosts?: PathHosts;
+  mentions?: NativeMention[];
   model?: string;
   effort?: string;
   permissionMode?: PermissionMode;
@@ -22,8 +33,12 @@ export type SendOptions = {
   goal?: string;
   followUpMode?: FollowUpMode;
   images?: File[];
+  documents?: File[];
+  signal?: AbortSignal;
+  onUploadsDone?: () => void;
   onUploadProgress?: (received: number, total: number) => void;
   onCreated?: (id: string) => void;
+  onAccepted?: (threadId: string, turnId: string, steered: boolean) => void;
 };
 export type Approval = { hostId: HostId; id: number; method: string; detail: string };
 const HOSTS: HostId[] = ['6v', 'noha'];
@@ -38,15 +53,25 @@ const threadKey = (hostId: HostId, id: string) => hostId + ':' + id;
 export function useLiveCodex() {
   const [status, setStatus] = useState<Record<HostId, HostStatus>>({ '6v': 'connecting', noha: 'connecting' });
   const [errors, setErrors] = useState<Record<HostId, string | null>>({ '6v': null, noha: null });
+  const [rateQuota, setRateQuota] = useState<Partial<Record<HostId, RateQuota>>>({});
   const [projects, setProjects] = useState<NativeProject[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [models, setModels] = useState<Record<HostId, NativeModel[]>>({ '6v': [], noha: [] });
   const [permissions, setPermissions] = useState<Record<HostId, NativePermission[]>>({ '6v': [], noha: [] });
+  const [threadPermissions, setThreadPermissions] = useState<Record<string, PermissionMode>>({});
   const [goals, setGoals] = useState<Record<string, NativeGoal | null>>({});
   const [queues, setQueues] = useState<Record<string, NativeQueueEntry[]>>({});
+  const [contextUsages, setContextUsages] = useState<Record<string, ContextWindowUsage>>({});
+  const waitingForModelTurn = useRef(new Set<string>());
   const [approval, setApproval] = useState<Approval | null>(null);
   const clients = useRef(new Map<HostId, Client>());
   const active = useRef<{ hostId: HostId; threadId: string } | null>(null);
+  // Keep an explicitly chosen config-based mode across in-page navigation,
+  // even when config.toml resolves to the same named profile as a preset.
+  const permissionSelections = useRef(new Map<string, {
+    mode: PermissionMode; profile: string | null; reviewer: string | null;
+  }>());
+  const permissionEpochs = useRef(new Map<string, number>());
   const changed = useRef(new Map<string, number>());
   // A very fast model can finish before the turn/start acknowledgement is
   // processed. Never revive a completed turn as "running" on late ack.
@@ -69,6 +94,11 @@ export function useLiveCodex() {
       catch { clearTimeout(timer); client.pending.delete(id); reject(Error('REQUEST_UNCONFIRMED')); }
     });
   }, []);
+
+  const refreshRateQuota = useCallback(async (hostId: HostId) => {
+    const snapshot = parseRateQuota(await request(hostId, 'account/rateLimits/read', {}));
+    if (snapshot) setRateQuota((previous) => ({ ...previous, [hostId]: snapshot }));
+  }, [request]);
 
   const pageList = useCallback(async (hostId: HostId, method: 'project/list' | 'thread/list' | 'thread/queue/list', extra: Params = {}) => {
     const rows: unknown[] = [], cursors = new Set<string>();
@@ -108,8 +138,11 @@ export function useLiveCodex() {
       });
       // New threads may be ephemeral until native persistence. Do not vanish an
       // acknowledged first send just because it has not reached thread/list.
+      // Do not keep phantom Web conversations indefinitely. A persisted thread
+      // absent from the complete native list was deleted or moved elsewhere.
+      // Only retain fresh, not-yet-indexed native thread/start acknowledgments.
       const pending = [...previous.values()].filter((item) => !byId.has(item.id) && !item.archived &&
-        (item.localCreated || item.syncPending || item.running || item.messages.length > 0));
+        item.localCreated && (item.running || Date.now() - item.updatedAt < 10 * 60_000));
       return [...all.filter((item) => item.hostId !== hostId), ...pending, ...next];
     });
     setErrors((all) => ({ ...all, [hostId]: null }));
@@ -125,10 +158,38 @@ export function useLiveCodex() {
     catch { /* Permissions stay unavailable; never infer access. */ }
   }, [pageList, request]);
 
+  const forgetDeletedThread = useCallback((hostId: HostId, threadId: string) => {
+    setConversations((all) => all.filter((item) => !(item.hostId === hostId && item.id === threadId)));
+    waitingForModelTurn.current.delete(threadKey(hostId, threadId));
+    setContextUsages((all) => {
+      const next = { ...all };
+      delete next[threadKey(hostId, threadId)];
+      return next;
+    });
+    if (active.current?.hostId === hostId && active.current.threadId === threadId) active.current = null;
+  }, []);
+
+  const clearContextUsage = useCallback((hostId: HostId, threadId: string) => {
+    // A model choice applies to the next turn. Old-turn updates cannot repopulate
+    // the circle with the previous model's capacity in the meantime.
+    waitingForModelTurn.current.add(threadKey(hostId, threadId));
+    setContextUsages((all) => {
+      if (!all[threadKey(hostId, threadId)]) return all;
+      const next = { ...all };
+      delete next[threadKey(hostId, threadId)];
+      return next;
+    });
+  }, []);
+
   const readThread = useCallback(async (hostId: HostId, threadId: string): Promise<Message[]> => {
     const key = threadKey(hostId, threadId);
     const eventVersion = changed.current.get(key) ?? 0;
-    const snapshot = parseSnapshot(await request(hostId, 'thread/read', { threadId, includeTurns: true }), threadId);
+    const [native, overlays] = await Promise.all([
+      request(hostId, 'thread/read', { threadId, includeTurns: true }),
+      readPathOverlays(hostId, threadId).catch(() => []),
+    ]);
+    const snapshot = parseSnapshot(native, threadId);
+    snapshot.messages = displayOriginalPaths(snapshot.messages, overlays);
     if (eventVersion !== (changed.current.get(key) ?? 0)) {
       // Do not overwrite newer streaming messages with an older asynchronous read.
       return snapshot.messages;
@@ -155,13 +216,29 @@ export function useLiveCodex() {
   const select = useCallback(async (hostId: HostId, threadId: string) => {
     active.current = { hostId, threadId };
     const messages = await readThread(hostId, threadId);
+    const key = threadKey(hostId, threadId);
+    const epoch = permissionEpochs.current.get(key) ?? 0;
+    void request(hostId, 'thread/resume', { threadId }).then((result) => {
+      if ((permissionEpochs.current.get(key) ?? 0) !== epoch) return;
+      const resumed = obj(result);
+      const profile = text(obj(resumed.activePermissionProfile).id) || null;
+      const reviewer = text(resumed.approvalsReviewer) || null;
+      if (!profile && !reviewer) return;
+      const inferred: PermissionMode = profile === ':workspace' ? (reviewer === 'auto_review' ? 'auto-review' : 'default') :
+        profile === ':read-only' ? 'read-only' : profile === ':danger-full-access' ? 'full-access' : 'custom';
+      const selected = permissionSelections.current.get(key);
+      const mode = selected && selected.profile === profile && selected.reviewer === reviewer
+        ? selected.mode : inferred;
+      if (selected && mode !== selected.mode) permissionSelections.current.delete(key);
+      setThreadPermissions((all) => ({ ...all, [key]: mode }));
+    }).catch(() => undefined);
     void refreshQueue(hostId, threadId).catch(() => undefined);
     void refreshGoal(hostId, threadId).catch(() => undefined);
     return messages;
-  }, [readThread, refreshQueue, refreshGoal]);
+  }, [readThread, refreshQueue, refreshGoal, request]);
 
   const uploadImage = useCallback(async (hostId: HostId, file: File,
-    onProgress: (received: number) => void) => {
+    onProgress: (received: number) => void, signal?: AbortSignal) => {
     const limit = 8 * 1024 * 1024;
     if (file.size < 8 || file.size > limit ||
       !['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'].includes(file.type)) {
@@ -176,6 +253,7 @@ export function useLiveCodex() {
     if (!uploadId) throw Error('IMAGE_UPLOAD_START_UNCONFIRMED');
     try {
       for (let offset = 0; offset < raw.byteLength;) {
+        if (signal?.aborted) throw Error('UPLOAD_CANCELLED');
         const bytes = raw.subarray(offset, offset + 48 * 1024);
         const encoded = btoa(String.fromCharCode(...bytes));
         const received = Number(obj(await request(hostId, 'web/image/chunk',
@@ -184,8 +262,10 @@ export function useLiveCodex() {
         offset = received;
         onProgress(offset);
       }
+      if (signal?.aborted) throw Error('UPLOAD_CANCELLED');
       const path = text(obj(await request(hostId, 'web/image/finish', { uploadId })).path);
       if (!path) throw Error('IMAGE_UPLOAD_FINISH_UNCONFIRMED');
+      if (signal?.aborted) throw Error('UPLOAD_CANCELLED');
       return path;
     } catch (error) {
       // Do not retry an ambiguous upload. An orphaned partial upload is only
@@ -196,14 +276,17 @@ export function useLiveCodex() {
   }, [request]);
 
   const readImage = useCallback(async (hostId: HostId, threadId: string,
-    itemId: string, imageIndex: number): Promise<Blob> => {
+    itemId: string, imageIndex: number,
+    method: 'web/image/read' | 'web/image/assistantRead' | 'web/image/toolRead' = 'web/image/read',
+    turnId?: string): Promise<Blob> => {
     let offset = 0;
     let total: number | null = null;
     let mime = '';
     let image: Uint8Array<ArrayBuffer> | null = null;
     for (let attempt = 0; attempt < 180; attempt++) {
-      const result = obj(await request(hostId, 'web/image/read',
-        { threadId, itemId, imageIndex, offset }, 15_000));
+      const result = obj(await request(hostId, method,
+        method === 'web/image/toolRead' ? { threadId, turnId, itemId, offset } :
+          { threadId, itemId, imageIndex, offset }, 15_000));
       const newTotal = Number(result.total), received = Number(result.received), part = text(result.data);
       const currentMime = text(result.mime);
       if (!Number.isSafeInteger(newTotal) || newTotal < 8 || newTotal > 8 * 1024 * 1024 ||
@@ -220,6 +303,12 @@ export function useLiveCodex() {
     }
     throw Error('IMAGE_TOO_MANY_CHUNKS');
   }, [request]);
+  const readAssistantImage = useCallback((hostId: HostId, threadId: string,
+    itemId: string, imageIndex: number) =>
+    readImage(hostId, threadId, itemId, imageIndex, 'web/image/assistantRead'), [readImage]);
+  const readToolImage = useCallback((hostId: HostId, threadId: string,
+    turnId: string, itemId: string) =>
+    readImage(hostId, threadId, itemId, 0, 'web/image/toolRead', turnId), [readImage]);
 
   useEffect(() => {
     alive.current = true;
@@ -246,6 +335,7 @@ export function useLiveCodex() {
             if (!alive.current || clients.current.get(hostId) !== client) return;
             socket.send(JSON.stringify({ method: 'initialized', params: {} }));
             setStatus((s) => ({ ...s, [hostId]: 'online' }));
+            void refreshRateQuota(hostId).catch(() => undefined);
             void refresh(hostId).catch(() =>
               setErrors((s) => ({ ...s, [hostId]: '同步列表失败，请手动刷新' })));
             if (active.current?.hostId === hostId) void select(hostId, active.current.threadId).catch(() => undefined);
@@ -262,6 +352,10 @@ export function useLiveCodex() {
         }
         if (!frame.method) return;
         const params = obj(frame.params);
+        if (frame.method === 'account/rateLimits/updated') {
+          // Native rolling notifications may omit fields. Re-read instead of replacing the snapshot.
+          void refreshRateQuota(hostId).catch(() => undefined);
+        }
         if (typeof frame.id === 'number') {
           // Only allow responding to an actual pending approval request.
           const allowed = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(frame.method);
@@ -275,6 +369,14 @@ export function useLiveCodex() {
         const threadId = text(params.threadId) || text(obj(params.thread).id);
         if (threadId) {
           const key = threadKey(hostId, threadId);
+          if (frame.method === 'thread/tokenUsage/updated') {
+            const usage = parseContextWindowUsage(params.tokenUsage);
+            if (usage && !waitingForModelTurn.current.has(key))
+              setContextUsages((all) => ({ ...all, [key]: usage }));
+            return; // Usage notifications do not invalidate concurrent message snapshots.
+          }
+          if (frame.method === 'thread/deleted') forgetDeletedThread(hostId, threadId);
+          if (frame.method === 'turn/started') waitingForModelTurn.current.delete(key);
           changed.current.set(key, (changed.current.get(key) ?? 0) + 1);
           if (frame.method === 'turn/started') {
             const turn = obj(params.turn);
@@ -340,8 +442,15 @@ export function useLiveCodex() {
       socket.onerror = () => { /* onclose owns reconnection */ };
     }
     for (const hostId of HOSTS) connect(hostId);
+    const quotaTimer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      for (const hostId of HOSTS) {
+        if (clients.current.get(hostId)?.ready) void refreshRateQuota(hostId).catch(() => undefined);
+      }
+    }, 5 * 60_000);
     return () => {
       alive.current = false;
+      clearInterval(quotaTimer);
       retryTimers.forEach(clearTimeout);
       for (const socket of sockets) socket.close();
       for (const client of clients.current.values()) {
@@ -353,21 +462,68 @@ export function useLiveCodex() {
       refreshTimer.current.clear();
       pollQueued.current.clear();
     };
-  }, [refresh, refreshGoal, readThread, refreshQueue, request, select]);
+  }, [refresh, refreshGoal, readThread, refreshQueue, request, select, refreshRateQuota]);
+
+  const prepareAttachments = useCallback(async (hostId: HostId, files: File[],
+    documents: File[], options: SendOptions) => {
+    const imagePaths: string[] = [];
+    const uploadedDocuments: { name: string; path: string }[] = [];
+    const totalBytes = [...documents, ...files].reduce((size, file) => size + file.size, 0);
+    let uploadedBytes = 0;
+    for (const file of documents) {
+      if (options.signal?.aborted) throw Error('UPLOAD_CANCELLED');
+      const base = uploadedBytes;
+      const native = desktopBridge();
+      if (native?.filePath && options.pathHosts) {
+        let path = '';
+        try { path = native.filePath(file); } catch { /* Browser File lacks a native path. */ }
+        if (/^[A-Za-z]:[\\/]/.test(path)) {
+          const localHost = await native.localHost?.().catch(() => null);
+          if (localHost === '6v' || localHost === 'noha') {
+            const resolved = obj(await request(hostId, 'web/pathFile', {
+              path, sourceHost: localHost, hosts: options.pathHosts,
+            }).catch(() => null));
+            if (typeof resolved.path === 'string' && resolved.path) {
+              uploadedDocuments.push({ name: file.name, path: resolved.path });
+              uploadedBytes += file.size;
+              options.onUploadProgress?.(uploadedBytes, totalBytes);
+              continue;
+            }
+          }
+        }
+      }
+      uploadedDocuments.push(await uploadDocument(hostId, file, request,
+        options.signal, (received) => options.onUploadProgress?.(base + received, totalBytes)));
+      uploadedBytes += file.size;
+    }
+    for (const file of files) {
+      if (options.signal?.aborted) throw Error('UPLOAD_CANCELLED');
+      const base = uploadedBytes;
+      imagePaths.push(await uploadImage(hostId, file, (received) =>
+        options.onUploadProgress?.(base + received, totalBytes), options.signal));
+      uploadedBytes += file.size;
+    }
+    if (options.signal?.aborted) throw Error('UPLOAD_CANCELLED');
+    return { imagePaths, uploadedDocuments };
+  }, [request, uploadImage]);
 
   const send = useCallback(async (hostId: HostId, existingId: string | null,
     projectId: string | null, value: string, options: SendOptions) => {
     const messageText = value.trim();
     const files = options.images ?? [];
-    if ((!messageText && !files.length) || messageText.length > 12_000 || files.length > 4)
+    const documents = options.documents ?? [];
+    const goalOnly = !messageText && !files.length && !documents.length && Boolean(options.goal?.trim());
+    if ((!messageText && !files.length && !documents.length && !goalOnly) ||
+        messageText.length > 12_000 || files.length + documents.length > 4)
       throw Error('TEXT_OR_IMAGE_REQUIRED_OR_TOO_LONG');
     if (status[hostId] !== 'online') throw Error('HOST_OFFLINE');
-    if (files.length && existingId && options.followUpMode === 'queue') throw Error('QUEUE_IMAGES_UNSUPPORTED');
-    const preflight = existingId ? conversations.find((c) => c.id === existingId && c.hostId === hostId) : null;
-    if (files.length && preflight?.running) throw Error('STEER_IMAGES_UNSUPPORTED');
+    if ((files.length || documents.length) && existingId && options.followUpMode === 'queue')
+      throw Error('QUEUE_IMAGES_UNSUPPORTED');
     const perm = options.permissionMode ?? 'default';
-    const nativePerms = permissionParams(perm);
-    const profile = permissionId(perm);
+    // Persisted threads own their permission state; per-turn overrides would
+    // silently replace the chosen profile or inherited config.toml defaults.
+    const nativePerms = existingId ? {} : permissionParams(perm);
+    const profile = existingId ? undefined : permissionId(perm);
     if (profile && !permissions[hostId].some((p) => p.id === profile && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
     const nativeModel = options.model ? models[hostId].find((m) => m.id === options.model) : undefined;
     if (options.model && !nativeModel) throw Error('MODEL_NOT_AVAILABLE');
@@ -384,17 +540,37 @@ export function useLiveCodex() {
         } } } : {}),
     };
     if (options.plan && !obj(settings.collaborationMode).settings) throw Error('PLAN_MODEL_UNAVAILABLE');
-    const imagePaths: string[] = [];
-    const totalImageBytes = files.reduce((size, file) => size + file.size, 0);
-    let uploadedImageBytes = 0;
-    for (const file of files) {
-      const base = uploadedImageBytes;
-      imagePaths.push(await uploadImage(hostId, file, (received) =>
-        options.onUploadProgress?.(base + received, totalImageBytes)));
-      uploadedImageBytes += file.size;
+    const { imagePaths, uploadedDocuments } = options.preparedAttachments ??
+      await prepareAttachments(hostId, files, documents, options);
+    if (options.signal?.aborted) throw Error('UPLOAD_CANCELLED');
+    options.onUploadsDone?.();
+    // This is the exact native Codex Desktop file-reference envelope, shared
+    // with the prior Android implementation. Never invent a file-content RPC.
+    // Only user-authored absolute paths are rewritten. Native assistant output
+    // and ordinary assistant prose never go through this resolver.
+    let resolvedMessage = messageText;
+    let pathChanges: PathChange[] = [];
+    if (hasAbsolutePaths(messageText)) {
+      if (!options.pathHosts) throw Error('PATH_HOSTS_UNAVAILABLE');
+      const response = obj(await request(hostId, 'web/pathResolve', {
+        text: messageText, hosts: options.pathHosts,
+      }, 30_000));
+      if (typeof response.text !== 'string') throw Error('PATH_RESOLVE_UNCONFIRMED');
+      if (Array.isArray(response.ambiguities) && response.ambiguities.length)
+        throw Error('PATH_AMBIGUOUS');
+      resolvedMessage = response.text;
+      if (Array.isArray(response.changes)) {
+        pathChanges = response.changes.filter((item): item is PathChange => {
+          const row = obj(item);
+          return typeof row.from === 'string' && typeof row.to === 'string';
+        }).slice(0, 24);
+      }
     }
+    const nativeText = desktopFileMessage(resolvedMessage, uploadedDocuments);
+    if (nativeText.length > 12_000) throw Error('DOCUMENT_REFERENCES_TOO_LONG');
     const nativeInput = [
-      { type: 'text', text: messageText || '请查看我附带的图片' },
+      { type: 'text', text: nativeText },
+      ...(options.mentions ?? []),
       ...imagePaths.map((path) => ({ type: 'localImage', path })),
     ];
     let threadId = existingId;
@@ -405,7 +581,7 @@ export function useLiveCodex() {
       const id = threadId;
       setConversations((current) => current.some((c) => c.id === id && c.hostId === hostId) ? current : [{
         id, hostId, project: projectId, archived: false,
-        title: messageText.slice(0, 48) || '图片',
+        title: threadPreviewTitle(goalOnly ? options.goal! : messageText),
         status: 'idle', running: false, activeTurnId: null, localCreated: true,
         updatedAt: Date.now(), messages: [],
       }, ...current]);
@@ -415,6 +591,11 @@ export function useLiveCodex() {
       await request(hostId, 'thread/resume', { threadId });
     }
     const id = threadId;
+    if (goalOnly) {
+      await request(hostId, 'thread/goal/set', { threadId: id, origin: 'user', objective: options.goal!.trim() });
+      void refreshGoal(hostId, id).catch(() => undefined);
+      return { threadId: id, queued: false };
+    }
     const currentThread = conversations.find((c) => c.id === id && c.hostId === hostId);
     if (options.followUpMode === 'queue' && existingId) {
       if (options.plan || options.goal) throw Error('QUEUE_TEXT_ONLY');
@@ -436,6 +617,12 @@ export function useLiveCodex() {
         input: nativeInput, ...settings }, 30_000));
     const nativeTurnId = running ? text(response.turnId) || currentThread!.activeTurnId! : text(obj(response.turn).id);
     if (!nativeTurnId) throw Error('TURN_UNCONFIRMED');
+    if (pathChanges.length) {
+      // Metadata is optional and never retriggers an already accepted native turn.
+      void storePathOverlay({ hostId, threadId: id, turnId: nativeTurnId,
+        changes: pathChanges }).catch(() => undefined);
+    }
+    options.onAccepted?.(id, nativeTurnId, running);
     const alreadyCompleted = completedTurnIds.current.get(threadKey(hostId, id)) === nativeTurnId;
     setConversations((all) => all.map((item) => item.hostId === hostId && item.id === id ? {
       ...item, status: alreadyCompleted ? 'idle' : 'running',
@@ -443,12 +630,9 @@ export function useLiveCodex() {
       activeTurnId: alreadyCompleted ? null : nativeTurnId,
       runningSinceMs: alreadyCompleted ? null : item.runningSinceMs ?? Date.now(),
       updatedAt: Date.now(),
-      messages: item.messages.some((m) => m.role === 'user' && m.turnId === nativeTurnId && m.content === messageText)
-        ? item.messages : [...item.messages, { id: localMessageId(), role: 'user', content: messageText,
-          turnId: nativeTurnId, timestampMs: Date.now() }],
     } : item));
-    // Reconcile the true server identity after the accepted turn. This also
-    // replaces temporary user bubbles without leaving duplicate messages.
+    // The browser-only optimistic bubble remains visible until the native
+    // user item arrives. Never fabricate a second user item in canonical history.
     window.setTimeout(() => { void readThread(hostId, id).catch(() => undefined); }, 1000);
     // A valid acknowledgment is already final for delivery. Goal is a separate
     // server mutation and must not trigger a resend if it fails.
@@ -459,7 +643,16 @@ export function useLiveCodex() {
       } catch { return { threadId: id, queued: false, goalFailed: true }; }
     }
     return { threadId: id, queued: false };
-  }, [models, permissions, conversations, request, readThread, refreshGoal, refreshQueue, status, uploadImage]);
+  }, [models, permissions, conversations, request, readThread, refreshGoal, refreshQueue, status, prepareAttachments]);
+
+  const renameThread = useCallback(async (hostId: HostId, threadId: string, name: string) => {
+    await request(hostId, 'thread/name/set', { threadId, name });
+    // Only show the new name after the native server has acknowledged it.
+    // All sidebar appearances and the active header share this state.
+    setConversations((all) => all.map((entry) => entry.hostId === hostId && entry.id === threadId
+      ? { ...entry, title: name } : entry));
+    void refresh(hostId).catch(() => undefined);
+  }, [request, refresh]);
 
   const interrupt = useCallback(async (hostId: HostId, threadId: string) => {
     const item = conversations.find((entry) => entry.hostId === hostId && entry.id === threadId);
@@ -467,6 +660,57 @@ export function useLiveCodex() {
     await request(hostId, 'turn/interrupt', { threadId, turnId: item.activeTurnId });
     void readThread(hostId, threadId).catch(() => undefined);
   }, [conversations, readThread, request]);
+
+  const setThreadPermission = useCallback(async (hostId: HostId, threadId: string, mode: PermissionMode) => {
+    const key = threadKey(hostId, threadId);
+    permissionEpochs.current.set(key, (permissionEpochs.current.get(key) ?? 0) + 1);
+    if (mode === 'custom') {
+      // The host, not the browser, resolves config.toml and verifies the exact
+      // sandbox, policy and reviewer on the persisted thread before replying.
+      const applied = obj(await request(hostId, 'web/permissionFromConfig', { threadId }, 90_000));
+      if (!['user', 'auto_review', 'guardian_subagent'].includes(text(applied.reviewer))) {
+        throw Error('PERMISSION_NOT_CONFIRMED');
+      }
+      permissionSelections.current.set(key, {
+        mode, profile: text(applied.profile) || null, reviewer: text(applied.reviewer),
+      });
+      setThreadPermissions((all) => ({ ...all, [key]: mode }));
+      return;
+    }
+    const expected = permissionParams(mode);
+    if (!permissions[hostId].some((p) => p.id === expected.permissions && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
+    await request(hostId, 'thread/settings/update', { threadId, ...expected }, 30_000);
+    const actual = obj(await request(hostId, 'thread/resume', { threadId }));
+    if (text(obj(actual.activePermissionProfile).id) !== expected.permissions ||
+        text(actual.approvalsReviewer) !== expected.approvalsReviewer) throw Error('PERMISSION_NOT_CONFIRMED');
+    permissionSelections.current.set(key, {
+      mode, profile: text(obj(actual.activePermissionProfile).id) || null,
+      reviewer: text(actual.approvalsReviewer) || null,
+    });
+    setThreadPermissions((all) => ({ ...all, [key]: mode }));
+  }, [permissions, request]);
+
+  const forkThread = useCallback(async (hostId: HostId, threadId: string, lastTurnId: string) => {
+    const original = conversations.find((c) => c.hostId === hostId && c.id === threadId);
+    if (!original || !original.messages.some((m) => m.turnId === lastTurnId && m.role === 'assistant' &&
+        !m.kind && ['completed', 'interrupted', 'failed'].includes(m.turnStatus ?? ''))) {
+      throw Error('TURN_NOT_COMPLETE');
+    }
+    const response = obj(await request(hostId, 'thread/fork', {
+      threadId, lastTurnId, excludeTurns: true,
+    }, 90_000));
+    const fork = obj(response.thread);
+    const newId = text(fork.id);
+    if (!newId || newId === threadId) throw Error('FORK_NOT_CONFIRMED');
+    setConversations((all) => all.some((c) => c.id === newId && c.hostId === hostId) ? all : [{
+      id: newId, hostId, project: text(fork.projectId) || original.project,
+      title: text(fork.name) || original.title, status: 'idle', running: false,
+      activeTurnId: null, localCreated: true, updatedAt: Date.now(), messages: [],
+    }, ...all]);
+    await select(hostId, newId);
+    void refresh(hostId).catch(() => undefined);
+    return newId;
+  }, [conversations, refresh, request, select]);
 
   const setGoal = useCallback(async (hostId: HostId, threadId: string, goal: string) => {
     const objective = goal.trim();
@@ -495,8 +739,12 @@ export function useLiveCodex() {
   }, [approval]);
 
   return {
-    status, errors, projects, conversations, models, permissions, approval, goals, queues,
-    request, select, refresh, readThread, refreshGoal, refreshQueue, readImage,
-    send, interrupt, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,
+    prepareAttachments,
+    status, errors, rateQuota, refreshRateQuota,
+    projects, conversations, models, permissions, threadPermissions, approval, goals, queues,
+    contextUsages, clearContextUsage,
+    request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,
+    readAssistantImage, readToolImage,
+    send, interrupt, renameThread, setThreadPermission, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,
   };
 }

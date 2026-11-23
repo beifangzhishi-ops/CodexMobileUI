@@ -1,5 +1,5 @@
 // Sync ignored Expo-prebuilt Android metadata without regenerating native caches.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,4 +27,28 @@ if (currentCode !== app.android.versionCode || currentVersion !== app.version) {
     (_match, prefix) => prefix + '"' + app.version + '"');
   writeFileSync(gradlePath, source, 'utf8');
   console.log('Synced ignored Android Gradle version to ' + app.version + ' (' + app.android.versionCode + ').');
+}
+
+// The active shared WebView shell no longer depends on expo-secure-store.
+// Earlier Expo prebuilds left two references in the ignored native manifest,
+// but removing that package also removes the resources they used to point to.
+// Preserve any actually present XML resource; only strip a broken legacy
+// reference when its backing resource is absent.
+if (!app.plugins?.includes('expo-secure-store')) {
+  const manifestPath = resolve(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+  const resourceFolder = resolve(root, 'android', 'app', 'src', 'main', 'res', 'xml');
+  const obsolete = [
+    ['android:fullBackupContent', 'secure_store_backup_rules'],
+    ['android:dataExtractionRules', 'secure_store_data_extraction_rules'],
+  ];
+  const manifest = readFileSync(manifestPath, 'utf8');
+  let updated = manifest;
+  for (const [attribute, resourceName] of obsolete) {
+    if (existsSync(resolve(resourceFolder, resourceName + '.xml'))) continue;
+    updated = updated.replace(' ' + attribute + '="@xml/' + resourceName + '"', '');
+  }
+  if (updated !== manifest) {
+    writeFileSync(manifestPath, updated, 'utf8');
+    console.log('Removed orphaned Expo SecureStore native manifest resource references.');
+  }
 }

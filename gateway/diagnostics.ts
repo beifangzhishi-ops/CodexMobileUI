@@ -3,17 +3,23 @@ import { dirname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 export type GatewayRoute =
-  'oauth.authorize' | 'oauth.consent' | 'oauth.token' | 'oauth.revoke' |
+  'oauth.authorize' | 'oauth.consent' | 'oauth.token' | 'oauth.confirm' | 'oauth.revoke' |
   'oauth.metadata' | 'health' | 'connect' | 'other';
 export type GatewayClient = 'android' | 'ios' | 'desktop' | 'automation' | 'unknown';
 export type GatewayEvent =
   'http.received' | 'http.finished' | 'http.aborted' | 'oauth.decision' |
   'gateway.started' | 'gateway.stopped' | 'gateway.logError' |
   'ws.received' | 'ws.rejected' | 'ws.upgraded' | 'ws.authAccepted' |
-  'ws.authRejected' | 'ws.upstreamReady' | 'ws.upstreamFailed' | 'ws.closed';
+  'ws.authRejected' | 'ws.upstreamReady' | 'ws.upstreamFailed' | 'ws.closed' |
+  'rpc.forwarded' | 'rpc.completed' | 'rpc.slow' | 'rpc.abandoned' |
+  'rpc.forwardFailed' | 'rpc.notification';
+export type GatewayRpcMethod = 'thread/delete' | 'thread/archive' | 'thread/unarchive' |
+  'thread/deleted' | 'thread/archived' | 'thread/unarchived';
+export type GatewayRpcOutcome = 'success' | 'error' | 'disconnect' | 'send_failed';
 export type GatewayDecision =
   'consent_denied' | 'consent_granted' | 'authorization_invalid' |
-  'oauth_invalid_grant' | 'oauth_token_issued' | 'oauth_token_refreshed';
+  'oauth_invalid_grant' | 'oauth_token_issued' | 'oauth_token_refreshed' |
+  'oauth_token_confirmed';
 
 /** Never pass raw paths, query strings, headers, IPs, user agent strings,
  * request/response bodies, OAuth codes/states/verifiers or error text.
@@ -28,6 +34,9 @@ export interface GatewayTrace {
   closeCode?: number;
   elapsedMs?: number;
   decision?: GatewayDecision;
+  rpcMethod?: GatewayRpcMethod;
+  rpcRequestId?: number;
+  rpcOutcome?: GatewayRpcOutcome;
 }
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -36,6 +45,7 @@ const ROUTES: Record<string, GatewayRoute> = {
   '/oauth/authorize': 'oauth.authorize',
   '/oauth/consent': 'oauth.consent',
   '/oauth/token': 'oauth.token',
+  '/oauth/refresh/confirm': 'oauth.confirm',
   '/oauth/revoke': 'oauth.revoke',
   '/.well-known/oauth-authorization-server': 'oauth.metadata',
   '/health': 'health',
@@ -46,10 +56,20 @@ const EVENTS = new Set<GatewayEvent>([
   'gateway.started', 'gateway.stopped', 'gateway.logError',
   'ws.received', 'ws.rejected', 'ws.upgraded', 'ws.authAccepted',
   'ws.authRejected', 'ws.upstreamReady', 'ws.upstreamFailed', 'ws.closed',
+  'rpc.forwarded', 'rpc.completed', 'rpc.slow', 'rpc.abandoned',
+  'rpc.forwardFailed', 'rpc.notification',
+]);
+const RPC_METHODS = new Set<GatewayRpcMethod>([
+  'thread/delete', 'thread/archive', 'thread/unarchive',
+  'thread/deleted', 'thread/archived', 'thread/unarchived',
+]);
+const RPC_OUTCOMES = new Set<GatewayRpcOutcome>([
+  'success', 'error', 'disconnect', 'send_failed',
 ]);
 const DECISIONS = new Set<GatewayDecision>([
   'consent_denied', 'consent_granted', 'authorization_invalid',
   'oauth_invalid_grant', 'oauth_token_issued', 'oauth_token_refreshed',
+  'oauth_token_confirmed',
 ]);
 
 export function classifyGatewayRoute(rawUrl: string): GatewayRoute {
@@ -95,6 +115,12 @@ export function sanitizeGatewayTrace(input: GatewayTrace): GatewayTrace {
     safe.elapsedMs = Math.max(0, Math.min(Math.floor(input.elapsedMs), 86_400_000));
   }
   if (input.decision && DECISIONS.has(input.decision)) safe.decision = input.decision;
+  if (input.rpcMethod && RPC_METHODS.has(input.rpcMethod)) safe.rpcMethod = input.rpcMethod;
+  if (typeof input.rpcRequestId === 'number' && Number.isSafeInteger(input.rpcRequestId) &&
+      input.rpcRequestId >= 0 && input.rpcRequestId < 1_000_000_000) {
+    safe.rpcRequestId = input.rpcRequestId;
+  }
+  if (input.rpcOutcome && RPC_OUTCOMES.has(input.rpcOutcome)) safe.rpcOutcome = input.rpcOutcome;
   return safe;
 }
 

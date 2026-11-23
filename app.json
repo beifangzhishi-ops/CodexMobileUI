@@ -3,15 +3,16 @@
     "name": "CodexMobileUI",
     "slug": "codex-mobile-ui",
     "scheme": "codexmobileui",
-    "version": "0.1.6",
+    "version": "0.1.23",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "android": {
       "package": "dev.codexmobileui.app",
+      "usesCleartextTraffic": true,
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 8,
+      "versionCode": 25,
       "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -19,10 +20,7 @@
       }
     },
     "plugins": [
-      "expo-secure-store",
-      "expo-sqlite",
-      "expo-web-browser",
-      "expo-speech-recognition"
+      "expo-sqlite"
     ],
     "extra": {
       "apiClientId": "codexmobileui-android"

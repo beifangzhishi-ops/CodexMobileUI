@@ -5,27 +5,48 @@ import test from "node:test";
 const launcher = readFileSync(new URL("../scripts/mobile-launcher.ps1", import.meta.url), "utf8");
 const mobileStop = readFileSync(new URL("../Stop-CodexMobile.cmd", import.meta.url), "utf8");
 const backend = readFileSync(new URL("../scripts/mobile-app-server.ps1", import.meta.url), "utf8");
-const oauthLogin = readFileSync(new URL("../src/auth/Login.tsx", import.meta.url), "utf8");
 const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.url), "utf8"));
 const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
-const chatView = readFileSync(new URL("../src/ui/ChatView.tsx", import.meta.url), "utf8");
-const diagnosticsPanel = readFileSync(new URL("../src/diagnostics/DiagnosticsPanel.tsx", import.meta.url), "utf8");
-const diagnosticsExport = readFileSync(new URL("../src/diagnostics/export.ts", import.meta.url), "utf8");
-const diagnosticsJournal = readFileSync(new URL("../src/diagnostics/journal.ts", import.meta.url), "utf8");
+const coordinatorStorage = readFileSync(new URL("../src/storage/database.ts", import.meta.url), "utf8");
+const nativeFileSave = readFileSync(new URL("../src/core/nativePublicationDownload.ts", import.meta.url), "utf8");
+const splashColors = readFileSync(new URL("../android/app/src/main/res/values/colors.xml", import.meta.url), "utf8");
+const splashStyles = readFileSync(new URL("../android/app/src/main/res/values/styles.xml", import.meta.url), "utf8");
 const packageSettings = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
 const androidStableBuild = readFileSync(new URL("../scripts/build-android-stable.ps1", import.meta.url), "utf8");
 const androidWindowsBuild = readFileSync(new URL("../scripts/build-android-windows.ps1", import.meta.url), "utf8");
 
-test("visual composer keeps native keyboard avoidance and real message rendering", () => {
-  assert.match(mainApp, /KeyboardAvoidingView style=\{styles\.keyboardLayout\} behavior="padding"/);
-  assert.match(chatView, /<ThreadPrimitive\.MessagesFlatList/);
-  assert.match(chatView, /<Animated\.View style=\{\[styles\.composerArea/);
-  assert.match(mainApp, /<ChatView/);
-  assert.match(mainApp, /session\.messages/);
+test("Android uses the shared React WebView and native keyboard resize, not a second chat tree", () => {
+  assert.match(mainApp, /<WebView<WebViewProps>/);
+  assert.match(mainApp, /domStorageEnabled/);
+  assert.match(mainApp, /KeyboardAvoidingView/);
+  assert.doesNotMatch(mainApp, /<ChatView|<ChatSidebar|useCodexSession/);
   assert.equal(appSettings.expo.android.softwareKeyboardLayoutMode, "resize");
 });
 
+test("cold start resolves the stored Tailnet coordinator before showing shared UI", () => {
+  assert.match(mainApp, /loadCoordinatorUrl\(\)/);
+  assert.match(mainApp, /setBooting\(false\)/);
+  assert.match(mainApp, /setConfiguring\(!valid\)/);
+  assert.match(mainApp, /unifiedWebUrl\(coordinator\)/);
+  assert.doesNotMatch(mainApp, /<OAuthLogin/);
+});
+
+test("native splash and web container stay dark until the shared UI loads", () => {
+  assert.match(splashColors, /name="splashscreen_background">#000000</);
+  assert.match(splashStyles, /name="android:windowBackground">@color\/splashscreen_background</);
+  assert.match(mainApp, /backgroundColor: '#101010'/);
+  assert.match(mainApp, /startInLoadingState/);
+  assert.match(mainApp, /renderLoading=/);
+});
+
+test("private network onboarding stays recoverable without the old Android UI", () => {
+  assert.match(mainApp, /discoverTailnetHosts\(/);
+  assert.match(mainApp, /storeDiscoveredHosts\(selected, hosts\)/);
+  assert.match(mainApp, /setReload\(\(value\) => value \+ 1\)/);
+  assert.match(mainApp, /更改内网入口/);
+  assert.match(mainApp, /onShouldStartLoadWithRequest=\{allowNavigation\}/);
+});
 test("starting MobileUI starts the dedicated backend before Gateway", () => {
   assert.match(launcher, /Invoke-HostService \$backendScript 'start'/);
   assert.match(launcher, /Invoke-HostService \$gatewayScript 'start'/);
@@ -43,20 +64,12 @@ test("normal MobileUI shutdown stops its own Gateway then its own App Server", (
   assert.doesNotMatch(launcher, /hot.attach/i);
 });
 
-test("mobile OAuth tap creates a fresh request instead of silently disabling its button", () => {
-  assert.match(oauthLogin, /onPress=\{\(\) => \{ void authorize\(\); \}\}/);
-  assert.match(oauthLogin, /new AuthSession\.AuthRequest\(/);
-  assert.match(oauthLogin, /await request\.makeAuthUrlAsync\(discovery\)/);
-  assert.match(oauthLogin, /await request\.promptAsync\(discovery\)/);
-  assert.match(oauthLogin, /getAuthorizedCode\(result, request\.state\)/);
-  assert.match(oauthLogin, /setPhase\('正在创建新的安全授权请求/);
-  assert.match(oauthLogin, /setError\('系统中还有一个授权浏览器/);
-  assert.doesNotMatch(oauthLogin, /AuthSession\.useAuthRequest\(/);
-  assert.doesNotMatch(oauthLogin, /disabled=\{!request/);
+test("Android onboarding is private Tailnet without any OAuth flow in its entry point", () => {
+  assert.match(mainApp, /discoverTailnetHosts/);
+  assert.doesNotMatch(mainApp, /authorize\(|OAuthLogin|AuthSession/);
   assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
-  assert.ok(Number.isInteger(appSettings.expo.android.versionCode) && appSettings.expo.android.versionCode > 3);
+  assert.ok(appSettings.expo.android.versionCode > 3);
 });
-
 test("Android version metadata is consistent across Expo, npm and lockfile", () => {
   assert.equal(appSettings.expo.version, packageSettings.version);
   assert.equal(packageLock.version, packageSettings.version);
@@ -89,20 +102,12 @@ test("stable Android release writes Gradle cache and temp files inside this chec
   assert.match(androidWindowsBuild, /installed Gradle \$gradleVersion distribution with isolated writable workspace cache/);
 });
 
-test("device diagnostics are reachable before authorization and export a persistent JSON file", () => {
-  assert.match(mainApp, /accessibilityLabel="诊断日志"/);
-  assert.match(mainApp, /<DiagnosticsPanel visible=\{diagnosticsOpen\}/);
-  assert.match(mainApp, /logDiagnostic\('app\.deepLinkReceived'/);
-  assert.match(oauthLogin, /onPressIn=\{\(\) => logDiagnostic\('auth\.pressIn'/);
-  assert.match(oauthLogin, /logDiagnostic\('auth\.browserPromptStarted'/);
-  assert.match(oauthLogin, /logDiagnostic\('auth\.browserPromptFinished'/);
-  assert.match(oauthLogin, /logDiagnostic\('auth\.browserStillPending'/);
-  assert.match(diagnosticsPanel, /exportDiagnostics\(\)/);
-  assert.match(diagnosticsPanel, /nativeBuildVersion/);
-  assert.match(mainApp, /componentDidCatch\(error: Error\)/);
-  assert.match(mainApp, /diagnostics\.crashScreenPressed/);
-  assert.match(diagnosticsExport, /new File\(Paths\.cache/);
-  assert.match(diagnosticsExport, /Sharing\.shareAsync\(file\.uri/);
-  assert.match(diagnosticsJournal, /codexmobileui-diagnostics\.db/);
-  assert.match(diagnosticsJournal, /ORDER BY id DESC LIMIT/);
+test("Android keeps only the private coordinator and native assistant-file sink", () => {
+  assert.doesNotMatch(mainApp, /<DiagnosticsPanel|<OAuthLogin|<ChatView|<ChatSidebar/);
+  assert.match(coordinatorStorage, /loadCoordinatorUrl/);
+  assert.match(coordinatorStorage, /storeDiscoveredHosts/);
+  assert.match(coordinatorStorage, /mobile_network/);
+  assert.match(nativeFileSave, /Paths\.document/);
+  assert.match(nativeFileSave, /Sharing\.shareAsync/);
+  assert.doesNotMatch(coordinatorStorage, /CREATE TABLE IF NOT EXISTS messages/);
 });
