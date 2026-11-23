@@ -30,7 +30,7 @@ const { listProjectDirectories, resolveProjectDirectory } =
   await import(pathToFileURL(resolve('dist/gateway/projectDirectories.js')).href);
 const { createAttachmentUploader } =
   await import(pathToFileURL(resolve('dist/gateway/attachments.js')).href);
-const { ScheduleTaskCalls, scheduleTaskTool } =
+const { ScheduleTaskCalls, scheduleTaskTool, listScheduleModelsTool } =
   await import(pathToFileURL(resolve('dist/gateway/scheduleTaskTool.js')).href);
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
@@ -479,7 +479,7 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     // Omitted permission fields always mean the effective native config.toml,
     // including for a new chat without a named project.
     const started = await internalRequest('thread/start', { cwd,
-      ...(projectId ? { projectId, dynamicTools: [scheduleTaskTool] } : {}),
+      ...(projectId ? { projectId, dynamicTools: [scheduleTaskTool, listScheduleModelsTool] } : {}),
       ...requested });
     if (started?.thread?.id) createdHere.set(started.thread.id, { cwd });
     return started;
@@ -494,7 +494,8 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     try { msg = JSON.parse(data.toString()); } catch { return; }
     if (scheduleCalls && msg?.method === 'item/tool/call' &&
         (Number.isSafeInteger(msg.id) || typeof msg.id === 'string') &&
-        msg.params?.namespace == null && msg.params?.tool === scheduleTaskTool.name) {
+        msg.params?.namespace == null &&
+        [scheduleTaskTool.name, listScheduleModelsTool.name].includes(msg.params?.tool)) {
       const { threadId, turnId } = msg.params;
       const result = typeof threadId === 'string' && interactiveTurns.get(turnId) === threadId
         ? scheduleCalls.handle(msg.params)

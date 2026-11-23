@@ -29,12 +29,18 @@ tool with the native App Server and resolves the originating thread and its
 project before sending the task to the existing Gateway. The tool can schedule
 one saved task per interactive turn, use the current conversation or start a
 new conversation per run, and returns the saved task ID and next run time.
-Model-created tasks use the host's default model and a read-only permission
-profile. The shared task page can edit or pause a saved task.
+Model-created tasks use a read-only permission profile. The shared task page
+and `schedule_task` can use the host defaults or explicitly select a model
+and one of its supported reasoning efforts. Codex can call
+`list_schedule_models` to discover the current host catalog. The shared task
+page can edit or pause a saved task.
 
 The native runtime registers dynamic tools when the thread starts. Chats
 created before the tool was added and chats without a project do not support
-this entry point. Scheduled turns cannot create tasks through the chat tool.
+this entry point. Chats with the original tool schema can still create tasks
+with default model settings. Create a new project chat to register the model
+catalog tool and the expanded creation schema. Scheduled turns cannot create
+tasks through the chat tool.
 
 `shared/automation.ts` contains transport-neutral `TaskInput`, `Task`,
 `TaskSchedule`, and `TaskRun` types; neither Node nor React imports are needed

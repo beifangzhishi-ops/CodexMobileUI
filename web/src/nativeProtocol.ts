@@ -9,7 +9,7 @@ const unixMs = (timestamp: unknown) => typeof timestamp === 'number' && Number.i
 const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabToolCall', 'webSearch', 'imageView', 'functionCallOutput', 'contextCompaction', 'enteredReviewMode', 'exitedReviewMode']);
 
 export type NativeProject = { id: string; hostId: HostId; name: string; roots: string[]; position: number | null };
-export type NativeModel = { id: string; name: string; isDefault: boolean; efforts: string[]; defaultEffort: string | null };
+export type NativeModel = { id: string; model?: string; name: string; isDefault: boolean; efforts: string[]; defaultEffort: string | null };
 export type NativePermission = { id: string; allowed: boolean; description: string };
 export type NativeGoal = { objective: string; status: string; tokenBudget: number | null; tokensUsed: number; timeUsedSeconds: number };
 export type NativeQueueEntry = { id: string; text: string };
@@ -65,10 +65,12 @@ export function parseModels(value: unknown): NativeModel[] {
   return rows.flatMap((raw): NativeModel[] => {
     const model = obj(raw);
     const id = text(model.id) || text(model.model);
+    const modelName = text(model.model);
     if (!id || model.hidden === true) return [];
     const efforts = Array.isArray(model.supportedReasoningEfforts)
       ? model.supportedReasoningEfforts.map((entry) => text(obj(entry).reasoningEffort)).filter(Boolean) : [];
-    return [{ id, name: text(model.displayName) || id, isDefault: model.isDefault === true,
+    return [{ id, ...(modelName && modelName !== id ? { model: modelName } : {}),
+      name: text(model.displayName) || id, isDefault: model.isDefault === true,
       efforts, defaultEffort: text(model.defaultReasoningEffort) || null }];
   });
 }

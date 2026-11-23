@@ -130,6 +130,11 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
   const address = ws.address();
   if (!address || typeof address === 'string') throw new Error('no port');
   const calls: string[] = [];
+  const modelList = { data: [
+    { id: 'picker-id', model: 'test-model', displayName: 'Test model', isDefault: true,
+      supportedReasoningEfforts: [{ reasoningEffort: 'high' }], defaultReasoningEffort: 'high' },
+    { model: 'hidden-model', hidden: true },
+  ] };
   const nativeRequests: { method: string; params: Record<string, unknown> }[] = [];
   ws.on('connection', (socket) => socket.on('message', (message) => {
     const frame = JSON.parse(message.toString()) as {
@@ -143,7 +148,7 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
       : frame.method === 'thread/start' ? { thread: { id: 't1' } }
         : frame.method === 'thread/resume' ? { thread: { id: 't1' } }
           : frame.method === 'turn/start' ? { turn: { id: 'turn1' } }
-            : frame.method === 'model/list' ? { data: [] } : {};
+            : frame.method === 'model/list' ? modelList : {};
     socket.send(JSON.stringify({ id: frame.id, result }));
     if (frame.method === 'turn/start') {
       setImmediate(() => socket.send(JSON.stringify({ method: 'turn/completed',
@@ -154,7 +159,7 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
   const upstream = `ws://127.0.0.1:${address.port}`;
   const service = new SchedulerService(join(dir, 'oauth.json'), upstream);
   try {
-    const input = taskInput();
+    const input = { ...taskInput(), model: 'test-model', effort: 'high' };
     const created = await service.handle('automation/create', { task: input }) as { id: string };
     assert.ok(created.id);
     const started = await service.handle('automation/run', { id: created.id }) as { id: string };
@@ -178,6 +183,8 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
     const startTurn = nativeRequests.find((req) => req.method === 'turn/start');
     assert.equal(startThread?.params.permissions, ':workspace');
     assert.equal(startTurn?.params.permissions, ':workspace');
+    assert.equal(startTurn?.params.model, 'test-model');
+    assert.equal(startTurn?.params.effort, 'high');
     assert.equal(startThread?.params.approvalPolicy, 'never');
     assert.equal(startTurn?.params.approvalPolicy, 'never');
     assert.equal('sandbox' in (startTurn?.params ?? {}), false);
@@ -188,6 +195,7 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
     assert.equal((await service.handle('automation/inbox', {}) as { data: unknown[] }).data.length, 0);
 
     const tool = new ScheduleTaskCalls(async (method, params) => {
+      if (method === 'model/list') return modelList;
       assert.equal(method, 'thread/read');
       return { thread: { id: params.threadId, projectId: 'p1' } };
     }, (method, params) => service.handle(method, params));
@@ -195,15 +203,27 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
       schedule: input.schedule, conversationMode: 'new' };
     const callback = { namespace: null, tool: 'schedule_task', threadId: 't1',
       turnId: 'turn2', callId: 'call1', arguments: args };
+    const catalog = await tool.handle({ ...callback, tool: 'list_schedule_models', arguments: {} });
+    assert.equal(catalog?.success, true);
+    assert.deepEqual(JSON.parse(catalog!.contentItems[0].text), { models: [{
+      model: 'test-model', name: 'Test model', isDefault: true, defaultEffort: 'high', efforts: ['high'],
+    }] });
     const invalid = await tool.handle({ ...callback, arguments: { ...args, permissionMode: 'workspace-write' } });
     assert.equal(invalid?.success, false);
-    const creation = tool.handle(callback);
-    assert.equal(tool.handle(callback), creation);
+    const invalidEffort = await tool.handle({
+      ...callback, arguments: { ...args, model: 'test-model', effort: 'low' },
+    });
+    assert.equal(invalidEffort?.contentItems[0].text, 'EFFORT_NOT_SUPPORTED');
+    const explicit = { ...callback, arguments: { ...args, model: 'test-model', effort: 'high' } };
+    const creation = tool.handle(explicit);
+    assert.equal(tool.handle(explicit), creation);
     assert.equal((await tool.handle({ ...callback, callId: 'call2' }))?.success, false);
     const output = await creation;
     assert.equal(output?.success, true);
     const saved = JSON.parse(output!.contentItems[0].text);
     assert.equal(saved.nextRunAt, input.schedule.kind === 'once' && input.schedule.at);
+    assert.equal(saved.model, 'test-model');
+    assert.equal(saved.effort, 'high');
     const list = await service.handle('automation/list', {}) as {
       data: (TaskInput & { id: string })[];
     };
@@ -211,6 +231,7 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
     const scheduled = list.data.find((task) => task.id === saved.id);
     assert.equal(scheduled?.projectId, 'p1');
     assert.equal(scheduled?.permissionMode, 'read-only');
+    assert.equal(scheduled?.effort, 'high');
     assert.equal(scheduled?.threadId, null);
   } finally {
     service.close();

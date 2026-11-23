@@ -16,6 +16,11 @@ type Props = {
 };
 type Mode = 'list' | 'editor' | 'details';
 type Tab = 'active' | 'paused' | 'done';
+const effortLabels: Record<string, string> = {
+  none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高',
+  max: 'Max', ultra: 'Ultra',
+};
+const modelValue = (model: NativeModel) => model.model ?? model.id;
 const zone = (() => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
   catch { return 'UTC'; }
@@ -64,6 +69,9 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
   const [error, setError] = useState('');
   const online = status[host] === 'online';
   const hostProjects = projects.filter((project) => project.hostId === host);
+  const hostModels = models[host];
+  const draftModel = hostModels.find((model) => modelValue(model) === draft.model);
+  const selectedModel = hostModels.find((model) => modelValue(model) === selected?.model);
   const call = useCallback((method: string, params: Record<string, unknown> = {}) =>
     request(host, 'web/automation', { method, params }), [request, host]);
 
@@ -95,8 +103,11 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       await call(method, params);
       setMode('list'); setSelected(null);
       await refresh();
-    } catch {
-      setError(method === 'automation/create' || method === 'automation/run'
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setError(message === 'MODEL_NOT_FOUND' ? '所选模型在目标电脑上不可用。' :
+        message === 'EFFORT_NOT_SUPPORTED' ? '所选模型不支持此思考强度。' :
+        method === 'automation/create' || method === 'automation/run'
         ? '操作结果尚未确认，请先刷新核对，避免重复创建或运行。'
         : '电脑未确认操作结果，请刷新后重试。');
     } finally { setBusy(false); }
@@ -132,17 +143,18 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       if (!Number.isFinite(timestamp.getTime()) || timestamp.getTime() <= Date.now()) {
         setError('请选择未来的执行时间'); return;
       }
-      schedule = { kind: 'once', at: timestamp.toISOString() };
+      schedule = draft.schedule.at && once === localDateTime(draft.schedule.at)
+        ? draft.schedule : { kind: 'once', at: timestamp.toISOString() };
     } else if (draft.schedule.kind === 'hourly') {
       schedule = { kind: 'hourly', minute };
     } else if (draft.schedule.kind === 'daily' || draft.schedule.kind === 'weekdays') {
       schedule = { kind: draft.schedule.kind, hour, minute };
     } else if (draft.schedule.kind === 'weekly') {
-      schedule = { kind: 'weekly', hour, minute, days: [weekday] };
+      schedule = { kind: 'weekly', hour, minute,
+        days: weekday === draft.schedule.days[0] ? draft.schedule.days : [weekday] };
     }
     const task: TaskInput = { ...draft, name: draft.name.trim(),
-      prompt: draft.prompt.trim(), schedule,
-      conversationMode: 'new', threadId: null };
+      prompt: draft.prompt.trim(), schedule };
     void mutate(selected ? 'automation/update' : 'automation/create',
       selected ? { id: selected.id, patch: task } : { task });
   };
@@ -195,7 +207,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
         onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))}/></label>
       <label>执行指令<textarea value={draft.prompt} maxLength={12000} rows={5} disabled={busy}
         onChange={(event) => setDraft((old) => ({ ...old, prompt: event.target.value }))}/></label>
-      <label>所属项目<select value={draft.projectId} disabled={busy}
+      <label>所属项目<select value={draft.projectId} disabled={busy || !!draft.threadId}
         onChange={(event) => setDraft((old) => ({ ...old, projectId: event.target.value }))}>
         <option value="">请选择</option>
         {hostProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -236,10 +248,19 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
           workspaceMode: event.target.value as TaskInput['workspaceMode'] }))}>
         <option value="project">项目目录</option><option value="worktree">独立工作树</option>
       </select></label>
-      <label>模型<select value={draft.model ?? ''} onChange={(event) =>
+      <label>模型<select value={draft.model ?? ''} disabled={busy} onChange={(event) =>
         setDraft((old) => ({ ...old, model: event.target.value || null, effort: null }))}>
         <option value="">默认模型</option>
-        {models[host].map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+        {draft.model && !draftModel && <option value={draft.model}>{draft.model}（不可用）</option>}
+        {hostModels.map((model) => <option key={model.id} value={modelValue(model)}>{model.name}</option>)}
+      </select></label>
+      <label>思考强度<select value={draft.effort ?? ''} disabled={busy || !draftModel?.efforts.length}
+        onChange={(event) => setDraft((old) => ({ ...old, effort: event.target.value || null }))}>
+        <option value="">默认</option>
+        {draft.effort && !draftModel?.efforts.includes(draft.effort) &&
+          <option value={draft.effort}>{effortLabels[draft.effort] ?? draft.effort}（不可用）</option>}
+        {draftModel?.efforts.map((effort) =>
+          <option key={effort} value={effort}>{effortLabels[effort] ?? effort}</option>)}
       </select></label>
       <button className="automations-save" disabled={busy} onClick={save}>
         <Check size={17}/>{busy ? '保存中…' : selected ? '保存任务' : '创建任务'}
@@ -249,6 +270,8 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       <button className="automations-back" onClick={() => setMode('list')}><ChevronLeft size={18}/>返回列表</button>
       <h2>{selected.name}</h2>
       <p>{scheduleLabel(selected.schedule)} · {selected.timeZone}</p>
+      <p>模型 {selectedModel?.name ?? selected.model ?? '默认'} · 思考强度 {selected.effort
+        ? effortLabels[selected.effort] ?? selected.effort : '默认'}</p>
       <p className="automations-prompt">{selected.prompt}</p>
       <div className="automations-buttons">
         <button onClick={() => edit(selected)}>编辑</button>
