@@ -30,6 +30,8 @@ const { listProjectDirectories, resolveProjectDirectory } =
   await import(pathToFileURL(resolve('dist/gateway/projectDirectories.js')).href);
 const { createAttachmentUploader } =
   await import(pathToFileURL(resolve('dist/gateway/attachments.js')).href);
+const { ScheduleTaskCalls, scheduleTaskTool } =
+  await import(pathToFileURL(resolve('dist/gateway/scheduleTaskTool.js')).href);
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
   : { SidebarPinsStore: null };
@@ -432,6 +434,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   });
   // On a noha route the Coordinator merely forwards validated frames. The
   // noha Agent validates uploaded-file ownership on its own local connection.
+  const scheduleCalls = remotePeer ? null : new ScheduleTaskCalls(internalRequest, requestLocalGateway);
+  const interactiveRequests = new Map();
+  const interactiveTurns = new Map();
   const images = remotePeer ? null : createImageStore(resolve('.state'), (threadId) =>
     internalRequest('thread/read', { threadId, includeTurns: true }));
   const documents = remotePeer ? null : createAttachmentUploader();
@@ -473,7 +478,8 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     }
     // Omitted permission fields always mean the effective native config.toml,
     // including for a new chat without a named project.
-    const started = await internalRequest('thread/start', { cwd, ...(projectId ? { projectId } : {}),
+    const started = await internalRequest('thread/start', { cwd,
+      ...(projectId ? { projectId, dynamicTools: [scheduleTaskTool] } : {}),
       ...requested });
     if (started?.thread?.id) createdHere.set(started.thread.id, { cwd });
     return started;
@@ -486,6 +492,34 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     if (binary) return;
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
+    if (scheduleCalls && msg?.method === 'item/tool/call' &&
+        (Number.isSafeInteger(msg.id) || typeof msg.id === 'string') &&
+        msg.params?.namespace == null && msg.params?.tool === scheduleTaskTool.name) {
+      const { threadId, turnId } = msg.params;
+      const result = typeof threadId === 'string' && interactiveTurns.get(turnId) === threadId
+        ? scheduleCalls.handle(msg.params)
+        : Promise.resolve({ success: false, contentItems: [
+          { type: 'inputText', text: 'Scheduling requires a turn started in the interactive MobileUI chat.' },
+        ] });
+      void result.then((output) => {
+        if (upstream.readyState === WebSocket.OPEN) {
+          upstream.send(JSON.stringify({ id: msg.id, result: output }));
+        }
+      });
+      return;
+    }
+    if (scheduleCalls && !msg?.method && interactiveRequests.has(msg?.id)) {
+      const threadId = interactiveRequests.get(msg.id);
+      interactiveRequests.delete(msg.id);
+      if (typeof msg.result?.turn?.id === 'string' && msg.result.turn.status === 'inProgress') {
+        interactiveTurns.set(msg.result.turn.id, threadId);
+      }
+    }
+    if (scheduleCalls && msg?.method === 'turn/completed') {
+      const turnId = msg.params?.turn?.id;
+      interactiveTurns.delete(turnId);
+      scheduleCalls.finish(msg.params?.threadId, turnId);
+    }
     if (notificationFeed && msg?.method === 'turn/completed') {
       const hostId = remotePeer ? 'noha' : '6v';
       void notificationFeed.observe(hostId, msg.params,
@@ -498,14 +532,14 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(msg.method)) {
       pendingApprovals.add(msg.id);
     }
-    if (typeof msg.id === 'number' && pendingInternal.has(msg.id)) {
+    if (typeof msg.id === 'number' && !msg.method && pendingInternal.has(msg.id)) {
       const pending = pendingInternal.get(msg.id);
       clearTimeout(pending.timer); pendingInternal.delete(msg.id);
       if (msg.error) pending.rejectPromise(Error('NATIVE_RPC_FAILED'));
       else pending.resolvePromise(msg.result);
       return;
     }
-    if (typeof msg.id === 'number' && firstTurnRequests.has(msg.id)) {
+    if (typeof msg.id === 'number' && !msg.method && firstTurnRequests.has(msg.id)) {
       const pending = firstTurnRequests.get(msg.id);
       firstTurnRequests.delete(msg.id);
       if (!msg.error && (msg.result?.turn?.id || pending.goal && msg.result)) {
@@ -639,7 +673,12 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     } else if (msg.method === 'web/start' && !remotePeer) {
       void prepareStart(msg).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'THREAD_START_UNCONFIRMED' } })));
-    } else upstream.send(data.toString(), { binary: false });
+    } else {
+      if (scheduleCalls && msg.method === 'turn/start' && interactiveRequests.size < 128) {
+        interactiveRequests.set(msg.id, msg.params.threadId);
+      }
+      upstream.send(data.toString(), { binary: false });
+    }
   });
   const close = () => {
     upstreamReady = false;

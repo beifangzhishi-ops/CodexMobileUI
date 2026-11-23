@@ -44,7 +44,7 @@ export class SchedulerNativeClient {
       } else if (typeof payload.method === 'string') {
         for (const onNotice of this.subscribers) onNotice(payload.method, object(payload.params));
         // Scheduled runs never auto-grant permissions. No full-access or approval escalation.
-        if (typeof payload.id === 'number') ws.send(JSON.stringify({ id: payload.id,
+        if (typeof payload.id === 'number' || typeof payload.id === 'string') ws.send(JSON.stringify({ id: payload.id,
           error: { code: -32000, message: 'Unattended approval not permitted' } }));
       }
     });

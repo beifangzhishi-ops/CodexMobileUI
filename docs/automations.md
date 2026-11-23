@@ -2,10 +2,10 @@
 
 ## Architecture
 
-The scheduler is owned by the **per-computer Gateway process**, not Android, the
-browser, or Codex Desktop. Android and a future authenticated web client send
-the same `automation/*` JSON-RPC methods over the already authenticated Gateway
-WebSocket `/connect`. Every task belongs to exactly one host and a native Codex
+The **per-computer Gateway process** owns the scheduler. The shared Web UI
+sends `web/automation` through the private Web Bridge, which calls
+`automation/*` over the authenticated Gateway WebSocket `/connect`.
+Every task belongs to exactly one host and a native Codex
 project on that host. There is no cross-host implicit execution or shared disk.
 
 The Gateway keeps an SQLite database at `.state/scheduler.sqlite`; it contains
@@ -22,6 +22,19 @@ replayed in a burst. Each host owns its local scheduling clock; schedules have
 an IANA timezone, and calendar triggers are calculated in that zone.
 
 ## Client contract (v1)
+
+In a newly created project chat, Codex can call `schedule_task` in response
+to an explicit request to schedule work. The host's Web Bridge registers the
+tool with the native App Server and resolves the originating thread and its
+project before sending the task to the existing Gateway. The tool can schedule
+one saved task per interactive turn, use the current conversation or start a
+new conversation per run, and returns the saved task ID and next run time.
+Model-created tasks use the host's default model and a read-only permission
+profile. The shared task page can edit or pause a saved task.
+
+The native runtime registers dynamic tools when the thread starts. Chats
+created before the tool was added and chats without a project do not support
+this entry point. Scheduled turns cannot create tasks through the chat tool.
 
 `shared/automation.ts` contains transport-neutral `TaskInput`, `Task`,
 `TaskSchedule`, and `TaskRun` types; neither Node nor React imports are needed
@@ -79,14 +92,8 @@ the scheduled trigger, even if its native execution later reports failure.
   updating Gateway. Sandbox child-process restrictions can skip the isolated
   Git worktree integration test; use a dedicated safe integration environment
   to verify its Node-to-Git execution path.
-- Verify Android UX on device, OAuth and reconnection, real scheduled native
+- Verify Android UX on device, private Tailnet reconnection, real scheduled native
   turns, paused/completed states, and wake-from-reboot handling before
   depending on unattended automation.
-- The `web/` React/Vite app is currently a local **visual prototype**; the
-  authenticated web coordinator/client is not yet implemented. When built,
-  the web client must use the same `automation/*` API and shared types, not
-  a browser-side timer or a second scheduler. Do not claim the web prototype
-  has live task-management capabilities yet.
-- Synchronize Gateway changes to each remote computer (e.g. noha) through a
-  reviewed Git deployment. Do not copy `.state`, `.env`, secrets, Codex homes,
-  or another computer's task database between hosts.
+- Deploy the compiled Gateway module and the host-only Web Agent entry to
+  noha together. Keep each host's scheduler database and Codex home local.

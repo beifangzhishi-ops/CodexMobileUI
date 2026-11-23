@@ -10,6 +10,7 @@ import { WebSocketServer } from 'ws';
 import { SchedulerStore, nextOccurrence, validateTaskInput } from '../gateway/scheduler';
 import { executeScheduledTask } from '../gateway/schedulerRunner';
 import { SchedulerService } from '../gateway/schedulerService';
+import { ScheduleTaskCalls } from '../gateway/scheduleTaskTool';
 import { parseTaskRrule } from '../gateway/schedulerRrule';
 import { ensureTaskWorktree } from '../gateway/schedulerWorktree';
 import type { TaskInput } from '../shared/automation';
@@ -185,6 +186,32 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
     assert.equal(inbox.data[0].id, started.id);
     await service.handle('automation/read', { runId: started.id });
     assert.equal((await service.handle('automation/inbox', {}) as { data: unknown[] }).data.length, 0);
+
+    const tool = new ScheduleTaskCalls(async (method, params) => {
+      assert.equal(method, 'thread/read');
+      return { thread: { id: params.threadId, projectId: 'p1' } };
+    }, (method, params) => service.handle(method, params));
+    const args = { name: input.name, prompt: input.prompt, timeZone: input.timeZone,
+      schedule: input.schedule, conversationMode: 'new' };
+    const callback = { namespace: null, tool: 'schedule_task', threadId: 't1',
+      turnId: 'turn2', callId: 'call1', arguments: args };
+    const invalid = await tool.handle({ ...callback, arguments: { ...args, permissionMode: 'workspace-write' } });
+    assert.equal(invalid?.success, false);
+    const creation = tool.handle(callback);
+    assert.equal(tool.handle(callback), creation);
+    assert.equal((await tool.handle({ ...callback, callId: 'call2' }))?.success, false);
+    const output = await creation;
+    assert.equal(output?.success, true);
+    const saved = JSON.parse(output!.contentItems[0].text);
+    assert.equal(saved.nextRunAt, input.schedule.kind === 'once' && input.schedule.at);
+    const list = await service.handle('automation/list', {}) as {
+      data: (TaskInput & { id: string })[];
+    };
+    assert.equal(list.data.length, 2);
+    const scheduled = list.data.find((task) => task.id === saved.id);
+    assert.equal(scheduled?.projectId, 'p1');
+    assert.equal(scheduled?.permissionMode, 'read-only');
+    assert.equal(scheduled?.threadId, null);
   } finally {
     service.close();
     await new Promise<void>((resolve) => ws.close(() => resolve()));
