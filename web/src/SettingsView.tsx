@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Save, X } from 'lucide-react';
+import { FileText, RefreshCw, Save, X } from 'lucide-react';
 import type { HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import type { PathHosts } from './pathHosts';
@@ -149,7 +149,7 @@ export function SettingsView({ hosts, initialHost, initialProjectId, projects, t
       setError('保存未确认或文件已在电脑上改变；请核对内容后刷新。');
     } finally { setBusy(false); }
   };
-  return <div className="modal-backdrop" onMouseDown={(event) => {
+  return <div className="modal-backdrop settings-backdrop" onMouseDown={(event) => {
     if (event.target === event.currentTarget && askDiscard()) onClose();
   }}>
     <section role="dialog" aria-modal="true" aria-label="设置" className="shared-settings">
@@ -176,6 +176,10 @@ export function SettingsView({ hosts, initialHost, initialProjectId, projects, t
               (enabled ? 'enable' : 'disable'));
           }}/>
       </label>}
+      {nativeNotifications && <button type="button" className="shared-settings-log-link"
+        onClick={() => nativeNotifications.postMessage('codexmobileui:diagnostics:open')}>
+        <FileText size={17}/>查看与导出诊断日志
+      </button>}
       <label>后续消息处理<select value={followUpMode} onChange={(event) =>
         onFollowUpMode(event.target.value as 'steer' | 'queue')}>
         <option value="steer">引导当前任务</option><option value="queue">排队到下一轮</option>

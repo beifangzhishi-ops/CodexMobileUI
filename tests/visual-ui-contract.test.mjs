@@ -27,6 +27,16 @@ test('new-chat draft survives host/project navigation without rotating transient
   assert.match(webApp, /'new:draft': draft/);
 });
 
+test('Android diagnostics and mobile settings remain accessible and scrollable', () => {
+  const settings = read('web/src/SettingsView.tsx');
+  assert.match(app, /<DiagnosticsPanel visible=\{diagnosticsOpen\}/);
+  assert.match(app, /codexmobileui:diagnostics:open/);
+  assert.match(settings, /codexmobileui:diagnostics:open/);
+  assert.match(uiStyle, /\.modal-backdrop\.settings-backdrop\s*\{[^}]*align-items: center/);
+  assert.match(uiStyle, /\.shared-settings > \*\s*\{\s*flex-shrink: 0/);
+  assert.match(uiStyle, /\.shared-settings\s*\{[^}]*overflow-y: auto/);
+});
+
 test('one React UI owns conversations on browser, Android and future desktop', () => {
   assert.match(app, /<WebView<WebViewProps>/);
   assert.match(app, /unifiedWebUrl\(coordinator\)/);

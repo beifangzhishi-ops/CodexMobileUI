@@ -103,8 +103,9 @@ test("stable Android release writes Gradle cache and temp files inside this chec
   assert.match(androidWindowsBuild, /installed Gradle \$gradleVersion distribution with isolated writable workspace cache/);
 });
 
-test("Android keeps only the private coordinator and native assistant-file sink", () => {
-  assert.doesNotMatch(mainApp, /<DiagnosticsPanel|<OAuthLogin|<ChatView|<ChatSidebar/);
+test("Android keeps the private coordinator, native file sink and isolated diagnostics", () => {
+  assert.match(mainApp, /<DiagnosticsPanel visible=\{diagnosticsOpen\}/);
+  assert.doesNotMatch(mainApp, /<OAuthLogin|<ChatView|<ChatSidebar/);
   assert.match(coordinatorStorage, /loadCoordinatorUrl/);
   assert.match(coordinatorStorage, /storeCoordinatorUrl/);
   assert.match(coordinatorStorage, /mobile_network/);

@@ -16,6 +16,8 @@ import {
   setVisibleTask, startTaskNotifications, type TaskLink,
 } from './src/core/taskNotifications';
 import { loadCoordinatorUrl, storeCoordinatorUrl } from './src/storage/database';
+import { DiagnosticsPanel } from './src/diagnostics/DiagnosticsPanel';
+import { logDiagnostic } from './src/diagnostics/journal';
 
 /**
  * One UI on browser, Android and (eventually) desktop.
@@ -30,12 +32,15 @@ function SharedApp() {
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const web = useRef<WebView<WebViewProps>>(null);
   const downloads = useRef(new NativePublicationDownloads());
   const lastTask = useRef<TaskLink | null>(null);
   const webLoaded = useRef(false);
   const webReady = useRef(false);
   const origin = unifiedWebUrl(coordinator);
+
+  useEffect(() => { logDiagnostic('app.started', { platform: Platform.OS }); }, []);
 
   const openPendingTask = useCallback(() => {
     if (!webLoaded.current || !webReady.current || !lastTask.current) return;
@@ -112,7 +117,9 @@ function SharedApp() {
       setCoordinator(selected);
       setConfiguring(false);
       setReload((value) => value + 1);
+      logDiagnostic('app.connectionUpdated', { outcome: 'success' });
     } catch {
+      logDiagnostic('app.connectionUpdated', { outcome: 'failed' });
       setError('无法连接内网入口。请检查 Tailscale、HTTPS 地址和 4190 端口。');
     } finally {
       setConnecting(false);
@@ -193,6 +200,7 @@ function SharedApp() {
           startInLoadingState
           onLoadEnd={() => {
             webLoaded.current = true;
+            logDiagnostic('webview.loadFinished');
             openPendingTask();
           }}
           renderLoading={() => <View style={styles.center}>
@@ -200,6 +208,7 @@ function SharedApp() {
           </View>}
           onError={() => setError('无法加载内网网页。请检查 6v 的 4190 服务及 Tailnet。')}
           onHttpError={({ nativeEvent }) => {
+            logDiagnostic('webview.httpFailed', { status: nativeEvent.statusCode });
             if (nativeEvent.url === origin + '/' && nativeEvent.statusCode >= 400) {
               setError('网页入口请求失败（HTTP ' + nativeEvent.statusCode + '）。');
             }
@@ -210,9 +219,15 @@ function SharedApp() {
               return;
             }
             if (nativeEvent.data === 'codexmobileui:back:handled') return;
+            if (nativeEvent.data === 'codexmobileui:diagnostics:open') {
+              logDiagnostic('diagnostics.openRequested');
+              setDiagnosticsOpen(true);
+              return;
+            }
             if (nativeEvent.data === 'codexmobileui:configure') { openConfig(); return; }
             if (nativeEvent.data === 'codexmobileui:web-ready') {
               webReady.current = true;
+              logDiagnostic('webview.ready');
               openPendingTask();
               return;
             }
@@ -249,6 +264,7 @@ function SharedApp() {
             });
           }}
         />}
+    <DiagnosticsPanel visible={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
   </SafeAreaView>;
 }
 

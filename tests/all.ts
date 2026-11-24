@@ -15,6 +15,7 @@ import './rate-limits.test';
 import './profile.test';
 import './oauth.test';
 import './gateway-diagnostics.test';
+import './diagnostics.test';
 import './gateway.test';
 import './scheduler.test';
 import './sidebar-pins.test';
