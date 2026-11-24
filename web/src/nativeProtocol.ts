@@ -93,6 +93,7 @@ export function parseThreads(data: unknown, hostId: HostId, archived = false): C
     return [{ id: text(thread.id), hostId, project: text(thread.projectId) || null,
       cwd: text(thread.cwd) || null,
       title: text(thread.name) || text(thread.title) || threadPreviewTitle(preview),
+      model: text(thread.model) || null, reasoningEffort: text(thread.reasoningEffort) || null,
       status: running ? 'running' : 'idle', archived,
       updatedAt: unixMs(thread.recencyAt ?? thread.updatedAt ?? thread.createdAt) ?? 0,
       running, syncPending: false, activeTurnId: null, runningSinceMs: null, messages: [] }];

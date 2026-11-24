@@ -37,6 +37,15 @@ test('Android diagnostics and mobile settings remain accessible and scrollable',
   assert.match(uiStyle, /\.shared-settings\s*\{[^}]*overflow-y: auto/);
 });
 
+test('native model is per-thread and new threads prewarm the chosen model', () => {
+  assert.match(webApp, /active\?\.model/);
+  assert.match(client, /thread\/settings\/update/);
+  assert.match(client, /modelUpdates\.current\.get\(key\)/);
+  assert.match(client, /web\/start'[\s\S]*?model: nativeModel\.id/);
+  assert.match(bridge, /model_reasoning_effort: request\.params\.effort/);
+  assert.match(bridge, /MODEL_UPDATE_REJECTED/);
+});
+
 test('one React UI owns conversations on browser, Android and future desktop', () => {
   assert.match(app, /<WebView<WebViewProps>/);
   assert.match(app, /unifiedWebUrl\(coordinator\)/);

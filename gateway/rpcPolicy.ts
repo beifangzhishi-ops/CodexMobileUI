@@ -147,8 +147,12 @@ function safeParams(method: string, value: unknown): boolean {
       // caller-controlled cwd for configuration discovery.
       return keys.length === 0;
     case 'thread/settings/update':
-      // Only built-in named profiles are selectable by the phone.
-      // No sandboxPolicy, approvalPolicy, cwd, model, or arbitrary config edits.
+      if (p.model !== undefined || p.effort !== undefined) {
+        return subset(['threadId', 'model', 'effort']) && id('threadId') &&
+          validNativeModelId(p.model) &&
+          (p.effort === undefined || ['minimal','low','medium','high','xhigh','max','ultra'].includes(String(p.effort)));
+      }
+      // Permission updates remain restricted to built-in named profiles.
       return subset(['threadId', 'permissions', 'approvalsReviewer']) && id('threadId') &&
         [':workspace', ':read-only', ':danger-full-access'].includes(String(p.permissions)) &&
         ['user', 'auto_review'].includes(String(p.approvalsReviewer));

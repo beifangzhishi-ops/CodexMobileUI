@@ -77,6 +77,8 @@ export function useLiveCodex() {
     mode: PermissionMode; profile: string | null; reviewer: string | null;
   }>());
   const permissionEpochs = useRef(new Map<string, number>());
+  /** Serializes settings writes for each native thread; turn/start waits for pending writes. */
+  const modelUpdates = useRef(new Map<string, Promise<void>>());
   const changed = useRef(new Map<string, number>());
   // A very fast model can finish before the turn/start acknowledgement is
   // processed. Never revive a completed turn as "running" on late ack.
@@ -137,7 +139,9 @@ export function useLiveCodex() {
       const previous = new Map(all.filter((item) => item.hostId === hostId).map((item) => [item.id, item]));
       const next = [...byId.values()].map((item) => {
         const old = previous.get(item.id);
-        return old ? { ...item, messages: old.messages, localCreated: false,
+        return old ? { ...item,
+          model: item.model || old.model, reasoningEffort: item.reasoningEffort || old.reasoningEffort,
+          messages: old.messages, localCreated: false,
           running: old.running ?? item.running,
           activeTurnId: old.activeTurnId, runningSinceMs: old.runningSinceMs, syncPending: old.syncPending,
           status: old.syncPending ? 'running' as const : old.status } : item;
@@ -167,6 +171,7 @@ export function useLiveCodex() {
   const forgetDeletedThread = useCallback((hostId: HostId, threadId: string) => {
     setConversations((all) => all.filter((item) => !(item.hostId === hostId && item.id === threadId)));
     waitingForModelTurn.current.delete(threadKey(hostId, threadId));
+    modelUpdates.current.delete(threadKey(hostId, threadId));
     setContextUsages((all) => {
       const next = { ...all };
       delete next[threadKey(hostId, threadId)];
@@ -195,6 +200,7 @@ export function useLiveCodex() {
       readPathOverlays(hostId, threadId).catch(() => []),
     ]);
     const snapshot = parseSnapshot(native, threadId);
+    const thread = obj(obj(native).thread);
     snapshot.messages = displayOriginalPaths(snapshot.messages, overlays);
     if (eventVersion !== (changed.current.get(key) ?? 0)) {
       // Do not overwrite newer streaming messages with an older asynchronous read.
@@ -208,6 +214,8 @@ export function useLiveCodex() {
       const runningSinceMs = snapshot.activeTurnId && snapshot.activeTurnId === item.activeTurnId
         ? item.runningSinceMs ?? snapshot.runningSinceMs : snapshot.runningSinceMs;
       return { ...item, ...snapshot, messages, runningSinceMs,
+        model: text(thread.model) || item.model,
+        reasoningEffort: text(thread.reasoningEffort) || item.reasoningEffort,
         status: snapshot.running ? 'running' : 'idle', syncPending: false };
     }));
     return snapshot.messages;
@@ -239,6 +247,9 @@ export function useLiveCodex() {
     void request(hostId, 'thread/resume', { threadId }).then((result) => {
       if ((permissionEpochs.current.get(key) ?? 0) !== epoch) return;
       const resumed = obj(result);
+      setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
+        ? { ...item, model: text(resumed.model) || item.model,
+          reasoningEffort: text(resumed.reasoningEffort) || item.reasoningEffort } : item));
       const profile = text(obj(resumed.activePermissionProfile).id) || null;
       const reviewer = text(resumed.approvalsReviewer) || null;
       if (!profile && !reviewer) return;
@@ -392,6 +403,12 @@ export function useLiveCodex() {
             if (usage && !waitingForModelTurn.current.has(key))
               setContextUsages((all) => ({ ...all, [key]: usage }));
             return; // Usage notifications do not invalidate concurrent message snapshots.
+          }
+          if (frame.method === 'thread/settings/updated') {
+            const updated = obj(params.threadSettings);
+            setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
+              ? { ...item, model: text(updated.model) || item.model,
+                reasoningEffort: text(updated.effort) || item.reasoningEffort } : item));
           }
           if (frame.method === 'thread/deleted') forgetDeletedThread(hostId, threadId);
           if (frame.method === 'turn/started') waitingForModelTurn.current.delete(key);
@@ -559,6 +576,25 @@ export function useLiveCodex() {
     setThreadPermissions((all) => ({ ...all, [key]: mode }));
   }, [permissions, request]);
 
+  const setThreadModel = useCallback((hostId: HostId, threadId: string, model: string, effort: string) => {
+    const key = threadKey(hostId, threadId);
+    const previous = modelUpdates.current.get(key) ?? Promise.resolve();
+    const work = previous.catch(() => undefined).then(async () => {
+      const chosen = models[hostId].find((candidate) => candidate.id === model || candidate.model === model);
+      if (!chosen) throw Error('MODEL_NOT_AVAILABLE');
+      if (!chosen.efforts.includes(effort)) throw Error('EFFORT_NOT_AVAILABLE');
+      await request(hostId, 'thread/settings/update', { threadId, model: chosen.id, effort }, 30_000);
+      const resumed = obj(await request(hostId, 'thread/resume', { threadId }));
+      if (text(resumed.model) !== chosen.id || text(resumed.reasoningEffort) !== effort)
+        throw Error('MODEL_SETTINGS_NOT_CONFIRMED');
+      setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
+        ? { ...item, model: chosen.id, reasoningEffort: effort } : item));
+    });
+    modelUpdates.current.set(key, work);
+    void work.finally(() => { if (modelUpdates.current.get(key) === work) modelUpdates.current.delete(key); }).catch(() => undefined);
+    return work;
+  }, [models, request]);
+
   const moveThread = useCallback(async (hostId: HostId, threadId: string, projectId: string) => {
     const response = obj(await request(hostId, 'thread/metadata/update', { threadId, projectId }));
     const thread = obj(response.thread);
@@ -635,12 +671,15 @@ export function useLiveCodex() {
     ];
     let threadId = existingId;
     if (!threadId) {
-      const response = obj(await request(hostId, 'web/start', { projectId, ...nativePerms }, 30_000));
+      const response = obj(await request(hostId, 'web/start', { projectId, ...nativePerms,
+        ...(nativeModel ? { model: nativeModel.id } : {}),
+        ...(options.effort ? { effort: options.effort } : {}) }, 30_000));
       threadId = text(obj(response.thread).id);
       if (!threadId) throw Error('THREAD_START_UNCONFIRMED');
       const id = threadId;
       setConversations((current) => current.some((c) => c.id === id && c.hostId === hostId) ? current : [{
         id, hostId, project: projectId, archived: false,
+        model: nativeModel?.id ?? null, reasoningEffort: options.effort || nativeModel?.defaultEffort || null,
         title: threadPreviewTitle(goalOnly ? options.goal! : messageText),
         status: 'idle', running: false, activeTurnId: null, localCreated: true,
         updatedAt: Date.now(), messages: [],
@@ -648,7 +687,22 @@ export function useLiveCodex() {
       active.current = { hostId, threadId: id };
       options.onCreated?.(id);
     } else {
-      await request(hostId, 'thread/resume', { threadId });
+      const key = threadKey(hostId, threadId);
+      await modelUpdates.current.get(key);
+      const resumed = obj(await request(hostId, 'thread/resume', { threadId }));
+      const actualModel = text(resumed.model);
+      const actualEffort = text(resumed.reasoningEffort);
+      setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
+        ? { ...item, model: actualModel || item.model, reasoningEffort: actualEffort || item.reasoningEffort } : item));
+      // Existing turns inherit the server-confirmed thread model; never replace it
+      // with a stale host-wide dropdown setting. Plan-mode parameters must agree.
+      delete settings.model;
+      delete settings.effort;
+      if (options.plan && settings.collaborationMode) {
+        const collaboration = settings.collaborationMode as { settings: { model?: string; reasoning_effort?: string | null } };
+        collaboration.settings.model = actualModel || nativeModel?.id;
+        collaboration.settings.reasoning_effort = actualEffort || null;
+      }
     }
     const id = threadId;
     if (goalOnly) {
@@ -792,6 +846,6 @@ export function useLiveCodex() {
     contextUsages, clearContextUsage,
     request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,
     readAssistantImage, readToolImage,
-    send, interrupt, renameThread, moveThread, setThreadPermission, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,
+    send, interrupt, renameThread, moveThread, setThreadPermission, setThreadModel, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,
   };
 }

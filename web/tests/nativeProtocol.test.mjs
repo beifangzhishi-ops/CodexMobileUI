@@ -50,6 +50,13 @@ test('active and archived histories use distinct native IDs and timestamps', () 
   assert.equal(parseThreads(raw, 'noha', true)[0].archived, true);
 });
 
+test('thread listing owns model and effort independently of the host defaults', () => {
+  const rows = parseThreads({ data: [{ id: 't1', model: 'gpt-6.2-sol', reasoningEffort: 'high' },
+    { id: 't2', model: 'gpt-6.1-terra', reasoningEffort: 'low' }] }, '6v');
+  assert.deepEqual(rows.map((r) => [r.model, r.reasoningEffort]),
+    [['gpt-6.2-sol', 'high'], ['gpt-6.1-terra', 'low']]);
+});
+
 test('Web and mobile use native formal title then first user-message preview', () => {
   const longTitle = '中'.repeat(61);
   const threads = parseThreads({ data: [

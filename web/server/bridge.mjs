@@ -555,9 +555,12 @@ function allowedFrame(msg) {
       /^\d{13}-[a-f0-9]{16,40}$/.test(p.idempotencyKey);
   }
   if (catalogFrame(msg.method, p)) return true;
-  if (msg.method === 'web/start') return subset(p, ['projectId','permissions','approvalsReviewer']) &&
+  if (msg.method === 'web/start') return subset(p, ['projectId','permissions','approvalsReviewer','model','effort']) &&
     (p.projectId === null || validId(p.projectId)) &&
-    validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => key !== 'projectId')));
+    (p.model === undefined || validModelIdentifier(p.model)) &&
+    (p.effort === undefined || ['minimal','low','medium','high','xhigh','max','ultra'].includes(p.effort)) &&
+    (p.effort === undefined || p.model !== undefined) &&
+    validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => ['permissions','approvalsReviewer'].includes(key))));
   if (msg.method === 'initialize') return subset(p, ['clientInfo', 'capabilities']) &&
     p.clientInfo?.name === 'codex_multi_host_web' && p.clientInfo?.version === '0.1.0';
   if (msg.method === 'project/list') return subset(p, ['limit', 'cursor']) &&
@@ -585,9 +588,14 @@ function allowedFrame(msg) {
     typeof p.threadId === 'string' && /^[0-9a-f-]{36}$/i.test(p.threadId);
   if (msg.method === 'thread/fork') return subset(p, ['threadId','lastTurnId','excludeTurns']) &&
     validId(p.threadId) && validId(p.lastTurnId) && p.excludeTurns === true;
-  if (msg.method === 'thread/settings/update') return subset(p, ['threadId','permissions','approvalsReviewer']) &&
-    validId(p.threadId) && typeof p.permissions === 'string' &&
-    validPermissions({ permissions: p.permissions, approvalsReviewer: p.approvalsReviewer });
+  if (msg.method === 'thread/settings/update') {
+    if (!validId(p.threadId)) return false;
+    if (p.model !== undefined || p.effort !== undefined) return
+      subset(p, ['threadId','model','effort']) && validModelIdentifier(p.model) &&
+      (p.effort === undefined || ['minimal','low','medium','high','xhigh','max','ultra'].includes(p.effort));
+    return subset(p, ['threadId','permissions','approvalsReviewer']) &&
+      typeof p.permissions === 'string' && validPermissions({ permissions: p.permissions, approvalsReviewer: p.approvalsReviewer });
+  }
   if (msg.method === 'project/read') return subset(p, ['projectId']) && validId(p.projectId);
   if (msg.method === 'model/list') return subset(p, ['limit', 'cursor']) &&
     (p.limit === undefined || p.limit === 100) && (p.cursor === undefined || validId(p.cursor));
@@ -666,7 +674,16 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       ? raw.split(delimiter).slice(1).join(delimiter) : raw;
     return /^请查看我附带的图片[。]?$/.test(visible.trim()) ? '' : visible.trim();
   }
+  async function verifyModelChoice(model, effort) {
+    if (model === undefined) return;
+    const listed = await internalRequest('model/list', { limit: 100 });
+    const match = listed?.data?.find((item) => item.id === model || item.model === model);
+    if (!match) throw Error('MODEL_NOT_AVAILABLE');
+    if (effort !== undefined && !match.supportedReasoningEfforts?.some((item) => item.reasoningEffort === effort))
+      throw Error('EFFORT_NOT_AVAILABLE');
+  }
   async function prepareStart(request) {
+    await verifyModelChoice(request.params.model, request.params.effort);
     const projectId = request.params.projectId;
     let cwd;
     if (projectId === null) {
@@ -696,6 +713,8 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     // including for a new chat without a named project.
     const started = await internalRequest('thread/start', { cwd,
       ...(projectId ? { projectId, dynamicTools: [scheduleTaskTool, listScheduleModelsTool] } : {}),
+      ...(request.params.model ? { model: request.params.model } : {}),
+      ...(request.params.effort ? { config: { model_reasoning_effort: request.params.effort } } : {}),
       ...requested });
     if (started?.thread?.id) createdHere.set(started.thread.id, { cwd });
     return started;
@@ -885,14 +904,17 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
           safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message } }));
         });
     } else if (msg.method === 'thread/settings/update' && !remotePeer) {
-      void internalRequest('permissionProfile/list', {}).then((profiles) => {
-        if (!Array.isArray(profiles?.data) || !profiles.data.some((profile) =>
-          profile?.id === msg.params.permissions && profile.allowed === true)) {
-          throw Error('PERMISSION_NOT_ALLOWED');
-        }
-        return internalRequest('thread/settings/update', msg.params);
-      }).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
-        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'PERMISSION_UPDATE_REJECTED' } })));
+      const modelChange = msg.params.model !== undefined;
+      void (modelChange
+        ? verifyModelChoice(msg.params.model, msg.params.effort)
+        : internalRequest('permissionProfile/list', {}).then((profiles) => {
+          if (!Array.isArray(profiles?.data) || !profiles.data.some((profile) =>
+            profile?.id === msg.params.permissions && profile.allowed === true))
+            throw Error('PERMISSION_NOT_ALLOWED');
+        })).then(() => internalRequest('thread/settings/update', msg.params))
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602,
+          message: modelChange ? 'MODEL_UPDATE_REJECTED' : 'PERMISSION_UPDATE_REJECTED' } })));
     } else if (msg.method === 'web/start' && !remotePeer) {
       void prepareStart(msg).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'THREAD_START_UNCONFIRMED' } })));

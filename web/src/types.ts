@@ -37,6 +37,9 @@ export type Conversation = {
   /** Native thread working directory, when provided by thread/list. */
   cwd?: string | null;
   title: string;
+  /** Native thread settings, not a host-wide dropdown preference. */
+  model?: string | null;
+  reasoningEffort?: string | null;
   status: ConversationStatus;
   archived?: boolean;
   updatedAt: number;

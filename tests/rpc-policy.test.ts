@@ -109,11 +109,17 @@ test('mobile permission selection uses native named profiles, never arbitrary po
   assert.equal(rpc('turn/start', { ...turn, permissions: ':danger-full-access', approvalsReviewer: 'user' }), true);
   assert.equal(rpc('turn/start', turn), true);
   assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', permissions: null }), false);
+  assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', model: 'gpt-6.2-sol', effort: 'medium' }), true);
+  assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', model: 'gpt-6.1-terra' }), true);
+  assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', model: 'ds/deepseek-flash', effort: 'high' }), true);
   assert.equal(rpc('turn/start', { ...turn, model: 'ds/deepseek-flash', effort: 'high' }), true);
   assert.equal(rpc('turn/start', { ...turn, model: 'ds/deepseek-flash', collaborationMode: {
     mode: 'plan', settings: { model: 'ds/deepseek-flash', reasoning_effort: 'high', developer_instructions: null },
   } }), true);
   assert.equal(rpc('turn/start', { ...turn, model: 'ds/../flash' }), false);
+  assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', model: 'gpt-6.2-sol', effort: 'invalid' }), false);
+  assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', model: 'gpt-6.2-sol', config: {} }), false);
+  assert.equal(rpc('thread/settings/update', { threadId: 'thread-1', model: 'gpt-6.2-sol', permissions: ':workspace' }), false);
   assert.equal(rpc('thread/settings/update', {
     threadId: 'thread-1', permissions: ':workspace', approvalsReviewer: 'auto_review',
   }), true);

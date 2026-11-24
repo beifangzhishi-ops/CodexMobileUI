@@ -286,6 +286,7 @@ export default function DesktopApp() {
   const [goalDraft, setGoalDraft] = useState('');
   const [goalEditor, setGoalEditor] = useState(false);
   const [goalWorking, setGoalWorking] = useState(false);
+  const [modelWorkingFor, setModelWorkingFor] = useState<string | null>(null);
   const [modelByHost, setModelByHost] = useState<Record<HostId, string>>({ '6v': '', noha: '' });
   const [effortByHost, setEffortByHost] = useState<Record<HostId, string>>({ '6v': '', noha: '' });
   const [permission, setPermission] = useState<PermissionMode>('custom');
@@ -393,12 +394,33 @@ export default function DesktopApp() {
     requestAnimationFrame(() => composeRef.current?.setSelectionRange(caret, caret));
   }
   const availableModels = live.models[currentHost];
-  const selectedModel = availableModels.find((item) => item.id === modelByHost[currentHost]) ??
+  const selectedModel = (active?.model
+    ? availableModels.find((item) => item.id === active.model || item.model === active.model)
+    : availableModels.find((item) => item.id === modelByHost[currentHost])) ??
     availableModels.find((item) => item.isDefault) ?? availableModels[0];
   const availableEfforts = selectedModel?.efforts ?? [];
   const effortLabels: Record<string, string> = { minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高', max: 'Max', ultra: 'Ultra' };
-  const effectiveEffort = availableEfforts.includes(effortByHost[currentHost])
-    ? effortByHost[currentHost] : selectedModel?.defaultEffort ?? '';
+  const desiredEffort = active ? active.reasoningEffort : effortByHost[currentHost];
+  const effectiveEffort = desiredEffort && availableEfforts.includes(desiredEffort)
+    ? desiredEffort : selectedModel?.defaultEffort ?? '';
+  const modelChangePending = Boolean(active && modelWorkingFor === conversationKey(active.hostId, active.id));
+  function applyModelSelection(modelId: string, effort: string) {
+    if (!active) {
+      setModelByHost((current) => ({ ...current, [currentHost]: modelId }));
+      setEffortByHost((current) => ({ ...current, [currentHost]: effort }));
+      return;
+    }
+    if (modelChangePending) return;
+    const threadId = active.id, hostId = active.hostId;
+    const key = conversationKey(hostId, threadId);
+    if (active.model === modelId && active.reasoningEffort === effort) return;
+    setModelWorkingFor(key);
+    void live.setThreadModel(hostId, threadId, modelId, effort).then(() => {
+      live.clearContextUsage(hostId, threadId);
+    }).catch(() => setNotice('??????????????????')).finally(() => {
+      setModelWorkingFor((value) => value === key ? null : value);
+    });
+  }
   const activeGoal = active ? live.goals[currentHost + ':' + active.id] : null;
   const activeQueue = active ? live.queues[currentHost + ':' + active.id] ?? [] : [];
   const contextUsage = active ? live.contextUsages[conversationKey(active.hostId, active.id)] : null;
@@ -1936,14 +1958,12 @@ export default function DesktopApp() {
               </div>}
               {popup === 'model' && <div className="popover composer-popover model-popover"><span className="popover-heading">{currentHost} 的真实模型列表</span>
                 {!availableModels.length && <span className="popover-heading">当前电脑暂未返回模型</span>}
-                {availableModels.map((item) => <button key={item.id} onClick={() => {
-                  if (active && selectedModel?.id !== item.id) live.clearContextUsage(active.hostId, active.id);
-                  setModelByHost((m) => ({ ...m, [currentHost]: item.id }));
-                  setEffortByHost((m) => ({ ...m, [currentHost]: '' }));
+                {availableModels.map((item) => <button key={item.id} disabled={modelChangePending} onClick={() => {
+                  applyModelSelection(item.id, item.defaultEffort ?? item.efforts[0] ?? 'medium');
                 }}><span>{item.name}</span>{selectedModel?.id === item.id && <Check className="check-icon" size={16}/>}</button>)}
                 <div className="popover-divider"/>
-                {availableEfforts.map((item) => <button key={item} onClick={() => {
-                  setEffortByHost((m) => ({ ...m, [currentHost]: item })); setPopup(null);
+                {availableEfforts.map((item) => <button key={item} disabled={modelChangePending} onClick={() => {
+                  if (selectedModel) applyModelSelection(selectedModel.id, item); setPopup(null);
                 }}>{effortLabels[item] ?? item}{effectiveEffort === item && <Check className="check-icon" size={16}/>}</button>)}
               </div>}
               {popup === 'project' && <div className="popover composer-popover target-popover"><span className="popover-heading">新聊天目标电脑 / 项目</span>

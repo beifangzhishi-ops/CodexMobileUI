@@ -121,6 +121,25 @@ prove device-specific background behavior.
   passed. No Android APK or desktop EXE was built. The noha host-only Web Agent
   remains on its separately deployed code and was not restarted in this fix.
 
+## 2026-11-24 four-source-fix batch (source only, no release)
+
+- Native thread model/effort is read from thread/list, thread/read and thread/resume, not
+  inherited from a host-wide picker. Model changes use serialized
+  thread/settings/update and read-back confirmation. Existing turn/start no longer
+  overrides the resumed thread with a stale picker selection.
+- New thread/start specifies the chosen model and config.model_reasoning_effort so
+  WS prewarm matches the first turn. CMP's separately reproduced WS 400 remains
+  out of scope.
+- Unsent new-chat text survives switching host, project and new-chat target;
+  existing-chat text may be carried to a new chat without deleting the original.
+- Responsive Settings is centered and scrollable with non-shrinking content.
+  Android native diagnostics, SQLite journal and JSON export were restored from
+  the earlier app design, with only allowlisted metadata and no secrets or chat.
+- Type checks and automated tests passed. This is source-only: neither web/dist
+  nor the peer Web Agent/Gateway was deployed or built. No Android APK or desktop
+  EXE was built. The diagnostic panel needs a future explicitly requested APK
+  release before it can appear on the user's phone.
+
 ## 2026-11-23 Mobile sidebar pull-to-refresh
 
 The shared responsive sidebar supports a downward pull from the top of its
