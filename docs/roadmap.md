@@ -9,12 +9,6 @@ the stable builder to sync the generated Gradle metadata. Verify the APK's
 embedded version and version code. For Windows, use the same release version in
 the portable package name and verify the EXE's ProductVersion and FileVersion.
 
-### Next release only
-
-- [ ] Release Android and Windows as **0.2.0**. The next Android version code is
-  **27**. Delete this subsection after the new packages are built, verified, and
-  delivered.
-
 ## 2026-11-24 Native conversation controls
 
 - [x] Keep native reasoning summary and explicitly returned display text
@@ -32,6 +26,11 @@ the portable package name and verify the EXE's ProductVersion and FileVersion.
   native compaction terminal success.
 - [x] Root, Gateway, Web (95 tests) and Desktop checks; headless Chromium
   controls at 1280 and 390 px, with visual verification of the mobile overlay.
+- [x] Pushed implementation to main (97e6da3), deployed the Web/Gateway on
+  both hosts, verified their local HTTP health without restarting App Server.
+- [x] Released Android 0.2.0 (versionCode 27, ARM64, embedded JS, v2 test
+  signing) and Windows 0.2.0 x64 (EXE version verified, portable ZIP);
+  both verified artifacts were delivered through CCM.
 - [ ] Physical Android installation and touch acceptance remain separate.
 
 ## 2026-11-24 Conversation experience (source)
