@@ -1,38 +1,90 @@
-import { createHash } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import {
+  copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile,
+} from 'node:fs/promises';
 import { basename, isAbsolute, resolve } from 'node:path';
-import { uploadToQuark } from './quarkUpload.js';
+import {
+  MAX_PUBLICATION_BYTES, MAX_PUBLICATION_CACHE_BYTES, MAX_PUBLICATIONS_PER_THREAD,
+  PUBLICATION_CHUNK_BYTES, PUBLICATION_ORPHAN_TTL_MS, PUBLICATION_RETENTION_MS,
+  isValidPublicationId, mimeForFileName, previewKindForMime,
+  type PublicationFile, type PublicationPreviewKind,
+} from '../shared/publicationProtocol.js';
 import { localFileLinks } from '../shared/localFileLinks.js';
 
-const MAX_BYTES = 12 * 1024 * 1024;
-const MAX_QUARK_BYTES = 1024 * 1024 * 1024 * 1024;
-const BLOCK_SIZE = 64 * 1024;
-const MAX_ITEMS = 20;
+/** A verified immutable publication returned by the host-owned Gateway. */
+export type Publication = PublicationFile;
 
-export type Publication = {
-  id: string; itemId: string; threadId: string; name: string; path: string;
-  status: 'ready' | 'unavailable' | 'quarkUploading' | 'quarkUploaded' | 'quarkFailed';
-  size: number; hash?: string; destination?: string; startedAt?: number;
-};
+type SourceLink = { name: string; path: string };
+type NativeAgentMessage = { id: string; text: string };
 
 /** Only deliberate Markdown file links, not plain-text absolute paths, are deliverables. */
-export function explicitFileLinks(markdown: string): { name: string; path: string }[] {
-  const links: { name: string; path: string }[] = [];
+export function explicitFileLinks(markdown: string): SourceLink[] {
+  const links: SourceLink[] = [];
   for (const link of localFileLinks(markdown)) {
-    if (link.location) continue;
     const sourceName = basename(link.path.replace(/\\/g, '/'));
     if (!sourceName || sourceName === '.' || sourceName === '..') continue;
-    const caption = link.label.replace(/^下载\s+/u, '').trim();
-    const sourceExtension = sourceName.lastIndexOf('.') >= 0 ? sourceName.slice(sourceName.lastIndexOf('.')) : '';
-    const name = sourceExtension && caption.toLowerCase().endsWith(sourceExtension.toLowerCase()) &&
-      caption.length <= 120 && !/[\\/:*?"<>|\x00-\x1f]/u.test(caption) ? caption : sourceName;
-    links.push({ name, path: link.path });
+    links.push({ name: sourceName, path: link.path });
   }
   return links;
 }
 
-function safeId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+function agentText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value.map((part) => {
+    if (!part || typeof part !== 'object') return '';
+    const node = part as { type?: unknown; text?: unknown };
+    return node.type === 'text' && typeof node.text === 'string' ? node.text : '';
+  }).join('\n');
+}
+
+function exactAgentMessage(nativeRead: unknown, threadId: string, itemId: string): NativeAgentMessage | null {
+  const thread = (nativeRead as { thread?: Record<string, unknown> } | null)?.thread;
+  if (!thread || thread.id !== threadId || !Array.isArray(thread.turns) ||
+      typeof thread.cwd !== 'string' || !isAbsolute(thread.cwd)) return null;
+  for (const turn of thread.turns) {
+    if (!turn || typeof turn !== 'object') continue;
+    const items = (turn as { items?: unknown }).items;
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const agent = item as { id?: unknown; type?: unknown; text?: unknown; content?: unknown };
+      if (agent.type === 'agentMessage' && agent.id === itemId) {
+        return { id: itemId, text: agentText(agent.text ?? agent.content) };
+      }
+    }
+  }
+  return null;
+}
+
+async function sniffText(path: string): Promise<boolean> {
+  const handle = await open(path, 'r');
+  try {
+    const sample = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
+    const bytes = sample.subarray(0, bytesRead);
+    if (!bytes.length || bytes.includes(0)) return false;
+    try {
+      new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+async function fileHash(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const stream = createReadStream(path);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', resolvePromise);
+    stream.on('error', rejectPromise);
+  });
+  return hash.digest('hex');
 }
 
 export class PublicationStore {
@@ -40,168 +92,223 @@ export class PublicationStore {
   private readonly running = new Map<string, Promise<Publication>>();
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(stateFile: string, private readonly quarkUpload: (path: string) => Promise<void> = uploadToQuark) {
+  constructor(stateFile: string) {
     this.root = resolve(stateFile, '..', 'published-files');
   }
 
-  private file(id: string) { return resolve(this.root, `${id}.data`); }
-  private metadata(id: string) { return resolve(this.root, `${id}.json`); }
+  private dataFile(id: string) { return resolve(this.root, `${id}.data`); }
+  private metadataFile(id: string) { return resolve(this.root, `${id}.json`); }
 
-  /** The thread and item must have been obtained from native thread/read, never a caller's text. */
-  async listFromThread(threadId: string, nativeRead: unknown): Promise<Publication[]> {
-    const thread = (nativeRead as { thread?: Record<string, unknown> } | null)?.thread;
-    if (!thread || thread.id !== threadId || !Array.isArray(thread.turns) ||
-      typeof thread.cwd !== 'string' || !isAbsolute(thread.cwd)) return [];
-    const publications: Publication[] = [];
-    for (const turn of thread.turns) {
-      if (!turn || typeof turn !== 'object') continue;
-      const items = (turn as { items?: unknown }).items;
-      if (!Array.isArray(items)) continue;
-      for (const item of items) {
-        if (!item || typeof item !== 'object') continue;
-        const agent = item as { id?: unknown; type?: unknown; text?: unknown; content?: unknown };
-        if (agent.type !== 'agentMessage' || typeof agent.id !== 'string') continue;
-        const text = typeof agent.text === 'string' ? agent.text :
-          Array.isArray(agent.content) ? agent.content.map((p: unknown) => {
-            if (!p || typeof p !== 'object') return '';
-            const node = p as { type?: unknown; text?: unknown };
-            return node.type === 'text' && typeof node.text === 'string' ? node.text : '';
-          }).join('\n') : '';
-        for (const link of explicitFileLinks(text)) {
-          if (publications.length >= MAX_ITEMS) return publications;
-          const path = resolve(link.path);
-          const id = createHash('sha256').update(JSON.stringify([threadId, agent.id, path]))
-            .digest('hex');
-          publications.push(await this.publish({ id, threadId, itemId: agent.id, path,
-            name: link.name, status: 'unavailable', size: 0 }));
-        }
-      }
-    }
-    return publications;
+  /** Return only already-published snapshots. Reading a thread never copies files. */
+  async listForThread(threadId: string): Promise<Publication[]> {
+    await this.cleanup();
+    let names: string[] = [];
+    try { names = await readdir(this.root); } catch { return []; }
+    const records = await Promise.all(names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => this.get(name.slice(0, -5), false)));
+    return records.filter((item): item is Publication => item?.threadId === threadId)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, MAX_PUBLICATIONS_PER_THREAD);
   }
 
-  private async publish(meta: Publication): Promise<Publication> {
-    const existing = await this.get(meta.id);
-    if (existing) {
-      // A Gateway restart during an upload leaves no verified completion.
-      if (existing.status === 'quarkUploading' && !this.running.has(meta.id) &&
-          existing.startedAt && Date.now() - existing.startedAt > 35 * 60_000) {
-        const failed: Publication = { ...existing, status: 'quarkFailed' };
-        await this.saveMetadata(failed);
-        return failed;
-      }
-      return existing;
+  /**
+   * Publish exactly one explicit Markdown link from one native agentMessage.
+   * `linkIndex` is bounded and identifies a link inside that exact message.
+   */
+  async publishFromThread(
+    threadId: string, itemId: string, linkIndex: number, nativeRead: unknown,
+  ): Promise<Publication> {
+    const message = exactAgentMessage(nativeRead, threadId, itemId);
+    if (!message || !Number.isSafeInteger(linkIndex) || linkIndex < 0) {
+      throw Error('PUBLICATION_SELECTION_INVALID');
     }
-    const active = this.running.get(meta.id);
-    if (active) return active;
-    let info: Awaited<ReturnType<typeof lstat>>;
-    try {
-      await realpath(meta.path);
-      info = await lstat(meta.path);
-      if (!info.isFile() || info.isSymbolicLink() || !info.size ||
-        info.size > MAX_QUARK_BYTES) return meta;
-    } catch { return meta; }
-    if (info.size <= MAX_BYTES) return this.snapshot(meta);
-    const pending: Publication = {
-      ...meta, size: info.size, status: 'quarkUploading', destination: '夸克上传文件',
-      startedAt: Date.now(),
+    const link = explicitFileLinks(message.text)[linkIndex];
+    if (!link) throw Error('PUBLICATION_SELECTION_NOT_FOUND');
+    const path = resolve(link.path);
+    const id = createHash('sha256').update(JSON.stringify([threadId, itemId, path])).digest('hex');
+    const now = Date.now();
+    const record: Publication = {
+      id, threadId, itemId, path, name: link.name, status: 'unavailable',
+      size: 0, mime: mimeForFileName(link.name) ?? 'application/octet-stream',
+      previewKind: null, createdAt: now, expiresAt: now + PUBLICATION_RETENTION_MS,
     };
-    try { await this.saveMetadata(pending); }
-    catch { return { ...pending, status: 'quarkFailed' }; }
-    const run = this.queue.then(async () => {
-      // Reconfirm the file before asking the Quark desktop app to read it.
-      const current = await lstat(meta.path);
-      if (!current.isFile() || current.isSymbolicLink() || current.size !== info.size) {
-        throw new Error('QUARK_SOURCE_CHANGED');
-      }
-      await this.quarkUpload(meta.path);
-    }).then(async (): Promise<Publication> => {
-      const result: Publication = { ...pending, status: 'quarkUploaded' };
-      await this.saveMetadata(result);
-      return result;
-    }).catch(async (): Promise<Publication> => {
-      const result: Publication = { ...pending, status: 'quarkFailed' };
-      await this.saveMetadata(result).catch(() => undefined);
-      return result;
-    }).finally(() => { this.running.delete(meta.id); });
-    this.running.set(meta.id, run);
-    this.queue = run.then(() => undefined);
-    return pending;
-  }
-
-  private async saveMetadata(record: Publication): Promise<void> {
-    await mkdir(this.root, { recursive: true });
-    const temp = resolve(this.root, `${record.id}.${process.pid}.json.tmp`);
-    try {
-      await writeFile(temp, JSON.stringify(record), { flag: 'w' });
-      await rename(temp, this.metadata(record.id));
-    } finally { await rm(temp, { force: true }).catch(() => undefined); }
-  }
-
-  private async snapshot(meta: Publication): Promise<Publication> {
-    const existing = await this.get(meta.id);
-    if (existing) return existing;
-    const active = this.running.get(meta.id);
+    const existing = await this.get(id);
+    if (existing?.status === 'ready') return existing;
+    const active = this.running.get(id);
     if (active) return active;
-    const task = this.makeSnapshot(meta).finally(() => this.running.delete(meta.id));
-    this.running.set(meta.id, task);
+    const task = this.queue.then(() => this.snapshot(record))
+      .finally(() => this.running.delete(id));
+    this.queue = task.then(() => undefined, () => undefined);
+    this.running.set(id, task);
     return task;
   }
 
-  private async makeSnapshot(meta: Publication): Promise<Publication> {
-    let result = meta;
-    const target = this.file(meta.id);
-    const temp = `${target}.part`;
+  private async snapshot(meta: Publication): Promise<Publication> {
+    await this.cleanup();
+    let canonical: string;
+    let info: Awaited<ReturnType<typeof lstat>>;
     try {
-      // The path is solely from a native assistant message returned by
-      // thread/read; a mobile request can only use an opaque publication ID.
-      await realpath(meta.path);
-      const info = await lstat(meta.path);
-      if (!info.isFile() || info.isSymbolicLink() || !info.size || info.size > MAX_BYTES) {
-        throw new Error('unsupported file');
-      }
+      if (!(await lstat(meta.path)).isFile()) return { ...meta, error: 'unsafe' };
+      canonical = await realpath(meta.path);
+      info = await lstat(canonical);
+      if (!info.isFile() || info.isSymbolicLink() || !info.size) return { ...meta, error: 'missing' };
+      if (info.size > MAX_PUBLICATION_BYTES) return { ...meta, size: info.size, error: 'tooLarge' };
+    } catch {
+      return { ...meta, error: 'missing' };
+    }
+
+    const target = this.dataFile(meta.id);
+    const temp = `${target}.${process.pid}.${randomUUID()}.part`;
+    try {
       await mkdir(this.root, { recursive: true });
-      await copyFile(meta.path, temp);
-      const copyInfo = await stat(temp);
-      if (copyInfo.size !== info.size) throw new Error('file changed during copy');
-      const hash = createHash('sha256').update(await readFile(temp)).digest('hex');
+      await this.makeRoom(info.size);
+      await copyFile(canonical, temp);
+      const latest = await lstat(canonical);
+      if (!latest.isFile() || latest.dev !== info.dev || latest.ino !== info.ino || latest.size !== info.size ||
+          latest.mtimeMs !== info.mtimeMs) throw Error('file changed during copy');
+      const copied = await stat(temp);
+      if (!copied.isFile() || copied.size !== info.size) throw Error('file changed during copy');
+      const hash = await fileHash(temp);
+      const mime = mimeForFileName(meta.name) ?? (await sniffText(temp) ? 'text/plain' : 'application/octet-stream');
+      const record: Publication = {
+        ...meta, status: 'ready', size: info.size, hash, mime,
+        previewKind: previewKindForMime(mime), createdAt: Date.now(),
+        expiresAt: Date.now() + PUBLICATION_RETENTION_MS,
+      };
       await rename(temp, target);
-      result = { ...meta, status: 'ready', size: info.size, hash };
-      await writeFile(this.metadata(meta.id), JSON.stringify(result), { flag: 'wx' });
+      await this.writeMetadata(record);
+      return record;
     } catch {
       await rm(temp, { force: true }).catch(() => undefined);
-      // An unavailable card is deliberately not cached: a later refresh can retry.
+      await rm(target, { force: true }).catch(() => undefined);
+      return { ...meta, size: info.size, status: 'unavailable', error: 'unreadable' };
     }
-    return result;
   }
 
-  async get(id: string): Promise<Publication | null> {
-    if (!safeId(id)) return null;
+  async get(id: string, cleanup = true): Promise<Publication | null> {
+    if (!isValidPublicationId(id)) return null;
+    const record = await this.load(id);
+    if (!record) return null;
+    if (record.expiresAt <= Date.now()) {
+      if (cleanup) await this.deleteRecord(record);
+      return null;
+    }
+    return record;
+  }
+
+  private async load(id: string): Promise<Publication | null> {
     try {
-      const raw = JSON.parse(await readFile(this.metadata(id), 'utf8')) as Publication;
-      if (raw.id !== id || !['ready', 'quarkUploading', 'quarkUploaded', 'quarkFailed'].includes(raw.status) ||
-        !Number.isSafeInteger(raw.size) || raw.size < 1 || raw.size > MAX_QUARK_BYTES) return null;
-      if (raw.status !== 'ready') return raw;
-      if (!raw.hash) return null;
-      const info = await stat(this.file(id));
-      return info.isFile() && info.size === raw.size ? raw : null;
-    } catch { return null; }
+      const raw = JSON.parse(await readFile(this.metadataFile(id), 'utf8')) as Partial<Publication>;
+      if (raw.id !== id || raw.status !== 'ready' || !raw.hash ||
+          !Number.isSafeInteger(raw.size) || Number(raw.size) < 1 ||
+          Number(raw.size) > MAX_PUBLICATION_BYTES ||
+          typeof raw.name !== 'string' || typeof raw.itemId !== 'string' ||
+          typeof raw.threadId !== 'string' || typeof raw.path !== 'string') return null;
+      const info = await stat(this.dataFile(id));
+      if (!info.isFile() || info.size !== raw.size) return null;
+      const createdAt = Number.isSafeInteger(raw.createdAt) ? Number(raw.createdAt) : info.mtimeMs;
+      const expiresAt = Number.isSafeInteger(raw.expiresAt)
+        ? Number(raw.expiresAt) : createdAt + PUBLICATION_RETENTION_MS;
+      const mime = typeof raw.mime === 'string' && raw.mime
+        ? raw.mime : mimeForFileName(raw.name) ?? 'application/octet-stream';
+      return {
+        ...(raw as Publication), id, status: 'ready', createdAt, expiresAt, mime,
+        previewKind: previewKindForMime(mime),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async stat(id: unknown): Promise<Publication> {
+    const record = await this.get(typeof id === 'string' ? id : '');
+    if (!record) throw Error('PUBLICATION_UNAVAILABLE');
+    return record;
   }
 
   async read(id: unknown, offset: unknown): Promise<{ data: string; received: number; total: number }> {
-    if (!safeId(id) || !Number.isSafeInteger(offset) || Number(offset) < 0) throw new Error('INVALID_PARAMS');
-    const meta = await this.get(id);
-    if (!meta || meta.status !== 'ready' || Number(offset) >= meta.size) {
-      throw new Error('PUBLICATION_UNAVAILABLE');
+    if (!isValidPublicationId(id) || !Number.isSafeInteger(offset) || Number(offset) < 0) {
+      throw Error('INVALID_PARAMS');
     }
-    const { open } = await import('node:fs/promises');
-    const file = await open(this.file(id), 'r');
+    const meta = await this.get(id);
+    if (!meta || Number(offset) >= meta.size) throw Error('PUBLICATION_UNAVAILABLE');
+    const handle = await open(this.dataFile(id), 'r');
     try {
-      const chunk = Buffer.alloc(Math.min(BLOCK_SIZE, meta.size - Number(offset)));
-      const { bytesRead } = await file.read(chunk, 0, chunk.length, Number(offset));
-      if (bytesRead === 0) throw new Error('PUBLICATION_UNAVAILABLE');
-      return { data: chunk.subarray(0, bytesRead).toString('base64'),
-        received: Number(offset) + bytesRead, total: meta.size };
-    } finally { await file.close(); }
+      const chunk = Buffer.alloc(Math.min(PUBLICATION_CHUNK_BYTES, meta.size - Number(offset)));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, Number(offset));
+      if (bytesRead === 0) throw Error('PUBLICATION_UNAVAILABLE');
+      return {
+        data: chunk.subarray(0, bytesRead).toString('base64'),
+        received: Number(offset) + bytesRead,
+        total: meta.size,
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async makeRoom(incoming: number): Promise<void> {
+    if (incoming > MAX_PUBLICATION_CACHE_BYTES) throw Error('PUBLICATION_CACHE_LIMIT');
+    const records = await this.records(false);
+    let total = records.reduce((sum, item) => sum + item.size, 0);
+    for (const item of records.sort((a, b) => a.createdAt - b.createdAt)) {
+      if (total + incoming <= MAX_PUBLICATION_CACHE_BYTES) break;
+      await this.deleteRecord(item);
+      total -= item.size;
+    }
+    if (total + incoming > MAX_PUBLICATION_CACHE_BYTES) throw Error('PUBLICATION_CACHE_LIMIT');
+  }
+
+  private async cleanup(): Promise<void> {
+    const now = Date.now();
+    let names: string[] = [];
+    try { names = await readdir(this.root); } catch { return; }
+    const metadataIds = new Set(names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => name.slice(0, -5)));
+    for (const name of names) {
+      const id = /^([a-f0-9]{64})\./.exec(name)?.[1];
+      if (!id) continue;
+      if (name.endsWith('.json')) continue;
+      try {
+        const info = await stat(resolve(this.root, name));
+        if (now - info.mtimeMs > PUBLICATION_ORPHAN_TTL_MS &&
+            (name.includes('.part') || name.includes('.tmp') || !metadataIds.has(id))) {
+          await rm(resolve(this.root, name), { force: true });
+        }
+      } catch { /* A concurrently removed orphan is already clean. */ }
+    }
+    for (const item of await this.records(false)) {
+      if (item.expiresAt <= now) await this.deleteRecord(item);
+    }
+  }
+
+  private async records(cleanup: boolean): Promise<Publication[]> {
+    if (cleanup) await this.cleanup();
+    let names: string[] = [];
+    try { names = await readdir(this.root); } catch { return []; }
+    const rows = await Promise.all(names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => this.load(name.slice(0, -5))));
+    return rows.filter((item): item is Publication => item !== null);
+  }
+
+  private async deleteRecord(record: Publication): Promise<void> {
+    await Promise.all([
+      rm(this.metadataFile(record.id), { force: true }).catch(() => undefined),
+      rm(this.dataFile(record.id), { force: true }).catch(() => undefined),
+    ]);
+  }
+
+  private async writeMetadata(record: Publication): Promise<void> {
+    const target = this.metadataFile(record.id);
+    const temp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(temp, JSON.stringify(record), { encoding: 'utf8', flag: 'wx' });
+    try {
+      await rm(target, { force: true });
+      await rename(temp, target);
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined);
+    }
   }
 }
+
+export type { PublicationPreviewKind };

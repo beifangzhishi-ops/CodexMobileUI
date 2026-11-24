@@ -29,8 +29,8 @@ Codex App Server, browser chat implementation or native conversation store.
 Per-computer origin/host/IP/share settings and window geometry live in the
 Electron userData folder. The renderer has no Node integration and runs with
 context isolation and a Chromium sandbox. Origin-bound IPC exposes only
-reveal-in-Explorer for validated local/remote drive paths; native Save As
-handles the existing opaque publication download, not arbitrary file reads.
+reveal-in-Explorer for validated local/remote drive paths; it never accepts an
+arbitrary path or exposes a general file read.
 6v/noha Host-only gateway deployments remain unchanged; see `desktop/README.md`.
 
 ## 单一 UI
@@ -68,7 +68,22 @@ Web Coordinator 只接受配置的 Tailnet HTTPS 主机与端口 和同源 WebSo
 
 图片作为原生 `localImage` 消息部分上传；普通用户文件通过 `web/attachment/*` 在实际主机写入服务器管理目录，以 Codex Desktop 原生文件引用格式发送，绝不添加 MobileUI 自造的读文件提示词。图片和普通文件合计最多 4 个，普通文件单个 8 MiB。上传分块并提供进度及取消，上传标识仅归当前连接拥有。
 
-助手显式 Markdown 文件链接保持原文；网页版可显示、复制绝对路径，手机显示文件名或链接标签并使用受限下载接口。符合条件且不超过 12 MiB 的助手文件通过 Gateway 的不可变发布快照下载，更大的助手文件沿用主机端夸克上传逻辑（**这不涉及 APK 发布**）。任何普通正文绝对路径都不会自动变成任意主机文件读取。Android 文件下载由 `src/core/nativePublicationDownload.ts` 保存到 App 私有存储并调用系统分享/保存界面。
+助手显式 Markdown 文件链接保持原文并在原位置只显示 Markdown 标签。
+打开会话或调用 `workspace/publication/list` 不会创建快照；点击链接时，
+Web Bridge 才要求所属 Gateway 重新读取原生线程，并验证具体
+`agentMessage` item ID 与有界 link index，随后只发布该单文件。Gateway
+快照保留 72 小时，单文件上限 256 MiB、总缓存上限 512 MiB，使用 64 KiB
+分块；新发布不再启动夸克上传。可读取的旧夸克记录在再次点击时重新生成
+私有快照。任何普通正文绝对路径都不会自动变成任意主机文件读取。
+
+Coordinator 的 `/api/publication` 仅接受主机、opaque snapshot ID 和
+download/preview 模式，提供 HEAD、单段 Range、无存储缓存和 MIME 校验。
+文本预览最多 256 KiB；PDF 由打包的 PDF.js 渲染；音视频按范围读取。
+HTML/SVG 预览同时由 sandboxed iframe 和外层
+`sandbox; default-src 'none'` CSP 隔离，脚本、表单和远程资源不可执行。
+Android 只消费服务端 ID，由 `src/core/nativePublicationDownload.ts` 保存到
+自己的目录并调用系统保存/分享；浏览器复制私有 URL；Electron 定位原始主机
+文件。三者都不取得任意主机文件读取能力。
 
 ## 发布与验证
 

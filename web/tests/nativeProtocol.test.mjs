@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseSnapshot, applyNotice, parseProjects, parseThreads, parseModels,
   parseQueue, parsePermissions, parseGoal, displayUserText,
+  parseThreadForkResponse,
 } from '../src/nativeProtocol.ts';
 import { renderableLocalFileLinks } from '../../shared/localFileLinks.ts';
 
@@ -196,4 +197,13 @@ test('native image-only messages never introduce invented text', () => {
   }] } }, 't');
   assert.equal(parsed.messages[0].content, '');
   assert.deepEqual(parsed.messages[0].images, [{ itemId: 'u', imageIndex: 0 }]);
+});
+
+test('native fork response requires a real new thread identity', () => {
+  assert.deepEqual(parseThreadForkResponse({
+    thread: { id: 'fork-thread', projectId: 'project', name: 'Branch' },
+  }), { thread: { id: 'fork-thread', projectId: 'project', name: 'Branch' } });
+  assert.throws(() => parseThreadForkResponse({ thread: { id: '' } }), /INVALID_FORK_RESPONSE/);
+  assert.throws(() => parseThreadForkResponse({ thread: { id: 'fork', projectId: 3 } }),
+    /INVALID_FORK_RESPONSE/);
 });

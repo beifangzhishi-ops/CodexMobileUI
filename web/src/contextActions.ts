@@ -2,17 +2,25 @@ import type { HostId } from './types';
 
 export type ContextKind = 'thread' | 'project' | 'message' | 'file' | 'image';
 export type ContextTarget = { kind: ContextKind; hostId: HostId; id: string;
-  origin?: 'user' | 'assistant' };
+  origin?: 'user' | 'assistant'; itemId?: string; linkIndex?: number };
 
 const hostIds: readonly string[] = ['6v', 'noha'];
 export function contextTargetFromAttributes(kind: string | null, host: string | null,
-  id: string | null, origin?: string | null): ContextTarget | null {
+  id: string | null, origin?: string | null, itemId?: string | null,
+  linkIndex?: string | null): ContextTarget | null {
   if (kind !== 'thread' && kind !== 'project' && kind !== 'message' &&
       kind !== 'file' && kind !== 'image') return null;
   if (!host || !hostIds.includes(host) || !id ||
       id.length > (kind === 'file' ? 4096 : 256)) return null;
+  const index = linkIndex === undefined || linkIndex === null || linkIndex === ''
+    ? undefined : Number(linkIndex);
   return { kind, hostId: host as HostId, id,
-    ...(kind === 'file' && (origin === 'user' || origin === 'assistant') ? { origin } : {}) };
+    ...(kind === 'file' && (origin === 'user' || origin === 'assistant') ? { origin } : {}),
+    ...(kind === 'file' && origin === 'assistant' && itemId &&
+      itemId.length <= 200 ? { itemId } : {}),
+    ...(kind === 'file' && Number.isSafeInteger(index) && Number(index) >= 0 &&
+      Number(index) < 20 ? { linkIndex: Number(index) } : {}),
+  };
 }
 
 export function gestureMoved(startX: number, startY: number, x: number, y: number) {

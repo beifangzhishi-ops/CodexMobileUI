@@ -53,12 +53,6 @@ foreach ($file in $sourceFiles) {
 }
 New-Item -ItemType Directory -Path (Join-Path $destination 'dist') -Force | Out-Null
 Copy-Item -LiteralPath $gatewayDir -Destination (Join-Path $destination 'dist\gateway') -Recurse
-$quarkHelper = Join-Path $root 'gateway\quark-transfer\cloud_transfer.py'
-if (-not (Test-Path -LiteralPath $quarkHelper)) {
-  throw 'Missing standalone Quark uploader helper.'
-}
-New-Item -ItemType Directory -Path (Join-Path $destination 'dist\gateway\quark-transfer') -Force | Out-Null
-Copy-Item -LiteralPath $quarkHelper -Destination (Join-Path $destination 'dist\gateway\quark-transfer\cloud_transfer.py') -ErrorAction Stop
 $sharedDir = Join-Path $root 'dist\shared'
 if (Test-Path -LiteralPath $sharedDir) {
   Copy-Item -LiteralPath $sharedDir -Destination (Join-Path $destination 'dist\shared') -Recurse

@@ -107,7 +107,9 @@ test("Android keeps only the private coordinator and native assistant-file sink"
   assert.match(coordinatorStorage, /loadCoordinatorUrl/);
   assert.match(coordinatorStorage, /storeDiscoveredHosts/);
   assert.match(coordinatorStorage, /mobile_network/);
-  assert.match(nativeFileSave, /Paths\.document/);
-  assert.match(nativeFileSave, /Sharing\.shareAsync/);
+  assert.match(nativeFileSave, /Paths\.cache/);
+  assert.match(nativeFileSave, /Directory\.pickDirectoryAsync\(\)/);
+  assert.match(nativeFileSave, /job\.staging\.copy\(destination\)/);
+  assert.match(nativeFileSave, /safePublicationFileName\(request\.name\)/);
   assert.doesNotMatch(coordinatorStorage, /CREATE TABLE IF NOT EXISTS messages/);
 });

@@ -1,9 +1,31 @@
 # Codex 多电脑 Web 工作台
 
+## 2026-11-24 assistant file preview, resizable sidebar and forks
+
+Explicit assistant file links remain inline and show only their native Markdown
+label. Activating one asks the owning host to verify the exact native
+`agentMessage` item and link index, then creates one private 72-hour snapshot.
+No transfer begins merely because a conversation or publication list opens,
+and new publications no longer use Quark.
+
+The same preview page now supports rendered Markdown, paged UTF-8 text, images, PDF.js, ranged
+audio/video and sandboxed HTML/SVG. Android saves through its WebView bridge
+to the selected system folder using the original filename; browsers copy a same-origin opaque private URL;
+Electron reveals the validated host path. The generated PDF worker and all
+preview frames are served under the existing Tailnet Coordinator CSP.
+
+Browser and Electron sidebars can be dragged within bounded widths and remember
+the value in their own storage; narrow layouts keep the existing drawer and
+hide the resize separator. Completed assistant turns and the conversation menu
+can create a native turn-bounded fork. The source chat remains active until the
+native fork ID is confirmed, and rapid duplicate actions are suppressed.
+
+Use `npm.cmd --prefix web run check`, `npm.cmd --prefix web run test` and
+`npm.cmd --prefix web run build`. Browser checks use a local fixture. Physical Android behavior requires device verification.
+
 助手回复中的普通本地图片链接 `[截图](路径)` 使用文件入口，
-`![截图](路径)` 使用消息内预览。文件入口在 Electron 中定位到资源管理器，
-在浏览器中复制提示里显示的完整路径，在 Android WebView 中先打开下载页。
-Android 下载页通过会话的发布记录取文件状态，使用服务器发布 ID 下载。
+`![截图](路径)` 使用消息内预览。文件入口优先打开预览。其他文件在 Electron 中定位到资源管理器，在浏览器中复制私有链接，
+在 Android WebView 中进入系统保存。
 
 ## 2026-11-21 与 Android 统一的附件界面（双机已部署）
 

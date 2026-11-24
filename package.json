@@ -8,7 +8,7 @@
     "preandroid": "node scripts/configure-android-photo-picker.mjs",
     "android": "expo run:android",
     "gateway": "node dist/gateway/main.js",
-    "build:gateway": "tsc -p tsconfig.gateway-build.json && node scripts/copy-quark-helper.mjs",
+    "build:gateway": "tsc -p tsconfig.gateway-build.json",
     "probe:readonly": "node scripts/probe-readonly.mjs",
     "probe:private": "node scripts/probe-private-backend.mjs",
     "probe:authenticated": "node scripts/probe-authenticated-relay.mjs",

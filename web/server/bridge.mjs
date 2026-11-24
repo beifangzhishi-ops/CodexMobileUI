@@ -13,6 +13,9 @@ import { PathSettingsStore } from './pathSettings.mjs';
 import { PathOverlayStore } from './pathOverlays.mjs';
 import { respondLocalIdentity } from './localIdentity.mjs';
 import { NotificationFeed, watchNativeCompletions } from './notificationFeed.mjs';
+import {
+  ISOLATED_MARKUP_CSP, parsePublicationRange, streamPublicationRange,
+} from './publicationPreview.mjs';
 
 // This file is copied unchanged to noha's host-only bundle for agent mode.
 // Neither endpoint ever listens on a non-loopback interface.
@@ -32,6 +35,9 @@ const { createAttachmentUploader } =
   await import(pathToFileURL(resolve('dist/gateway/attachments.js')).href);
 const { ScheduleTaskCalls, scheduleTaskTool, listScheduleModelsTool } =
   await import(pathToFileURL(resolve('dist/gateway/scheduleTaskTool.js')).href);
+const {
+  PUBLICATION_TEXT_PREVIEW_BYTES, isValidPublicationId, safePublicationFileName,
+} = await import(pathToFileURL(resolve('dist/shared/publicationProtocol.js')).href);
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
   : { SidebarPinsStore: null };
@@ -73,7 +79,8 @@ async function requestLocalGateway(method, params) {
       handshakeTimeout: 10000, perMessageDeflate: false,
     });
     let settled = false;
-    let sent = false;
+    const needsNativeRead = method === 'workspace/publication/publish';
+    let phase = 'connecting';
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
@@ -88,10 +95,20 @@ async function requestLocalGateway(method, params) {
       if (binary) return;
       let data;
       try { data = JSON.parse(String(frame)); } catch { return; }
-      if (!sent && data?.type === 'ready') {
-        sent = true;
+      if (phase === 'connecting' && data?.type === 'ready') {
+        phase = needsNativeRead ? 'initializing' : 'requesting';
+        ws.send(JSON.stringify(needsNativeRead
+          ? { id: 2, method: 'initialize', params: {
+              clientInfo: { name: 'codex_multi_host_web', version: '0.1.0' },
+              capabilities: { experimentalApi: true },
+            } }
+          : { id: 1, method, params }));
+      } else if (phase === 'initializing' && data?.id === 2 && !data.method) {
+        if (data.error || !data.result) return finish(Error('PUBLICATION_INITIALIZE_FAILED'));
+        phase = 'requesting';
+        ws.send(JSON.stringify({ method: 'initialized', params: {} }));
         ws.send(JSON.stringify({ id: 1, method, params }));
-      } else if (sent && data?.id === 1 && !data.method) {
+      } else if (phase === 'requesting' && data?.id === 1 && !data.method) {
         finish(data.error ? Error(data.error.message || 'AUTOMATION_REQUEST_FAILED') : null,
           data.result);
       }
@@ -100,6 +117,101 @@ async function requestLocalGateway(method, params) {
     ws.on('close', () => finish(Error('GATEWAY_DISCONNECTED')));
   });
 }
+
+function gatewayTarget(hostId) {
+  const roster = JSON.parse(readFileSync(resolve('.state/mobile-tailnet-hosts.json'), 'utf8'));
+  const entry = Array.isArray(roster) && roster.find((item) => item?.name === hostId);
+  const target = new URL(entry?.url ?? '');
+  const parts = target.hostname.split('.').map(Number);
+  if (target.protocol !== 'http:' || target.port !== '48889' ||
+      parts.length !== 4 || parts[0] !== 100 || parts[1] < 64 || parts[1] > 127 ||
+      parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    throw Error('GATEWAY_NOT_CONFIGURED');
+  }
+  return target;
+}
+
+function openGatewaySession(hostId) {
+  const remote = hostId === 'noha';
+  const target = remote ? new URL(config.peerUrl) : gatewayTarget(hostId);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const ws = new WebSocket(remote ? target.href : 'ws://' + target.host + '/connect?host=' + hostId, {
+      headers: remote ? { Authorization: 'Bearer ' + credential } : {},
+      handshakeTimeout: 10000, perMessageDeflate: false,
+    });
+    let sequence = 1;
+    const pending = new Map();
+    let resolved = false;
+    let closing = false;
+    const fail = (error) => {
+      clearTimeout(timer);
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(error);
+      }
+      pending.clear();
+      if (!closing) {
+        closing = true;
+        ws.close();
+      }
+      if (!resolved) {
+        resolved = true;
+        rejectPromise(error);
+      }
+    };
+    const timer = setTimeout(() => fail(Error('GATEWAY_TIMEOUT')), 15000);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'connect' })));
+    ws.on('message', (frame, binary) => {
+      if (binary) return;
+      let data;
+      try { data = JSON.parse(String(frame)); } catch { return; }
+      if (!resolved && data?.type === 'ready') {
+        resolved = true;
+        clearTimeout(timer);
+        resolvePromise({
+          request(method, params, timeoutMs = 45000) {
+            return new Promise((resolveRequest, rejectRequest) => {
+              const id = sequence++;
+              const requestTimeout = setTimeout(() => {
+                pending.delete(id);
+                rejectRequest(Error('GATEWAY_TIMEOUT'));
+              }, timeoutMs);
+              pending.set(id, { resolve: resolveRequest, reject: rejectRequest, timer: requestTimeout });
+              ws.send(JSON.stringify(remote
+                ? { id, method: 'web/publication', params: { method, params } }
+                : { id, method, params }));
+            });
+          },
+          close() {
+            if (!closing) {
+              closing = true;
+              ws.close();
+            }
+          },
+        });
+        return;
+      }
+      if (!Number.isSafeInteger(data?.id) || data.method || !pending.has(data.id)) return;
+      const request = pending.get(data.id);
+      pending.delete(data.id);
+      clearTimeout(request.timer);
+      if (data.error) request.reject(Error(data.error.message || 'GATEWAY_REQUEST_FAILED'));
+      else request.resolve(data.result);
+    });
+    ws.on('error', () => fail(Error('GATEWAY_UNAVAILABLE')));
+    ws.on('close', () => fail(Error('GATEWAY_DISCONNECTED')));
+  });
+}
+
+async function requestHostPublication(hostId, method, params, session) {
+  if (!['6v', 'noha'].includes(hostId)) throw Error('UNKNOWN_HOST');
+  if (session) return session.request(method, params);
+  if (hostId === '6v') return requestLocalGateway(method, params);
+  const peer = await openGatewaySession('noha');
+  try { return await peer.request(method, params); }
+  finally { peer.close(); }
+}
+
 const wss = new WebSocketServer({ noServer: true, maxPayload: 384 * 1024, perMessageDeflate: false });
 const assets = resolve('web/dist');
 // Only the coordinator serves browser assets. The private noha agent does not
@@ -107,6 +219,7 @@ const assets = resolve('web/dist');
 const contentSecurityPolicy = coordinator ? webContentSecurityPolicy(config.origin) : null;
 const allowedAssets = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.js', 'text/javascript; charset=utf-8'],
+  ['.mjs', 'text/javascript; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'], ['.svg', 'image/svg+xml'],
   ['.png', 'image/png'], ['.ico', 'image/x-icon'],
   ['.woff2', 'font/woff2'], ['.woff', 'font/woff'], ['.ttf', 'font/ttf'],
@@ -143,7 +256,87 @@ const server = http.createServer((req, res) => {
   if (!coordinator || !browserAuthorized(req)) {
     res.writeHead(403); res.end(); return;
   }
-  const name = new URL(req.url ?? '/', 'http://localhost').pathname;
+  const requestUrl = new URL(req.url ?? '/', 'http://localhost');
+  const name = requestUrl.pathname;
+  if (name === '/api/publication' && ['GET', 'HEAD'].includes(req.method ?? '')) {
+    void (async () => {
+      const hostId = requestUrl.searchParams.get('host');
+      const id = requestUrl.searchParams.get('id');
+      const mode = requestUrl.searchParams.get('mode') ?? 'download';
+      if (!['6v', 'noha'].includes(hostId ?? '') || !isValidPublicationId(id) ||
+          !['download', 'preview'].includes(mode) || requestUrl.searchParams.size !== 3) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Invalid publication request');
+        return;
+      }
+      let session;
+      try {
+        session = await openGatewaySession(hostId);
+        const file = await session.request('workspace/publication/stat', { id }, 45000);
+        if (!file || file.status !== 'ready' || !Number.isSafeInteger(file.size) || file.size < 1 ||
+            typeof file.name !== 'string') throw Error('PUBLICATION_UNAVAILABLE');
+        const preview = mode === 'preview';
+        const kind = preview ? file.previewKind : null;
+        if (preview && !kind) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('No inline preview is available for this file');
+          return;
+        }
+        const textPreview = preview && (kind === 'text' || kind === 'markdown');
+        let range = parsePublicationRange(req.headers.range, file.size);
+        if (range === false) {
+          res.writeHead(416, {
+            'Content-Range': `bytes */${file.size}`,
+            'Accept-Ranges': 'bytes',
+          });
+          res.end();
+          return;
+        }
+        if (textPreview) {
+          const start = range?.start ?? 0;
+          const end = Math.min(range?.end ?? file.size - 1, start + PUBLICATION_TEXT_PREVIEW_BYTES - 1);
+          range = req.headers.range || end + 1 < file.size ? { start, end } : null;
+        }
+        const start = range?.start ?? 0;
+        const end = range?.end ?? file.size - 1;
+        const length = end - start + 1;
+        const mime = preview && (textPreview || kind === 'text')
+          ? 'text/plain; charset=utf-8'
+          : /^[\w.+-]+\/[\w.+-]+$/.test(String(file.mime ?? ''))
+            ? file.mime : 'application/octet-stream';
+        const filename = safePublicationFileName(file.name);
+        const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/[%\\"]/g, '_');
+        res.statusCode = range ? 206 : 200;
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Length', length);
+        if (range) res.setHeader('Content-Range', `bytes ${start}-${end}/${file.size}`);
+        res.setHeader('Content-Disposition', preview
+          ? `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+          : `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        if (textPreview && end + 1 < file.size) {
+          res.setHeader('X-Codex-Preview-Truncated', 'true');
+        }
+        if (preview && kind === 'markup') {
+          res.setHeader('Content-Security-Policy', ISOLATED_MARKUP_CSP);
+        }
+        if (req.method === 'HEAD') {
+          res.end();
+          return;
+        }
+        await streamPublicationRange(session, id, start, end, res);
+        res.end();
+      } catch {
+        if (!res.headersSent && !res.destroyed) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Publication unavailable or expired');
+        } else if (!res.writableEnded) res.destroy();
+      } finally {
+        session?.close();
+      }
+    })();
+    return;
+  }
   if (name === '/api/sidebar-pins' && (req.method === 'GET' || req.method === 'POST')) {
     const reply = (status, result) => {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -328,11 +521,19 @@ function allowedFrame(msg) {
   }
   if (msg.method === 'web/publication') {
     if (!subset(p, ['method','params']) || Object.keys(p).length !== 2 ||
-        !['workspace/publication/list','workspace/publication/read'].includes(p.method) ||
+        !['workspace/publication/list','workspace/publication/publish',
+          'workspace/publication/stat','workspace/publication/read'].includes(p.method) ||
         !p.params || typeof p.params !== 'object' || Array.isArray(p.params)) return false;
     const f = p.params;
     if (p.method === 'workspace/publication/list') return subset(f,['threadId']) &&
       typeof f.threadId === 'string' && /^[a-f\d-]{36}$/i.test(f.threadId);
+    if (p.method === 'workspace/publication/publish') return subset(f,['threadId','itemId','linkIndex']) &&
+      Object.keys(f).length === 3 && typeof f.threadId === 'string' &&
+      /^[a-f\d-]{36}$/i.test(f.threadId) &&
+      typeof f.itemId === 'string' && /^[\w.:-]{1,200}$/.test(f.itemId) &&
+      Number.isSafeInteger(f.linkIndex) && f.linkIndex >= 0 && f.linkIndex < 20;
+    if (p.method === 'workspace/publication/stat') return subset(f,['id']) &&
+      Object.keys(f).length === 1 && typeof f.id === 'string' && /^[a-f0-9]{64}$/.test(f.id);
     return subset(f,['id','offset']) && Object.keys(f).length === 2 &&
       typeof f.id === 'string' && /^[a-f0-9]{64}$/.test(f.id) &&
       Number.isSafeInteger(f.offset) && f.offset >= 0;
@@ -621,7 +822,13 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         coordinator ? '6v' : 'noha', validatePathHosts(msg.params.hosts))
         .then((path) => safeSend(JSON.stringify({ id: msg.id, result: { path } })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, result: { path: null } })));
-    } else if (['web/automation', 'web/hostFile', 'web/publication'].includes(msg.method) && !remotePeer) {
+    } else if (msg.method === 'web/publication') {
+      void requestLocalGateway(msg.params.method, msg.params.params)
+        .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch((error) => safeSend(JSON.stringify({ id: msg.id, error: {
+          code: -32000, message: error.message || 'PUBLICATION_UNAVAILABLE',
+        } })));
+    } else if (['web/automation', 'web/hostFile'].includes(msg.method) && !remotePeer) {
       void requestLocalGateway(msg.params.method, msg.params.params)
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch((error) => safeSend(JSON.stringify({ id: msg.id, error: {

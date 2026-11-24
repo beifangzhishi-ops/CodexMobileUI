@@ -1,16 +1,19 @@
 import { Directory, File, Paths } from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
+import {
+  MAX_PUBLICATION_BYTES, MAX_PUBLICATION_SEQUENCE, safePublicationFileName,
+} from '../../shared/publicationProtocol';
 
 type Job = {
   id: string;
-  name: string;
   expected: number;
   received: number;
   nextSeq: number;
   staging: File;
+  folder: Directory;
+  watchdog: ReturnType<typeof setTimeout> | null;
 };
 type Reply = { id: string; seq: number; ok: boolean; message?: string };
-const MAX_BYTES = 12 * 1024 * 1024;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 const validId = (id: unknown): id is string =>
   typeof id === 'string' && /^[a-f0-9]{64}$/.test(id);
 
@@ -21,6 +24,18 @@ const validId = (id: unknown): id is string =>
  */
 export class NativePublicationDownloads {
   private active: Job | null = null;
+  private clearActive(job = this.active): void {
+    if (!job) return;
+    if (job.watchdog) clearTimeout(job.watchdog);
+    if (this.active === job) this.active = null;
+    try {
+      if (job.folder.exists) job.folder.delete();
+    } catch { /* Cache cleanup must not hold the transfer lock. */ }
+  }
+  private touch(job: Job): void {
+    if (job.watchdog) clearTimeout(job.watchdog);
+    job.watchdog = setTimeout(() => this.clearActive(job), DOWNLOAD_IDLE_TIMEOUT_MS);
+  }
   async handle(raw: string): Promise<Reply | null> {
     let request: Record<string, unknown>;
     try {
@@ -31,22 +46,35 @@ export class NativePublicationDownloads {
     if (typeof request.type !== 'string' || !request.type.startsWith('publication.')) return null;
     const { id, seq } = request;
     if (!validId(id) || !Number.isSafeInteger(seq) || Number(seq) < 0 ||
-        Number(seq) > 512) return null;
+        Number(seq) > MAX_PUBLICATION_SEQUENCE) return null;
     const reply = (ok: boolean, message?: string): Reply =>
       ({ id, seq: Number(seq), ok, ...(message ? { message } : {}) });
     try {
+      if (request.type === 'publication.cancel') {
+        if (this.active?.id === id) this.clearActive();
+        return reply(true);
+      }
       if (request.type === 'publication.start') {
-        if (this.active) throw Error('DOWNLOAD_ALREADY_ACTIVE');
+        if (this.active) {
+          if (this.active.id !== id) throw Error('DOWNLOAD_ALREADY_ACTIVE');
+          this.clearActive();
+        }
         if (seq !== 0 || !Number.isSafeInteger(request.size) ||
-            Number(request.size) <= 0 || Number(request.size) > MAX_BYTES ||
+            Number(request.size) <= 0 || Number(request.size) > MAX_PUBLICATION_BYTES ||
             typeof request.name !== 'string' || request.name.length > 200) {
           throw Error('INVALID_DOWNLOAD');
         }
-        const staging = new File(Paths.cache, 'codexpub-' + id + '.part');
+        const folder = new Directory(Paths.cache, 'codexpub-' + id);
+        folder.create({ idempotent: true, intermediates: true });
+        const staging = new File(folder, safePublicationFileName(request.name));
         if (staging.exists) staging.delete();
         staging.create();
-        this.active = { id, name: request.name, expected: Number(request.size),
-          received: 0, nextSeq: 1, staging };
+        const job: Job = {
+          id, expected: Number(request.size),
+          received: 0, nextSeq: 1, staging, folder, watchdog: null,
+        };
+        this.active = job;
+        this.touch(job);
         return reply(true);
       }
       const job = this.active;
@@ -64,28 +92,26 @@ export class NativePublicationDownloads {
         await job.staging.write(data, { encoding: 'base64', append: true });
         job.received += bytes;
         job.nextSeq++;
+        this.touch(job);
         return reply(true);
       }
       if (request.type === 'publication.finish') {
         if (job.received !== job.expected || job.staging.size !== job.expected) {
           throw Error('DOWNLOAD_INCOMPLETE');
         }
-        const suffix = /\.[a-zA-Z0-9]{1,6}$/.exec(job.name)?.[0] ?? '.bin';
-        const folder = new Directory(Paths.document, 'published-files');
-        folder.create({ idempotent: true, intermediates: true });
-        const target = new File(folder, id + suffix);
-        await job.staging.move(target, { overwrite: true });
-        this.active = null;
-        if (!await Sharing.isAvailableAsync()) throw Error('SHARING_NOT_AVAILABLE');
-        await Sharing.shareAsync(target.uri, { dialogTitle: '保存或打开 Codex 文件' });
+        if (job.watchdog) clearTimeout(job.watchdog);
+        job.watchdog = null;
+        const destination = await Directory.pickDirectoryAsync();
+        if (this.active !== job) return reply(false, 'DOWNLOAD_CANCELLED');
+        await job.staging.copy(destination);
+        this.clearActive(job);
         return reply(true);
       }
       throw Error('INVALID_OPERATION');
     } catch (error) {
       const job = this.active;
       if (job?.id === id) {
-        if (job.staging.exists) job.staging.delete();
-        this.active = null;
+        this.clearActive(job);
       }
       const message = error instanceof Error && /^[A-Z_]+$/.test(error.message)
         ? error.message : 'DOWNLOAD_FAILED';

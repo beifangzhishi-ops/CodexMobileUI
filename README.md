@@ -1,5 +1,30 @@
 # CodexMobileUI
 
+## 2026-11-24 Conversation file previews, resizable sidebar and forks
+
+The shared Web/Android/Electron client now handles assistant file links as
+single, deliberate publications: opening a conversation only reads history,
+while tapping one Markdown link makes the owning Gateway verify the exact native
+`agentMessage` item and link index before creating that one private snapshot.
+Snapshots last 72 hours, use bounded 64 KiB reads, allow at most 256 MiB per
+file and 512 MiB overall, and no longer start Quark uploads. Web links open a
+same-origin private preview; old, still-readable Quark records are recreated as
+private snapshots when the source file remains available.
+
+The preview supports Markdown with formulas, paged UTF-8 text, images, PDF through bundled PDF.js,
+audio/video ranges, and isolated HTML/SVG with scripts and network access
+blocked. Android saves to a user-selected system folder with the original filename;
+the browser copies an opaque private Coordinator URL; Electron reveals the
+verified host path in Explorer. The assistant message itself shows only the
+native Markdown label. A 310 px desktop sidebar can be dragged within bounded
+limits and is remembered per client storage; the mobile layout remains a
+drawer. Completed assistant turns and the conversation menu can create a native
+turn-bounded fork, with duplicate protection and source-chat preservation on
+an unconfirmed result.
+
+This section describes source changes. The next coordinated Android and Windows
+release is tracked in docs/roadmap.md.
+
 ## Composer and turn errors
 
 The shared new-chat menu shows the selected host and project. The attachment

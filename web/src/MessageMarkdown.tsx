@@ -14,7 +14,7 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
   readAssistantImage, onOpenImage, onOpenFile, onRevealFile, displayPath, imageReady = true }: {
   text: string;
   onCopyPath?: (path: string) => void;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, linkIndex: number) => void;
   onRevealFile?: (path: string) => void;
   displayPath?: (path: string) => string;
   hostId?: HostId;
@@ -29,8 +29,7 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
   const mobile = hasNativePublicationDownload() && !onRevealFile;
   const copyPath = (path: string) => onCopyPath?.(displayPath?.(path) ?? path);
   const activatePath = (path: string) => {
-    if (mobile) onOpenFile?.(path);
-    else if (onRevealFile) onRevealFile(path);
+    if (onRevealFile) onRevealFile(path);
     else copyPath(path);
   };
   function imagePreview(index: number) {
@@ -54,20 +53,16 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
         a: ({ href, children }) => {
           const link = href ? parsed.targets[href] : undefined;
           if (link) {
-            const { path, location } = link;
+            const { path } = link;
             return <span className="assistant-file-actions context-press-target"
               data-context-kind="file" data-context-host={hostId} data-context-id={path}
-              data-context-origin="assistant">
+              data-context-origin="assistant" data-context-item={itemId}
+              data-context-link-index={link.index}>
               <button className="local-file-link" type="button"
-                title={mobile ? '打开下载页' : displayPath?.(path) ?? path}
-                onClick={() => activatePath(path)}>
-                {mobile ? children : <>{localFileName(path)}{location}</>}
+                title={mobile ? '打开文件预览与保存' : onRevealFile ? '打开文件预览' : '打开私有文件预览'}
+                onClick={() => onOpenFile ? onOpenFile(path, link.index) : activatePath(path)}>
+                {children}
               </button>
-              {!mobile && onRevealFile && <button type="button" className="assistant-file-download"
-                title="复制当前电脑可读路径" aria-label="复制路径"
-                onClick={() => copyPath(path)}>复制</button>}
-              {!mobile && onOpenFile && <button type="button" className="assistant-file-download"
-                title="下载文件" aria-label="下载文件" onClick={() => onOpenFile(path)}>下载</button>}
             </span>;
           }
           return href && /^https?:\/\//i.test(href)

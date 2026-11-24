@@ -49,20 +49,19 @@
 - Private file publication is allowed only from explicit links in native
   `agentMessage` items retrieved from `thread/read`. Native assistant links
   may point to any host-local drive path; independently validate a real regular
-  file and its size before snapshot/Quark transfer. Mobile cannot submit a host
-  path to the publication APIs, only the server-issued opaque publication ID.
+  file and its size before snapshot creation. The client identifies the native
+  thread, item and link index when requesting a snapshot. Snapshot access uses
+  the server-issued opaque publication ID.
   Keep the native Markdown text unchanged in history; phone/website render the
   link label as a clickable authenticated download, without a duplicate card.
   Publication IDs reference immutable server-owned snapshots; the client may
   never submit an arbitrary host path or access one through an anonymous route.
   Ordinary absolute paths in message prose are not file cards. `fileChange`
   Diff payloads must be removed before forwarding native frames to mobile.
-- Assistant file delivery uses private Gateway snapshots only for eligible files
-  at or below 12 MiB. Larger eligible files are uploaded through the host's
-  existing logged-in Quark desktop client using the standalone CCM-derived
-  helper. Never forward Quark cookies/account secrets to the phone, create
-  Quark sharing links, or store large-file content snapshots. Persist confirmed
-  status and do not retry a failed upload just because the chat refreshed.
+- Assistant file delivery uses bounded private Gateway snapshots for eligible
+  files. An explicit link click prepares the selected file. Opening history or
+  listing snapshots must not prepare files. New snapshots expire after 72 hours
+  and use the same chunked private delivery for all supported sizes.
 - The sole active UI is `web/src/`, including its own package lock and build. `App.tsx` provides only the Android WebView container, Tailnet discovery, back navigation and OS file saving; `src/core` retains only these native shell helpers and `src/storage/database.ts` stores the coordinator. `gateway/` owns host-side bounded services and `tests/` validates active behavior. The former parallel native React UI, visual editor, native OAuth and per-device thread cache are retired. No second simulated chat data source is permitted.
 - Browser and Android display actual App Server thread/project data. Canonical IDs, permissions, turn status and messages come from native Codex RPCs, not fabricated client state. Shared project/thread pins are owned by 6v in `.state/sidebar-pins.json` and accessed via the private Web Coordinator. Local display preferences live in the shared React UI. Global/project AGENTS and dedicated-home config.toml are edited through host-owned bounded file RPCs with revision checks. Model/effort choices must come from `model/list`, and permissions from `permissionProfile/list`; reject arbitrary sandbox or approval-policy objects.
 - Native projects come from `project/list`. Real project assignment uses `projectId`; moving a thread uses `thread/metadata/update` without changing cwd or relocating files.

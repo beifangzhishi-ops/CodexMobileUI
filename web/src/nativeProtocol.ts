@@ -16,6 +16,46 @@ export type NativeQueueEntry = { id: string; text: string };
 export type Snapshot = { messages: Message[]; running: boolean; activeTurnId: string | null; runningSinceMs: number | null };
 export type NativeNotice = { method: string; params: Obj };
 
+/** Parameters for native `thread/fork`; source: ThreadForkParams schema. */
+export type NativeThreadForkParams = {
+  /** Source native thread ID to load and fork. */
+  threadId: string;
+  /** Last turn to include in the fork, inclusive; it must not be in progress. */
+  lastTurnId: string;
+  /** Return only fork metadata/live state without populating `thread.turns`. */
+  excludeTurns: true;
+};
+
+/** Response used by native `thread/fork`; source: ThreadForkResponse schema. */
+export type NativeThreadForkResponse = {
+  /** Native thread object; `id` is the new persisted fork identity. */
+  thread: {
+    /** New native fork ID, expected to differ from the source thread ID. */
+    id: string;
+    /** Project assignment inherited or resolved by the App Server. */
+    projectId?: string | null;
+    /** Native title for the new thread, when already assigned. */
+    name?: string | null;
+  };
+};
+
+export function parseThreadForkResponse(value: unknown): NativeThreadForkResponse {
+  const thread = obj(obj(value).thread);
+  const id = text(thread.id);
+  if (!id) throw Error('INVALID_FORK_RESPONSE');
+  if (thread.projectId !== undefined && thread.projectId !== null &&
+      typeof thread.projectId !== 'string') throw Error('INVALID_FORK_RESPONSE');
+  if (thread.name !== undefined && thread.name !== null &&
+      typeof thread.name !== 'string') throw Error('INVALID_FORK_RESPONSE');
+  return {
+    thread: {
+      id,
+      ...(thread.projectId !== undefined ? { projectId: thread.projectId as string | null } : {}),
+      ...(thread.name !== undefined ? { name: thread.name as string | null } : {}),
+    },
+  };
+}
+
 export function threadPreviewTitle(value: string): string {
   const preview = value.replace(/\s+/g, ' ').trim();
   const characters = [...preview];

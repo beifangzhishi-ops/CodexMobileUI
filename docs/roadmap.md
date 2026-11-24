@@ -15,6 +15,27 @@ the portable package name and verify the EXE's ProductVersion and FileVersion.
   **27**. Delete this subsection after the new packages are built, verified, and
   delivered.
 
+## 2026-11-24 Conversation experience (source)
+
+- [x] Publish only a clicked, exact native assistant Markdown link; opening a
+  conversation no longer copies or transfers any file.
+- [x] Add 72-hour immutable private snapshots with 64 KiB reads, 256 MiB
+  per-file and 512 MiB cache limits, orphan/expiry cleanup, and no new Quark
+  uploads. Re-clicking an available legacy Quark link creates a private
+  snapshot.
+- [x] Add private HEAD/Range preview URLs, bounded text, images, PDF.js,
+  audio/video, and isolated HTML/SVG previews. Android preserves the original
+  save filename; browser copies an opaque URL; Electron reveals the host file.
+- [x] Keep assistant links inline with only the native label, add responsive
+  Markdown/table/code behavior, resizable/persisted desktop sidebar width, and
+  the mobile drawer boundary without a desktop separator.
+- [x] Add turn-bounded native forks from completed replies and the conversation
+  menu, with duplicate protection, list-lag navigation and source retention on
+  unconfirmed results.
+- [x] Pass root checks, Web tests/build, Desktop tests and a headless
+  Web/Electron visual harness at wide and 390 px viewports.
+- [ ] Verify system saving on a physical Android device after the next release build.
+
 ## 2026-11-21 Windows desktop first implementation
 
 - [x] Reuse the unified React UI through a Windows Electron window, without a

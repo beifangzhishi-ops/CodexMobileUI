@@ -10,11 +10,15 @@ export type SidebarPreferences = {
   openedProjects: string[];
   collapsedSections: string[];
   sidebarOpen: boolean | null;
+  sidebarWidth: number;
 };
 
 const key = 'codex-web-sidebar-preferences-v1';
 const legacySectionsKey = 'codex-web-collapsed-sections';
 const validSections = new Set(['pinned', 'projects', 'recent']);
+export const DEFAULT_SIDEBAR_WIDTH = 310;
+export const MIN_SIDEBAR_WIDTH = 260;
+export const MAX_SIDEBAR_WIDTH = 480;
 
 export function defaultSidebarPreferences(): SidebarPreferences {
   return {
@@ -25,7 +29,14 @@ export function defaultSidebarPreferences(): SidebarPreferences {
     // Preserve the responsive first-visit defaults: open on desktop,
     // closed on small screens. After user interaction this is a boolean.
     sidebarOpen: null,
+    sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   };
+}
+
+export function clampSidebarWidth(value: number, viewportWidth = Number.POSITIVE_INFINITY): number {
+  const maximum = Math.max(MIN_SIDEBAR_WIDTH,
+    Math.min(MAX_SIDEBAR_WIDTH, Number.isFinite(viewportWidth) ? viewportWidth * 0.5 : MAX_SIDEBAR_WIDTH));
+  return Math.round(Math.max(MIN_SIDEBAR_WIDTH, Math.min(maximum, value)));
 }
 
 function ids(value: unknown): string[] {
@@ -45,6 +56,9 @@ export function parseSidebarPreferences(value: unknown, legacySections?: unknown
     openedProjects: ids(raw.openedProjects),
     collapsedSections: ids(sections).filter((section) => validSections.has(section)),
     sidebarOpen: typeof raw.sidebarOpen === 'boolean' ? raw.sidebarOpen : null,
+    sidebarWidth: typeof raw.sidebarWidth === 'number' && Number.isFinite(raw.sidebarWidth)
+      ? clampSidebarWidth(raw.sidebarWidth)
+      : DEFAULT_SIDEBAR_WIDTH,
   };
 }
 

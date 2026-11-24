@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent as ReactClipboardEvent, KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from 'react';
+  CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent,
+  TouchEvent as ReactTouchEvent } from 'react';
 import {
   ArrowDown, ArrowUp, Archive, Check, ChevronDown, ChevronRight, Clock3, Copy, Ellipsis,
-  FileText, Folder, Hand, Image, ListTodo, Menu, Monitor, Plug, RefreshCw, Square,
+  FileText, Folder, GitBranch, Hand, Image, ListTodo, Menu, Monitor, Plug, RefreshCw, Square,
   Moon, PanelLeftClose, PanelLeftOpen, Pin, Share2, Link2, Eye, EyeOff, FolderInput, FolderOpen,
   Plus, Puzzle, Search, Settings, ShieldCheck, ShieldLock, SquarePen, Sun, Target, Trash2, TriangleAlert, X, Pencil,
   type LucideIcon,
@@ -13,7 +14,9 @@ import type { Conversation, HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
   type SidebarPinsSnapshot } from './sidebarPins';
-import { defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences } from './sidebarPreferences';
+import {
+  clampSidebarWidth, defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences,
+} from './sidebarPreferences';
 import { sidebarPullDistance, SIDEBAR_PULL_THRESHOLD } from './sidebarPullRefresh';
 import { useLiveCodex } from './useLiveCodex';
 import { useThreadSearch } from './useThreadSearch';
@@ -25,8 +28,7 @@ import { ProjectCreateDialog } from './ProjectCreateDialog';
 import { AutomationView } from './AutomationView';
 import { useBrowserNotifications } from './useBrowserNotifications';
 import { SettingsView } from './SettingsView';
-import { downloadPublication, hasNativePublicationDownload, parsePublishedFiles, type PublishedFile } from './publicationDownload';
-import { localFileName, localFilePathKey } from '../../shared/localFileLinks';
+import { PublicationPreview, type PublicationTarget } from './PublicationPreview';
 import { documentFileAllowed } from './documentUpload';
 import { useFollowLatest } from './useFollowLatest';
 import { ThinkingIndicator } from './ThinkingIndicator';
@@ -171,6 +173,10 @@ export default function DesktopApp() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draftRevisions = useRef<Record<string, number>>({});
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebar.sidebarOpen ?? !mobileLayout());
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    clampSidebarWidth(initialSidebar.sidebarWidth, window.innerWidth));
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const sidebarResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const [sidebarPull, setSidebarPull] = useState(0);
   const [sidebarRefreshing, setSidebarRefreshing] = useState(false);
   const sidebarRefreshBusy = useRef(false);
@@ -248,11 +254,9 @@ export default function DesktopApp() {
     if (host) window.localStorage.setItem('codexmobileui:viewerHost', host);
     else window.localStorage.removeItem('codexmobileui:viewerHost');
   };
-  const [published, setPublished] = useState<{ key: string; items: PublishedFile[] }>({ key: '', items: [] });
-  const [downloading, setDownloading] = useState<{ id: string; percent: number } | null>(null);
-  const [downloadPage, setDownloadPage] = useState<{
-    key: string; path: string; file?: PublishedFile | null; error?: string;
-  } | null>(null);
+  const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | null>(null);
+  const [forkingThread, setForkingThread] = useState<string | null>(null);
+  const forkBusy = useRef(false);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewMode>('chat');
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
@@ -405,61 +409,22 @@ export default function DesktopApp() {
   const { scrollerRef, contentRef, showJump, onScroll: onMessageScroll, jumpToLatest } =
     useFollowLatest(view === 'chat' && active ? conversationKey(active.hostId, active.id) : null,
       active?.messages, visibleLocalSubmissions, isRunning);
-  const publicationKey = active ? conversationKey(active.hostId, active.id) : '';
-  useEffect(() => {
-    if (!active) { setPublished({ key: '', items: [] }); return; }
-    const current = { hostId: active.hostId, id: active.id, key: publicationKey };
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void live.request(current.hostId, 'web/publication', {
-        method: 'workspace/publication/list', params: { threadId: current.id },
-      }).then((response) => {
-        if (!cancelled) setPublished({ key: current.key, items: parsePublishedFiles(response, current.id) });
-      }).catch(() => undefined);
-    }, 400);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [publicationKey, active?.messages.length, isRunning, live.request]);
-  async function downloadAssistantFile(path: string, selectedFile?: PublishedFile) {
-    if (!active || downloading) return;
-    setDownloading({ id: path, percent: 0 });
-    try {
-      const files = selectedFile ? [selectedFile] : published.key === publicationKey ? published.items :
-        parsePublishedFiles(await live.request(active.hostId, 'web/publication', {
-          method: 'workspace/publication/list', params: { threadId: active.id },
-        }), active.id);
-      const file = files.find((item) => localFilePathKey(item.path) === localFilePathKey(path));
-      if (!file) { setNotice('服务器未找到对应的发布文件'); return; }
-      if (file.status === 'quarkUploaded') { setNotice('文件已上传夸克，请在夸克中查看'); return; }
-      if (file.status === 'quarkUploading') { setNotice('文件正在上传夸克'); return; }
-      if (file.status !== 'ready') { setNotice('文件暂时无法读取'); return; }
-      await downloadPublication(active.hostId, file, live.request, (received, total) => {
-        setDownloading({ id: path, percent: Math.round(received / total * 100) });
-      });
-      setNotice('文件已交给系统保存或打开');
-    } catch {
-      setNotice('文件下载或保存未完成，请刷新后重试');
-    } finally { setDownloading(null); }
-  }
-  function openAssistantFile(path: string, itemId?: string) {
-    if (!hasNativePublicationDownload()) {
-      void downloadAssistantFile(path);
+  useEffect(() => { setPublicationTarget(null); }, [active?.hostId, active?.id]);
+  function openAssistantFile(path: string, linkIndex: number, itemId?: string) {
+    if (!active || !itemId) {
+      setNotice('无法确认消息中的文件引用，请刷新对话后重试');
       return;
     }
-    if (!active) return;
-    const page = { key: publicationKey, path };
-    setDownloadPage(page);
-    void live.request(active.hostId, 'web/publication', {
-      method: 'workspace/publication/list', params: { threadId: active.id },
-    }).then((response) => {
-      const file = parsePublishedFiles(response, active.id).find((item) =>
-        (!itemId || item.itemId === itemId) && localFilePathKey(item.path) === localFilePathKey(path));
-      setDownloadPage((current) => current === page ? { ...page, file: file ?? null } : current);
-    }).catch(() => {
-      setDownloadPage((current) => current === page ? { ...page, error: '无法获取文件状态' } : current);
+    setPublicationTarget({
+      hostId: active.hostId, threadId: active.id, itemId, linkIndex, path,
     });
   }
-  const visibleDownloadPage = downloadPage?.key === publicationKey ? downloadPage : null;
-  const downloadPageFile = visibleDownloadPage?.file;
+  async function revealPublicationFile(hostId: HostId, filePath: string) {
+    const native = desktopBridge();
+    if (!native) throw Error('DESKTOP_UNAVAILABLE');
+    const result = await native.revealFile(hostId, filePath);
+    if (!result.ok) throw Error(result.error ?? 'FILE_NOT_FOUND');
+  }
   async function revealHostFile(hostId: HostId, filePath: string) {
     const native = desktopBridge();
     if (!native) return;
@@ -686,6 +651,39 @@ export default function DesktopApp() {
     resetSidebarPull();
     if (shouldRefresh) void refreshSidebar();
   }
+  function beginSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || mobileLayout()) return;
+    sidebarResize.current = {
+      pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setSidebarResizing(true);
+    event.preventDefault();
+  }
+  function moveSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = sidebarResize.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    setSidebarWidth(clampSidebarWidth(
+      resize.startWidth + event.clientX - resize.startX, window.innerWidth));
+    event.preventDefault();
+  }
+  function endSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = sidebarResize.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    sidebarResize.current = null;
+    setSidebarResizing(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+  function resizeSidebarWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const maximum = clampSidebarWidth(Number.MAX_SAFE_INTEGER, window.innerWidth);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? maximum :
+      sidebarWidth + (event.key === 'ArrowLeft' ? -10 : 10);
+    setSidebarWidth(clampSidebarWidth(next, window.innerWidth));
+  }
   async function changePin(pin: SidebarPin, pinned: boolean) {
     try { acceptPins(await setSidebarPin(pin, pinned)); }
     catch { setNotice('置顶未能保存到 6v，请检查主机连接'); }
@@ -700,10 +698,15 @@ export default function DesktopApp() {
     try {
       saveSidebarPreferences(window.localStorage, {
         showAllRecent, collapsedHosts: hostCollapsed, openedProjects,
-        collapsedSections, sidebarOpen,
+        collapsedSections, sidebarOpen, sidebarWidth,
       });
     } catch { /* No storage available in this WebView/browser profile. */ }
-  }, [showAllRecent, hostCollapsed, openedProjects, collapsedSections, sidebarOpen]);
+  }, [showAllRecent, hostCollapsed, openedProjects, collapsedSections, sidebarOpen, sidebarWidth]);
+  useEffect(() => {
+    const resize = () => setSidebarWidth((width) => clampSidebarWidth(width, window.innerWidth));
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
   useEffect(() => {
     function keydown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -715,13 +718,13 @@ export default function DesktopApp() {
       if (e.key === 'Escape') {
         setSearchOpen(false); setPopup(null); setGoalEditor(false); setImageViewer(null);
         setProjectCreateOpen(false); setContextMenu(null); setRenameTarget(null); setChatFind(null);
-        setDownloadPage(null);
+        setPublicationTarget(null);
       }
     }
     function nativeBack(event: Event) {
       // Reply synchronously to Android: consuming root back would leave users stuck.
       if (imageViewer) { setImageViewer(null); event.preventDefault(); }
-      else if (visibleDownloadPage) { setDownloadPage(null); event.preventDefault(); }
+      else if (publicationTarget) { setPublicationTarget(null); event.preventDefault(); }
       else if (renameTarget) { setRenameTarget(null); event.preventDefault(); }
       else if (projectCreateOpen) { setProjectCreateOpen(false); event.preventDefault(); }
       else if (settingsOpen) {
@@ -758,7 +761,7 @@ export default function DesktopApp() {
       window.removeEventListener('codexdesktop:toggle-sidebar', nativeToggleSidebar);
       window.removeEventListener('codexdesktop:search', nativeSearch);
     };
-  }, [imageViewer, visibleDownloadPage, renameTarget, projectCreateOpen, settingsOpen, quotaDetail,
+  }, [imageViewer, publicationTarget, renameTarget, projectCreateOpen, settingsOpen, quotaDetail,
     searchOpen, contextMenu, inlineRename, chatFind, goalEditor, renaming,
     popup, sidebarOpen, view]);
   useEffect(() => {
@@ -880,7 +883,8 @@ export default function DesktopApp() {
     const node = eventTarget.closest<HTMLElement>('[data-context-kind]');
     if (!node) return null;
     return contextTargetFromAttributes(node.dataset.contextKind ?? null,
-      node.dataset.contextHost ?? null, node.dataset.contextId ?? null, node.dataset.contextOrigin);
+      node.dataset.contextHost ?? null, node.dataset.contextId ?? null, node.dataset.contextOrigin,
+      node.dataset.contextItem, node.dataset.contextLinkIndex);
   }
   function openContext(target: ContextTarget, x: number, y: number) {
     setPopup(null);
@@ -1373,7 +1377,39 @@ export default function DesktopApp() {
         : <button className="empty-project" onClick={() => createNewChat(project.hostId, project.id)}>＋ 新建项目聊天</button>}</div>}
     </div>;
   }
-  function actionForCurrent(action: 'pin' | 'archive' | 'delete' | 'copy') {
+  function latestForkableTurnId(conversation: Conversation | SidebarConversation | null): string | null {
+    if (!conversation || !('messages' in conversation)) return null;
+    for (let index = conversation.messages.length - 1; index >= 0; index--) {
+      const message = conversation.messages[index];
+      if (message.role === 'assistant' && !message.kind && message.turnId &&
+          ['completed', 'interrupted', 'failed'].includes(message.turnStatus ?? '')) {
+        return message.turnId;
+      }
+    }
+    return null;
+  }
+  function forkFromTurn(conversation: Conversation, lastTurnId: string) {
+    const key = conversationKey(conversation.hostId, conversation.id);
+    if (forkBusy.current) return;
+    forkBusy.current = true;
+    setForkingThread(key);
+    void live.forkThread(conversation.hostId, conversation.id, lastTurnId).then((newId) => {
+      setActiveId(conversationKey(conversation.hostId, newId));
+      setNewHost(conversation.hostId);
+      setNewProject(conversation.project);
+      setView('chat');
+      setPopup(null);
+      setContextMenu(null);
+      closeOnMobile();
+      setNotice('已从所选回复创建新分支');
+    }).catch(() => {
+      setNotice('分支结果未确认，已保留原聊天；请刷新列表核对后再试');
+    }).finally(() => {
+      forkBusy.current = false;
+      setForkingThread(null);
+    });
+  }
+  function actionForCurrent(action: 'pin' | 'archive' | 'delete' | 'copy' | 'fork') {
     if (!active) return;
     if (action === 'copy') {
       void copyToClipboard(active.id).then(() => setNotice('已复制对话 ID'))
@@ -1381,6 +1417,11 @@ export default function DesktopApp() {
     }
     if (action === 'pin') void changePin({ type: 'thread', hostId: active.hostId, id: active.id },
       !pinnedIds.includes(conversationKey(active.hostId, active.id)));
+    if (action === 'fork') {
+      const lastTurnId = latestForkableTurnId(active);
+      if (lastTurnId) forkFromTurn(active, lastTurnId);
+      return;
+    }
     if (action === 'archive') {
       if (editingThread) return;
       setEditingThread(true);
@@ -1452,7 +1493,9 @@ export default function DesktopApp() {
     onContextMenuCapture={handleContextMenu}
     onClickCapture={handleContextClick}>
     {sidebarOpen && <button aria-label="关闭侧边栏" className="mobile-scrim" onClick={() => setSidebarOpen(false)} />}
-    <aside className="sidebar-rail" aria-label="电脑和会话导航">
+    <aside className={'sidebar-rail' + (sidebarResizing ? ' is-resizing' : '')}
+      aria-label="电脑和会话导航"
+      style={{ '--sidebar-width': sidebarWidth + 'px' } as CSSProperties}>
       <div className="sidebar-inner">
         <div className="sidebar-head">
           <strong className="app-wordmark">CodexMobile</strong>
@@ -1540,6 +1583,12 @@ export default function DesktopApp() {
           </div>}
         </div>
       </div>
+      <div className="sidebar-resizer" role="separator" aria-label="调整侧栏宽度"
+        aria-orientation="vertical" aria-valuemin={260} aria-valuemax={480}
+        aria-valuenow={sidebarWidth} tabIndex={0}
+        onPointerDown={beginSidebarResize} onPointerMove={moveSidebarResize}
+        onPointerUp={endSidebarResize} onPointerCancel={endSidebarResize}
+        onKeyDown={resizeSidebarWithKeyboard}/>
     </aside>
     <main className="main-panel">
       <header className="topbar">
@@ -1561,6 +1610,12 @@ export default function DesktopApp() {
                 <button type="submit" disabled={editingThread}>完成</button>
               </form> : <button onClick={() => { setRenameDraft(active.title); setRenaming(true); }}><Pencil size={16}/>重命名</button>}
               <button onClick={() => actionForCurrent('copy')}><Copy size={16}/>复制对话 ID</button>
+              <button disabled={editingThread || !!forkingThread || !latestForkableTurnId(active)}
+                onClick={() => actionForCurrent('fork')}>
+                <GitBranch size={16} className={forkingThread === conversationKey(active.hostId, active.id)
+                  ? 'control-spin' : undefined}/>
+                {forkingThread === conversationKey(active.hostId, active.id) ? '正在创建分支' : '从最近回复创建分支'}
+              </button>
               <button onClick={() => actionForCurrent('pin')}><Pin size={16}/>{pinnedIds.includes(conversationKey(active.hostId,active.id)) ? '取消置顶' : '置顶'}</button>
               <button disabled={editingThread} onClick={() => actionForCurrent('archive')}><Archive size={16}/>{active.archived ? '取消归档' : '归档'}</button>
               <button disabled={editingThread} className="danger-action" onClick={() => actionForCurrent('delete')}><Trash2 size={16}/>删除</button>
@@ -1683,7 +1738,8 @@ export default function DesktopApp() {
                   hostId={active.hostId} threadId={active.id}
                   itemId={message.id.slice(message.id.indexOf(':') + 1)}
                   readAssistantImage={live.readAssistantImage} onOpenImage={setImageViewer}
-                  onOpenFile={(path) => openAssistantFile(path, message.id.slice(message.id.indexOf(':') + 1))}
+                  onOpenFile={(path, linkIndex) => openAssistantFile(
+                    path, linkIndex, message.id.slice(message.id.indexOf(':') + 1))}
                   onRevealFile={desktopBridge() ? (path) => { void revealHostFile(active.hostId, path); } : undefined}
                   displayPath={(path) => pathForViewer(path, active.hostId, viewerHost, pathHosts)}
                   imageReady={message.complete !== false}
@@ -1700,6 +1756,12 @@ export default function DesktopApp() {
                   void copyToClipboard(answerText).then(() => setNotice('消息已复制'))
                     .catch(() => setNotice('浏览器不允许访问剪贴板'));
                 }}><Copy size={16}/></button>
+                <button title="从此轮助手回复创建分支" aria-label="从此轮助手回复创建分支"
+                  disabled={!!forkingThread}
+                  onClick={() => message.turnId && forkFromTurn(active, message.turnId)}>
+                  <GitBranch size={16} className={forkingThread === conversationKey(active.hostId, active.id)
+                    ? 'control-spin' : undefined}/>
+                </button>
                 {message.timestampMs && <span>{new Date(message.timestampMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>}
               </div>}
                 </article>
@@ -1998,6 +2060,11 @@ export default function DesktopApp() {
             threadLink(window.location.origin + window.location.pathname,
               contextThread.hostId, contextThread.id), '会话链接'))}
           {contextOption('复制对话 ID', Copy, () => copyContextText(contextThread.id, '对话 ID'))}
+          {contextOption(forkingThread === conversationKey(contextThread.hostId, contextThread.id)
+            ? '正在从最近回复创建分支' : '从最近回复创建分支', GitBranch, () => {
+            const turnId = latestForkableTurnId(contextThread);
+            if (turnId) forkFromTurn(contextThread, turnId);
+          }, !!forkingThread || !latestForkableTurnId(contextThread))}
           {contextOption('复制工作目录', FolderOpen, () => {
             const project = projects.find((p) =>
               p.hostId === contextThread.hostId && p.id === contextThread.project);
@@ -2035,8 +2102,9 @@ export default function DesktopApp() {
             pathForViewer(contextMenu.id, contextMenu.hostId, viewerHost, pathHosts), '文件路径'))}
           {desktopBridge() ? contextOption('在资源管理器中定位', FolderOpen,
             () => void revealHostFile(contextMenu.hostId, contextMenu.id)) :
-            contextMenu.origin === 'assistant' && contextOption('下载文件', ArrowDown,
-              () => openAssistantFile(contextMenu.id))}
+            contextMenu.origin === 'assistant' && contextOption('打开文件预览', ArrowDown,
+              () => openAssistantFile(contextMenu.id, contextMenu.linkIndex ?? 0, contextMenu.itemId),
+              contextMenu.linkIndex === undefined || !contextMenu.itemId)}
         </> : contextMenu.kind === 'image' ? <>
           <div className="context-menu-caption">图片操作</div>
           {contextOption('查看原图', Image, () => setImageViewer(contextMenu.id))}
@@ -2078,26 +2146,10 @@ export default function DesktopApp() {
       </div>
     </div></div>}
 
-    {visibleDownloadPage && <section className="publication-download-page"
-      role="dialog" aria-modal="true" aria-labelledby="publication-download-title">
-      <header>
-        <button type="button" autoFocus onClick={() => setDownloadPage(null)}>返回对话</button>
-        <h2 id="publication-download-title">文件下载</h2>
-      </header>
-      <p className="publication-download-name">{downloadPageFile?.name ?? localFileName(visibleDownloadPage.path)}</p>
-      {!!downloadPageFile?.size && <p>{new Intl.NumberFormat('zh-CN').format(downloadPageFile.size)} 字节</p>}
-      <p role="status">{visibleDownloadPage.error ?? (downloadPageFile?.status === 'ready' ?
-        (downloading ? '正在下载 · ' + downloading.percent + '%' : '可以下载') :
-        downloadPageFile?.status === 'quarkUploaded' ? '文件已上传夸克，请在夸克中查看' :
-        downloadPageFile?.status === 'quarkUploading' ? '文件正在上传夸克' :
-        downloadPageFile?.status === 'quarkFailed' ? '夸克上传失败' :
-        downloadPageFile === undefined ? '正在读取文件状态' : '文件暂未开放下载')}</p>
-      {downloadPageFile?.status === 'ready' && <button type="button" disabled={!!downloading}
-        onClick={() => void downloadAssistantFile(visibleDownloadPage.path, downloadPageFile)}>下载</button>}
-    </section>}
-    {downloading && !visibleDownloadPage && <div className="publication-download-progress" role="status">
-      正在下载文件 · {downloading.percent}%
-    </div>}
+    {publicationTarget && <PublicationPreview target={publicationTarget}
+      request={live.request} onClose={() => setPublicationTarget(null)}
+      onRevealFile={desktopBridge() ? revealPublicationFile : undefined}
+      onCopyLink={(url) => copyToClipboard(url)}/>}
     {notice && <div className="toast" role="status">{notice}<button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={15}/></button></div>}
     {quotaDetail && <div className="quota-dialog-layer">
       <button className="quota-dialog-dismiss" aria-label="关闭额度详情" onClick={() => setQuotaDetail(null)}/>

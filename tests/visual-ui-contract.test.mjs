@@ -19,7 +19,7 @@ test('one React UI owns conversations on browser, Android and future desktop', (
   assert.doesNotMatch(app, /<ChatView|<ChatSidebar|<AccountScreen|useCodexSession/);
   assert.match(webApp, /const live = useLiveCodex\(\)/);
   assert.match(webApp, /<MessageMarkdown/);
-  assert.match(webApp, /className="sidebar-rail"/);
+  assert.match(webApp, /className=\{'sidebar-rail'/);
   assert.match(uiStyle, /@media \(max-width: 800px\)/);
 });
 
@@ -77,16 +77,48 @@ test('shared settings use real host-owned files with revision checks and unsaved
 test('canonical assistant links preserve native Markdown and use opaque publication IDs', () => {
   const markdown = read('web/src/MessageMarkdown.tsx');
   const publication = read('web/src/publicationDownload.ts');
+  const preview = read('web/src/PublicationPreview.tsx');
+  const publications = read('gateway/publications.ts');
   const nativeSink = read('src/core/nativePublicationDownload.ts');
   assert.match(markdown, /renderableLocalFileLinks\(preview\.markdown\)/);
-  assert.match(markdown, /onOpenFile\(path\)/);
-  assert.match(webApp, /parsePublishedFiles/);
-  assert.match(webApp, /downloadPublication\(/);
+  assert.match(markdown, /onOpenFile\(path, link\.index\)/);
+  assert.doesNotMatch(markdown, /dangerouslySetInnerHTML|rehypeRaw/);
+  assert.match(webApp, /<PublicationPreview/);
+  assert.match(publication, /workspace\/publication\/publish/);
   assert.match(publication, /workspace\/publication\/read/);
-  assert.match(nativeSink, /Paths\.document/);
-  assert.match(nativeSink, /Sharing\.shareAsync/);
+  assert.match(publication, /publication\.cancel/);
+  assert.match(publications, /listForThread\(threadId: string\)/);
+  assert.match(publications, /publishFromThread/);
+  assert.doesNotMatch(publications, /uploadToQuark|quarkUpload/);
+  assert.match(nativeSink, /Paths\.cache/);
+  assert.match(nativeSink, /Directory\.pickDirectoryAsync\(\)/);
+  assert.match(nativeSink, /job\.staging\.copy\(destination\)/);
   assert.match(nativeSink, /DOWNLOAD_INCOMPLETE/);
+  assert.match(nativeSink, /safePublicationFileName/);
+  assert.match(nativeSink, /publication\.cancel/);
+  assert.match(nativeSink, /DOWNLOAD_IDLE_TIMEOUT_MS/);
+  assert.match(bridge, /workspace\/publication\/publish/);
+  assert.match(bridge, /workspace\/publication\/stat/);
+  assert.match(bridge, /Content-Range/);
   assert.match(bridge, /web\/publication/);
+  assert.match(preview, /sandbox=""/);
+  assert.match(preview, /getDocument/);
+  assert.match(preview, /publication-pdf-canvas/);
+  assert.match(read('web/package.json'), /pdfjs-dist/);
+  assert.match(preview, /复制私有链接/);
+  assert.match(preview, /保存到系统/);
+  assert.match(preview, /在资源管理器中定位/);
+});
+
+test('desktop sidebar resize and native fork controls follow the shared visual tools', () => {
+  assert.match(webApp, /role="separator" aria-label="调整侧栏宽度"/);
+  assert.match(webApp, /beginSidebarResize/);
+  assert.match(uiStyle, /width: var\(--sidebar-width,310px\)/);
+  assert.match(uiStyle, /\.sidebar-resizer\s*\{/);
+  assert.match(uiStyle, /@media \(max-width: 800px\)[\s\S]*?\.sidebar-resizer \{ display: none; \}/);
+  assert.match(webApp, /从最近回复创建分支/);
+  assert.match(webApp, /title="从此轮助手回复创建分支"/);
+  assert.match(uiStyle, /\.message-tools button\s*\{[^}]*width: 36px[^}]*height: 32px/);
 });
 
 test('shared frontend keeps real status, events, permissions, models and image upload', () => {

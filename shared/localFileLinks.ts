@@ -3,6 +3,7 @@ export type LocalFileLink = {
   label: string;
   path: string;
   location?: string;
+  index: number;
   start: number;
   end: number;
 };
@@ -78,7 +79,9 @@ export function localFileLinks(markdown: string): LocalFileLink[] {
           if (c === ')' && (angled ? markdown[end - 1] === '>' : depth === 0)) {
             const target = pathFromDestination(markdown.slice(start, end));
             if (target) {
-              links.push({ label: match[1], ...target, start: i, end: end + 1 });
+              links.push({
+                label: match[1], ...target, index: links.length, start: i, end: end + 1,
+              });
               i = end + 1;
               consumed = true;
             }

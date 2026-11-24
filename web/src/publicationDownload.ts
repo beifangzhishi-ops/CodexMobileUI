@@ -1,19 +1,33 @@
+import {
+  MAX_PUBLICATION_BYTES, isValidPublicationId, type PublicationFile,
+} from '../../shared/publicationProtocol';
 import type { HostId } from './types';
 
-export type PublishedFile = {
-  id: string;
-  itemId: string;
-  threadId: string;
-  name: string;
-  path: string;
-  size: number;
-  status: 'ready' | 'unavailable' | 'quarkUploading' | 'quarkUploaded' | 'quarkFailed';
-};
+export type PublishedFile = PublicationFile;
+export type PublicationMode = 'download' | 'preview';
 export type HostRequest = (
   host: HostId, method: string, params: Record<string, unknown>,
 ) => Promise<unknown>;
 type NativeBridge = { postMessage: (message: string) => void };
 type NativeReply = { id: string; seq: number; ok: boolean; message?: string };
+
+/** Parameters for `workspace/publication/publish` after a user clicks one native link. */
+type PublicationPublishParams = {
+  /** Native source thread whose current history is read again by the Gateway. */
+  threadId: string;
+  /** Exact native `agentMessage` item containing the selected Markdown link. */
+  itemId: string;
+  /** Zero-based index among explicit local-file links in that exact message. */
+  linkIndex: number;
+};
+
+/** Parameters for one bounded `workspace/publication/read` chunk. */
+type PublicationReadParams = {
+  /** Opaque 64-hex snapshot ID; clients never submit a filesystem path. */
+  id: string;
+  /** Safe byte offset; the Gateway returns at most one 64 KiB chunk. */
+  offset: number;
+};
 
 function bridge(): NativeBridge | null {
   const native = (window as Window & { ReactNativeWebView?: NativeBridge }).ReactNativeWebView;
@@ -23,6 +37,7 @@ function bridge(): NativeBridge | null {
 export function hasNativePublicationDownload(): boolean {
   return bridge() !== null;
 }
+
 function nativeExchange(message: Record<string, unknown>, id: string, seq: number): Promise<void> {
   const native = bridge();
   if (!native) return Promise.reject(Error('ANDROID_BRIDGE_MISSING'));
@@ -45,6 +60,7 @@ function nativeExchange(message: Record<string, unknown>, id: string, seq: numbe
     catch { finish(Error('ANDROID_BRIDGE_FAILED')); }
   });
 }
+
 function parseChunk(raw: unknown, offset: number, total: number) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('INVALID_FILE_CHUNK');
   const value = raw as Record<string, unknown>;
@@ -54,67 +70,120 @@ function parseChunk(raw: unknown, offset: number, total: number) {
       value.data.length > 150000) throw Error('INVALID_FILE_CHUNK');
   const decoded = atob(value.data);
   if (decoded.length !== Number(value.received) - offset) throw Error('INVALID_FILE_CHUNK');
-  return { encoded: value.data, bytes: Uint8Array.from(decoded, (char) => char.charCodeAt(0)),
-    received: Number(value.received) };
+  return {
+    encoded: value.data,
+    bytes: Uint8Array.from(decoded, (char) => char.charCodeAt(0)),
+    received: Number(value.received),
+  };
 }
 
-/** One download path for browser, WebView Android and a future desktop shell. */
+/** Explicitly publish one selected native assistant link; no batch scanning occurs. */
+export async function publishAssistantFile(
+  host: HostId, threadId: string, itemId: string, linkIndex: number, request: HostRequest,
+): Promise<PublishedFile> {
+  const params: PublicationPublishParams = { threadId, itemId, linkIndex };
+  return parsePublishedFile(await request(host, 'web/publication', {
+    method: 'workspace/publication/publish',
+    params,
+  }), threadId);
+}
+
+/** Android keeps the existing chunked system-save bridge and can abort stale work. */
 export async function downloadPublication(
   host: HostId, file: PublishedFile, request: HostRequest,
   onProgress: (received: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  if (file.status !== 'ready' || !/^[a-f0-9]{64}$/.test(file.id) ||
-      !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > 12 * 1024 * 1024) {
+  if (file.status !== 'ready' || !isValidPublicationId(file.id) ||
+      !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > MAX_PUBLICATION_BYTES) {
     throw Error('FILE_UNAVAILABLE');
   }
   const native = !!bridge();
   let sequence = 0;
+  let started = false;
   const chunks: Uint8Array[] = [];
-  if (native) {
-    await nativeExchange({ type: 'publication.start', id: file.id, seq: sequence++,
-      name: file.name, size: file.size }, file.id, 0);
-  }
-  let offset = 0;
-  while (offset < file.size) {
-    const result = await request(host, 'web/publication', {
-      method: 'workspace/publication/read', params: { id: file.id, offset },
-    });
-    const chunk = parseChunk(result, offset, file.size);
+  try {
     if (native) {
-      await nativeExchange({ type: 'publication.chunk', id: file.id, seq: sequence++,
-        offset, data: chunk.encoded }, file.id, sequence - 1);
-    } else chunks.push(chunk.bytes);
-    offset = chunk.received;
-    onProgress(offset, file.size);
+      await nativeExchange({ type: 'publication.start', id: file.id, seq: sequence++,
+        name: file.name, size: file.size }, file.id, 0);
+      started = true;
+    }
+    let offset = 0;
+    while (offset < file.size) {
+      if (signal?.aborted) throw Error('DOWNLOAD_CANCELLED');
+      const params: PublicationReadParams = { id: file.id, offset };
+      const result = await request(host, 'web/publication', {
+        method: 'workspace/publication/read', params,
+      });
+      const chunk = parseChunk(result, offset, file.size);
+      if (native) {
+        await nativeExchange({ type: 'publication.chunk', id: file.id, seq: sequence++,
+          offset, data: chunk.encoded }, file.id, sequence - 1);
+        started = true;
+      } else {
+        chunks.push(chunk.bytes);
+      }
+      offset = chunk.received;
+      onProgress(offset, file.size);
+    }
+    if (signal?.aborted) throw Error('DOWNLOAD_CANCELLED');
+    if (native) {
+      await nativeExchange({ type: 'publication.finish', id: file.id, seq: sequence },
+        file.id, sequence);
+      started = false;
+    } else {
+      const blob = new Blob(chunks as BlobPart[], { type: file.mime });
+      if (blob.size !== file.size) throw Error('FILE_SIZE_MISMATCH');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name.replace(/[\\/\x00-\x1f]/g, '_').slice(0, 150) || 'codex-file';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+  } catch (error) {
+    if (native && started) {
+      await nativeExchange({ type: 'publication.cancel', id: file.id, seq: sequence },
+        file.id, sequence).catch(() => undefined);
+    }
+    throw error;
   }
-  if (native) {
-    await nativeExchange({ type: 'publication.finish', id: file.id, seq: sequence },
-      file.id, sequence);
-  } else {
-    const blob = new Blob(chunks as BlobPart[], { type: 'application/octet-stream' });
-    if (blob.size !== file.size) throw Error('FILE_SIZE_MISMATCH');
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = file.name.replace(/[\\/\x00-\x1f]/g, '_').slice(0, 150) || 'codex-file';
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export function publicationUrl(host: HostId, id: string, mode: PublicationMode): string {
+  if (!isValidPublicationId(id)) throw Error('INVALID_PUBLICATION_ID');
+  const url = new URL('/api/publication', window.location.origin);
+  url.searchParams.set('host', host);
+  url.searchParams.set('id', id);
+  url.searchParams.set('mode', mode);
+  return url.toString();
+}
+
+function parsePublishedFile(value: unknown, threadId: string): PublishedFile {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw Error('INVALID_PUBLICATION');
   }
+  const file = value as Partial<PublishedFile>;
+  if (file.threadId !== threadId || !isValidPublicationId(file.id) ||
+      typeof file.path !== 'string' || typeof file.name !== 'string' ||
+      typeof file.itemId !== 'string' || !Number.isSafeInteger(file.size) ||
+      Number(file.size) < 0 || !(file.status === 'ready' || file.status === 'unavailable') ||
+      typeof file.mime !== 'string' || !Number.isSafeInteger(file.createdAt) ||
+      !Number.isSafeInteger(file.expiresAt) ||
+      !(file.previewKind === null || ['markdown', 'markup', 'image', 'document',
+        'audio', 'video', 'text'].includes(file.previewKind ?? ''))) {
+    throw Error('INVALID_PUBLICATION');
+  }
+  return file as PublishedFile;
 }
 
 export function parsePublishedFiles(value: unknown, threadId: string): PublishedFile[] {
   if (!Array.isArray(value)) throw Error('INVALID_PUBLICATION_LIST');
-  return value.slice(0, 20).flatMap((raw): PublishedFile[] => {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    const p = raw as Partial<PublishedFile>;
-    return p.threadId === threadId && typeof p.id === 'string' &&
-      /^[a-f0-9]{64}$/.test(p.id) && typeof p.path === 'string' &&
-      typeof p.name === 'string' && typeof p.itemId === 'string' &&
-      Number.isSafeInteger(p.size) && Number(p.size) >= 0 &&
-      ['ready','unavailable','quarkUploading','quarkUploaded','quarkFailed'].includes(p.status ?? '')
-      ? [p as PublishedFile] : [];
+  return value.slice(0, 100).flatMap((raw) => {
+    try { return [parsePublishedFile(raw, threadId)]; }
+    catch { return []; }
   });
 }

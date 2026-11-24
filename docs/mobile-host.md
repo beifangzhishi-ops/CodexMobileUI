@@ -15,37 +15,44 @@ connections; independent native Codex authentication is unchanged.
 The Gateway deployment passed read-only RPC tests on both hosts;
 Android APK/device acceptance remains outstanding.
 
-## Private assistant file delivery (source only, not deployed)
+## Private assistant file delivery (source)
 
-The authenticated Gateway recognizes only explicit Windows file links within
-real native `agentMessage` items from `thread/read`; plain-text absolute paths
-are not resolved. The assistant remains unaware of Android/web versus desktop:
-native message text is preserved, while Android renders just the original link
-label as a clickable authenticated download, without duplicate file cards.
-Any local-drive regular file can be published, independent of cwd or extension;
-missing/inaccessible files still cannot be served. At **12 MiB or less**,
-files are copied into `.state/published-files` as immutable private snapshots.
-Above 12 MiB, no content snapshot is made; the host uploads the original file
-to its logged-in Quark Cloud Drive desktop client. The client chooses its usual
-`夸克上传文件` folder. The Gateway persists only metadata and statuses:
-`quarkUploading`, `quarkUploaded` and `quarkFailed`. The phone does not receive
-a Quark share link or attempt to download Quark files. Missing/inaccessible
-source files return an unavailable status when the inline link is tapped.
+The Gateway recognizes only explicit local-file Markdown links in a real native
+`agentMessage` returned by `thread/read`. Opening a thread and listing existing
+publications do not copy files. The first click calls
+`workspace/publication/publish` with the native thread ID, item ID and bounded
+link index. The Gateway re-reads that thread, verifies the exact message and
+link, and publishes only that regular file. Plain-text absolute paths are not
+resolved.
 
-The helper `gateway/quark-transfer/cloud_transfer.py` was ported from CCM/WCM.
-Gateway launches it without CCM, using Quark Desktop's loopback API and current
-WSG/account mapping, and confirms upload success from the desktop task database
-(terminal success, 100%, matching sizes). Each Windows host needs Python 3,
-Quark Cloud Drive installed, running and logged in. A failed upload status is
-durable and is not automatically retried on a conversation refresh.
+New publications always use `.state/published-files`; Quark is not started.
+Snapshots are immutable for 72 hours, use 64 KiB reads, allow up to 256 MiB per
+file and 512 MiB of total snapshot data, and prune expired/orphaned files. An
+old Quark record whose source still exists is converted to a private snapshot
+when the link is clicked. A missing source or an oversized file returns a
+visible unavailable state instead of a false download.
 
-`workspace/publication/list` takes a native thread ID and returns the file
-metadata; `workspace/publication/read` takes only a snapshot ID and byte offset
-and reads private bounded chunks after OAuth/WSS authentication. There is no
-anonymous HTTP download endpoint, CCM runtime dependency, or arbitrary
-mobile-selected host file path. `build:gateway` includes the helper alongside
-the compiled Gateway modules; the Host-only bundle also carries it. The live
-Gateway and noha deployments have not been updated in this source-only change.
+The 6v Coordinator serves same-origin private preview/download URLs containing
+only a host and opaque 64-hex snapshot ID. The endpoint supports HEAD and one
+byte range, streams through the owning host Gateway, sends no-store/no-referrer
+headers, and verifies the completed snapshot before each read. The browser
+copies this private URL when no inline preview applies; Electron reveals the
+host path in Explorer; Android writes bounded chunks into its own storage and
+copies to a folder selected in the system file picker under the original filename.
+
+Text preview is capped at 256 KiB and preserves whitespace. Images, audio,
+video and PDF use the same private URL; PDF is rendered with the bundled
+PDF.js worker. HTML and SVG previews are sandboxed and use
+`sandbox; default-src 'none'`, so scripts, forms, frames and remote resources
+cannot run. Other binaries show a local-action page without being executed.
+
+The Web Coordinator now serves `.mjs` assets for the PDF worker and allows
+same-origin frames, media and workers in its CSP. `workspace/publication/list`,
+`workspace/publication/publish`, `workspace/publication/stat` and
+`workspace/publication/read` remain narrow JSON-RPC methods. Deployment must
+update the compiled Gateway, the Coordinator Web Bridge/static build and the
+noha Web Agent/static bridge coherently; they have not been deployed by this
+source-only verification.
 
 # Project directory picker
 

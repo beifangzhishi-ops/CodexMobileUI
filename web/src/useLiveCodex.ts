@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Conversation, HostId, Message } from './types';
 import {
   applyNotice, obj, parseGoal, parseModels, parsePermissions, parseProjects, parseQueue,
-  parseSnapshot, parseThreads, text, threadPreviewTitle,
+  parseSnapshot, parseThreads, parseThreadForkResponse, text, threadPreviewTitle,
 } from './nativeProtocol';
-import type { NativeGoal, NativeModel, NativePermission, NativeProject, NativeQueueEntry } from './nativeProtocol';
+import type {
+  NativeGoal, NativeModel, NativePermission, NativeProject, NativeQueueEntry,
+  NativeThreadForkParams,
+} from './nativeProtocol';
 import { localMessageId } from './browserHelpers';
 import type { NativeMention } from '../../shared/mentions';
 import { parseContextWindowUsage, type ContextWindowUsage } from '../../shared/contextUsage';
@@ -736,18 +739,22 @@ export function useLiveCodex() {
         !m.kind && ['completed', 'interrupted', 'failed'].includes(m.turnStatus ?? ''))) {
       throw Error('TURN_NOT_COMPLETE');
     }
-    const response = obj(await request(hostId, 'thread/fork', {
+    const forkParams: NativeThreadForkParams = {
       threadId, lastTurnId, excludeTurns: true,
-    }, 90_000));
-    const fork = obj(response.thread);
-    const newId = text(fork.id);
+    };
+    const response = parseThreadForkResponse(
+      await request(hostId, 'thread/fork', forkParams, 90_000));
+    const fork = response.thread;
+    const newId = fork.id;
     if (!newId || newId === threadId) throw Error('FORK_NOT_CONFIRMED');
     setConversations((all) => all.some((c) => c.id === newId && c.hostId === hostId) ? all : [{
-      id: newId, hostId, project: text(fork.projectId) || original.project,
-      title: text(fork.name) || original.title, status: 'idle', running: false,
+      id: newId, hostId, project: fork.projectId || original.project,
+      title: fork.name || original.title, status: 'idle', running: false,
       activeTurnId: null, localCreated: true, updatedAt: Date.now(), messages: [],
     }, ...all]);
-    await select(hostId, newId);
+    // The native fork ID is the success boundary. A later history read may fail
+    // during a transient disconnect, but the acknowledged fork remains open.
+    await select(hostId, newId).catch(() => undefined);
     void refresh(hostId).catch(() => undefined);
     return newId;
   }, [conversations, refresh, request, select]);

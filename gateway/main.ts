@@ -303,16 +303,6 @@ export function createGateway(config: Config) {
                   finishTrace(response.id, response.error ? 'error' : 'success');
                 }
                 const method = (response as { method?: unknown }).method;
-                if (method === 'item/completed' && response.params &&
-                    (response.params.item as { type?: unknown } | undefined)?.type === 'agentMessage' &&
-                    typeof response.params.threadId === 'string') {
-                  const threadId = response.params.threadId;
-                  // Snapshot completed deliverables while the native turn is
-                  // active. A later history refresh can safely retry missed ones.
-                  void requestInternal('thread/read', { threadId, includeTurns: true })
-                    .then((snapshot) => publications.listFromThread(threadId, snapshot))
-                    .catch(() => undefined);
-                }
                 if (typeof method === 'string' && tracedNotices.has(method)) {
                   logWs('rpc.notification', { rpcMethod: method as
                     'thread/deleted' | 'thread/archived' | 'thread/unarchived' });
@@ -499,16 +489,32 @@ export function createGateway(config: Config) {
                   if (request.method === 'workspace/publication/list' &&
                     Object.keys(p).length === 1 && typeof p.threadId === 'string' &&
                     /^[a-f\d-]{36}$/i.test(p.threadId)) {
-                    const native = await requestInternal('thread/read', { threadId: p.threadId, includeTurns: true });
-                    result = await publications.listFromThread(p.threadId, native);
+                    result = await publications.listForThread(p.threadId);
+                  } else if (request.method === 'workspace/publication/publish' &&
+                    Object.keys(p).length === 3 && typeof p.threadId === 'string' &&
+                    /^[a-f\d-]{36}$/i.test(p.threadId) &&
+                    typeof p.itemId === 'string' && /^[\w.:-]{1,200}$/.test(p.itemId) &&
+                    Number.isSafeInteger(p.linkIndex) && Number(p.linkIndex) >= 0 &&
+                    Number(p.linkIndex) < 20) {
+                    const native = await requestInternal('thread/read', {
+                      threadId: p.threadId, includeTurns: true,
+                    });
+                    result = await publications.publishFromThread(
+                      p.threadId, p.itemId, Number(p.linkIndex), native,
+                    );
+                  } else if (request.method === 'workspace/publication/stat' &&
+                    Object.keys(p).length === 1 && typeof p.id === 'string') {
+                    result = await publications.stat(p.id);
                   } else if (request.method === 'workspace/publication/read' &&
                     Object.keys(p).length === 2 && typeof p.id === 'string' &&
                     Number.isSafeInteger(p.offset)) {
                     result = await publications.read(p.id, p.offset);
                   } else throw new Error('INVALID_PARAMS');
                   reply({ result });
-                } catch {
-                  reply({ error: { code: -32602, message: '文件发布或读取失败' } });
+                } catch (error) {
+                  const message = error instanceof Error && /^(PUBLICATION_[A-Z_]+|INVALID_PARAMS)$/.test(error.message)
+                    ? error.message : 'PUBLICATION_REQUEST_FAILED';
+                  reply({ error: { code: -32602, message } });
                 }
               })();
               return;
