@@ -1,20 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseHost, isTailnetHost, websocketUrl } from '../src/core/host';
+import { DEFAULT_COORDINATOR_URL, unifiedWebUrl } from '../src/core/unifiedWeb';
 
-test('mobile accepts only private Tailscale Gateway addresses', () => {
-  const host = parseHost('http://100.76.74.124:48889');
-  assert.equal(host.baseUrl, 'http://100.76.74.124:48889');
-  assert.equal(isTailnetHost(host), true);
-  assert.equal(websocketUrl(host), 'ws://100.76.74.124:48889/connect');
-  assert.equal(websocketUrl({ ...host, id: host.id + '/machines/noha' }),
-    'ws://100.76.74.124:48889/connect?host=noha');
-  for (const rejected of [
+test('Android connects exclusively to a private HTTPS Tailnet Coordinator', () => {
+  assert.equal(DEFAULT_COORDINATOR_URL, 'https://cpa-node.tail7c23f0.ts.net:4190');
+  assert.equal(unifiedWebUrl('https://cpa-node.tail7c23f0.ts.net:4190/'),
+    'https://cpa-node.tail7c23f0.ts.net:4190');
+  for (const address of [
+    'http://100.76.74.124:48889',
+    'http://100.76.74.124:4190',
+    'https://100.76.74.124:4190',
     'https://cpa-node.tail7c23f0.ts.net:8443',
-    'http://100.76.74.124:48888',
-    'http://192.168.1.10:48889',
-    'http://100.76.74.124:48889/oauth',
-    'http://100.76.74.124:48889?token=a',
-    'http://100.76.74.124:48889@evil.test',
-  ]) assert.throws(() => parseHost(rejected), rejected);
+    'https://cpa-node.tail7c23f0.ts.net:4190/hosts',
+    'https://evil.example.com:4190',
+  ]) assert.equal(unifiedWebUrl(address), null, address);
 });

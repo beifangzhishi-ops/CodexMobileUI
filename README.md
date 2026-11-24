@@ -63,6 +63,14 @@ notification permission. The tab must stay open for live pop-ups. Reopening
 it can recover missed completion events from the existing private feed.
 Existing Android builds require an update to enter the HTTPS address.
 
+**Android HTTPS-only cutover (0.1.24 / versionCode 26):** The onboarding
+screen now verifies the Tailnet-only `https://cpa-node.tail7c23f0.ts.net:4190`
+Coordinator and saves that HTTPS origin directly; it no longer queries the
+legacy HTTP `48889` host roster. Both hosts are reached through the shared
+Coordinator WSS channels, and native task notifications use WSS to the same
+origin. Android cleartext HTTP traffic is disabled; upgrading preserves the
+existing database and reopens onboarding for previously saved HTTP URLs.
+
 ## 2026-11-23 Android private task completion notifications
 
 The Android WebView shell now has an opt-out native foreground service for

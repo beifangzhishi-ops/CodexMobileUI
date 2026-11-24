@@ -41,8 +41,8 @@ test('one React UI owns conversations on browser, Android and future desktop', (
 
 test('Android retains Tailnet onboarding and a safe retry screen, but not the old UI', () => {
   assert.match(app, /loadCoordinatorUrl\(\)/);
-  assert.match(app, /discoverTailnetHosts\(/);
-  assert.match(app, /storeDiscoveredHosts\(selected, hosts\)/);
+  assert.match(app, /storeCoordinatorUrl\(selected\)/);
+  assert.doesNotMatch(app, /discoverTailnetHosts|storeDiscoveredHosts|http:\/\/100\./);
   assert.match(app, /new URL\(navigation\.url\)\.origin === origin/);
   assert.match(app, /onError=\{\(\) => setError/);
   assert.match(app, /codexmobileui:back/);
@@ -51,6 +51,20 @@ test('Android retains Tailnet onboarding and a safe retry screen, but not the ol
   assert.equal(config.expo.android.package, 'dev.codexmobileui.app');
   assert.equal(config.expo.scheme, 'codexmobileui');
   assert.equal(config.expo.version, packageFile.version);
+});
+
+test('Android native release does not allow HTTP or cleartext notification channels', () => {
+  const nativeNotifications = read('native/notifications/NotificationListenerService.kt');
+  const androidNotifications = read('android/app/src/main/java/dev/codexmobileui/app/NotificationListenerService.kt');
+  const manifest = read('android/app/src/main/AndroidManifest.xml');
+  assert.equal(config.expo.android.usesCleartextTraffic, false);
+  assert.match(manifest, /android:usesCleartextTraffic="false"/);
+  for (const text of [nativeNotifications, androidNotifications]) {
+    assert.match(text, /wss:\/\//);
+    assert.match(text, /replaceFirst\("wss:", "https:"\)/);
+    assert.doesNotMatch(text, /"ws:\/\//);
+    assert.doesNotMatch(text, /"http:\/\//);
+  }
 });
 
 test('project creation uses the chosen host and server-issued opaque directory locator', () => {

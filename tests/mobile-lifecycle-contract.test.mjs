@@ -41,8 +41,9 @@ test("native splash and web container stay dark until the shared UI loads", () =
 });
 
 test("private network onboarding stays recoverable without the old Android UI", () => {
-  assert.match(mainApp, /discoverTailnetHosts\(/);
-  assert.match(mainApp, /storeDiscoveredHosts\(selected, hosts\)/);
+  assert.match(mainApp, /storeCoordinatorUrl\(selected\)/);
+  assert.doesNotMatch(mainApp, /discoverTailnetHosts|48889|http:\/\/100\./);
+  assert.match(mainApp, /setAddress\(valid \?\? DEFAULT_COORDINATOR_URL\)/);
   assert.match(mainApp, /setReload\(\(value\) => value \+ 1\)/);
   assert.match(mainApp, /更改内网入口/);
   assert.match(mainApp, /onShouldStartLoadWithRequest=\{allowNavigation\}/);
@@ -65,7 +66,7 @@ test("normal MobileUI shutdown stops its own Gateway then its own App Server", (
 });
 
 test("Android onboarding is private Tailnet without any OAuth flow in its entry point", () => {
-  assert.match(mainApp, /discoverTailnetHosts/);
+  assert.match(mainApp, /storeCoordinatorUrl\(selected\)/);
   assert.doesNotMatch(mainApp, /authorize\(|OAuthLogin|AuthSession/);
   assert.equal(appSettings.expo.android.package, "dev.codexmobileui.app");
   assert.ok(appSettings.expo.android.versionCode > 3);
@@ -105,7 +106,7 @@ test("stable Android release writes Gradle cache and temp files inside this chec
 test("Android keeps only the private coordinator and native assistant-file sink", () => {
   assert.doesNotMatch(mainApp, /<DiagnosticsPanel|<OAuthLogin|<ChatView|<ChatSidebar/);
   assert.match(coordinatorStorage, /loadCoordinatorUrl/);
-  assert.match(coordinatorStorage, /storeDiscoveredHosts/);
+  assert.match(coordinatorStorage, /storeCoordinatorUrl/);
   assert.match(coordinatorStorage, /mobile_network/);
   assert.match(nativeFileSave, /Paths\.cache/);
   assert.match(nativeFileSave, /Directory\.pickDirectoryAsync\(\)/);

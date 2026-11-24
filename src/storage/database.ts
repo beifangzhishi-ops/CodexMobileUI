@@ -1,12 +1,12 @@
 import * as SQLite from 'expo-sqlite';
-import { parseHost, type Host } from '../core/host';
 import { unifiedWebUrl } from '../core/unifiedWeb';
 
 /**
- * Android only remembers its private coordinator and discovered machine roster.
+ * Android only remembers its private HTTPS coordinator.
  * Threads, drafts, models, permissions and messages belong to the shared Web UI
  * and independent host App Servers. Do not drop older SQLite tables on upgrade:
- * this migration intentionally leaves historical user data intact.
+ * this migration intentionally leaves historical user data intact. The legacy
+ * hosts table is retained but is not read or updated by the HTTPS-only client.
  */
 let opening: Promise<SQLite.SQLiteDatabase> | undefined;
 
@@ -40,14 +40,9 @@ export async function loadCoordinatorUrl(): Promise<string | null> {
   return row?.coordinator ?? null;
 }
 
-export async function storeDiscoveredHosts(
-  coordinator: string, hosts: readonly Host[],
-): Promise<void> {
-  if (unifiedWebUrl(coordinator) !== coordinator ||
-      hosts.length < 1 || hosts.length > 16 ||
-      new Set(hosts.map((host) => host.id)).size !== hosts.length ||
-      hosts.some((host) => parseHost(host.baseUrl).baseUrl !== host.baseUrl)) {
-    throw new Error('INVALID_PRIVATE_HOST_ROSTER');
+export async function storeCoordinatorUrl(coordinator: string): Promise<void> {
+  if (unifiedWebUrl(coordinator) !== coordinator) {
+    throw new Error('INVALID_HTTPS_COORDINATOR');
   }
   const db = await database();
   await db.withExclusiveTransactionAsync(async (tx) => {
@@ -56,10 +51,5 @@ export async function storeDiscoveredHosts(
       'ON CONFLICT(id) DO UPDATE SET coordinator=excluded.coordinator',
       coordinator,
     );
-    await tx.runAsync('DELETE FROM hosts');
-    for (const host of hosts) {
-      await tx.runAsync('INSERT INTO hosts (id,name,base_url) VALUES (?,?,?)',
-        host.id, host.name, host.baseUrl);
-    }
   });
 }

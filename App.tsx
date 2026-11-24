@@ -7,8 +7,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import type { WebViewProps } from 'react-native-webview';
 import type { WebViewNavigation } from 'react-native-webview';
-import { discoverTailnetHosts } from './src/core/host';
-import { unifiedWebUrl } from './src/core/unifiedWeb';
+import { DEFAULT_COORDINATOR_URL, unifiedWebUrl } from './src/core/unifiedWeb';
 import { NativePublicationDownloads } from './src/core/nativePublicationDownload';
 import { updateQuotaWidget } from './src/core/quotaWidget';
 import { backgroundApp } from './src/core/appNavigation';
@@ -16,7 +15,7 @@ import {
   observeAppVisibility, observeTaskLinks, notificationEnabled, setTaskNotifications,
   setVisibleTask, startTaskNotifications, type TaskLink,
 } from './src/core/taskNotifications';
-import { loadCoordinatorUrl, storeDiscoveredHosts } from './src/storage/database';
+import { loadCoordinatorUrl, storeCoordinatorUrl } from './src/storage/database';
 
 /**
  * One UI on browser, Android and (eventually) desktop.
@@ -77,7 +76,8 @@ function SharedApp() {
       if (!active) return;
       const valid = stored && unifiedWebUrl(stored) ? stored : null;
       setCoordinator(valid);
-      setAddress(stored ?? '');
+      // Upgrades from the retired HTTP entry start with the HTTPS URL filled in.
+      setAddress(valid ?? DEFAULT_COORDINATOR_URL);
       setConfiguring(!valid);
     }).catch(() => {
       if (active) { setError('读取内网连接配置失败'); setConfiguring(true); }
@@ -106,8 +106,9 @@ function SharedApp() {
       } finally {
         clearTimeout(timeout);
       }
-      const hosts = await discoverTailnetHosts('http://100.76.74.124:48889');
-      await storeDiscoveredHosts(selected, hosts);
+      // The HTTPS Coordinator hosts the shared UI and routes both machines.
+      // Do not contact the retired HTTP Gateway discovery endpoint on Android.
+      await storeCoordinatorUrl(selected);
       setCoordinator(selected);
       setConfiguring(false);
       setReload((value) => value + 1);
