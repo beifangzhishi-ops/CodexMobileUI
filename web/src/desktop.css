@@ -187,11 +187,11 @@ button:hover { transition: background-color 100ms; }
 .jump-to-latest:hover { background: var(--selected); }
 .jump-to-latest:active { opacity: .82; }
 .messages-wrap { width: min(100%,910px); margin: 0 auto; padding: 22px 38px 55px; }
-.chat-context { display: flex; gap: 9px; align-items: center; margin-bottom: 32px; }
-.chat-context span { display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); padding: 7px 11px; background: #242424; border: 1px solid #303030; border-radius: 9px; }
+.chat-context { display: flex; flex: none; gap: 9px; align-items: center; width: min(100%,910px); min-width: 0; box-sizing: border-box; margin: 0 auto; padding: 12px 38px 8px; }
+.chat-context span { display: inline-flex; gap: 6px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--muted); padding: 7px 11px; background: #242424; border: 1px solid #303030; border-radius: 9px; }
 :root[data-theme="light"] .chat-context span { background: #f6f6f6; border-color: var(--stroke); }
 .chat-context .demo-context { margin-left: auto; }
-.context-refresh { color: var(--muted); font-size: 11px; margin-left: auto; padding: 6px 10px; border-radius: 8px; }
+.context-refresh { flex: none; color: var(--muted); font-size: 11px; margin-left: auto; padding: 6px 10px; border-radius: 8px; }
 .context-refresh:hover { background: var(--surface); color: var(--text); }
 .message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 29px; font-size: 15px; line-height: 1.7; }
 .message-user { display: flex; flex-direction: column; align-items: flex-end; }
@@ -386,7 +386,7 @@ button:hover { transition: background-color 100ms; }
 .context-rename-dialog > div { display: flex; justify-content: flex-end; gap: 10px; }
 .context-rename-dialog button { padding: 9px 16px; background: var(--surface); border-radius: 8px; }
 .context-rename-dialog button[type="submit"] { background: var(--accent); color: white; }
-.chat-find-bar { position: absolute; z-index: 8; top: 7px; left: 50%;
+.chat-find-bar { position: absolute; z-index: 8; top: 60px; left: 50%;
   transform: translateX(-50%); width: min(590px, calc(100% - 24px));
   display: flex; align-items: center; gap: 9px; padding: 7px 10px;
   background: var(--menu); border: 1px solid var(--stroke);
@@ -670,6 +670,7 @@ button:hover { transition: background-color 100ms; }
   .chat-region.is-landing .composer-zone { padding-bottom: min(21vh,160px); }
   .composer-zone { padding: 8px 12px 13px; }
   .messages-wrap { padding: 18px 15px 33px; }
+  .chat-context { padding: 10px 15px 8px; }
   .user-bubble,.assistant-response { font-size: 16px; line-height: 1.6; }
   .assistant-response .message-markdown { line-height: inherit; }
   .publication-preview-page { padding: max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom)); }

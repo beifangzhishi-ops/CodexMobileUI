@@ -11,6 +11,15 @@ const bridge = read('web/server/bridge.mjs');
 const config = JSON.parse(read('app.json'));
 const packageFile = JSON.parse(read('package.json'));
 
+test('conversation context and native-history refresh stay above the scrolling messages', () => {
+  const context = webApp.indexOf('<div className="chat-context">');
+  const scroller = webApp.indexOf('<div className="message-scroller"');
+  const messages = webApp.indexOf('<div className="messages-wrap" ref={contentRef}>');
+  assert.ok(context >= 0 && context < scroller && scroller < messages);
+  assert.match(uiStyle, /\.chat-context\s*\{[^}]*flex:\s*none/);
+  assert.match(uiStyle, /\.message-scroller\s*\{[^}]*overflow-y:\s*auto/);
+});
+
 test('one React UI owns conversations on browser, Android and future desktop', () => {
   assert.match(app, /<WebView<WebViewProps>/);
   assert.match(app, /unifiedWebUrl\(coordinator\)/);

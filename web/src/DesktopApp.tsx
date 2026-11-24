@@ -1659,12 +1659,12 @@ export default function DesktopApp() {
                 onClick={() => advanceChatFind(1)}><ArrowDown size={16}/></button>
               <button title="关闭当前对话查找" onClick={() => setChatFind(null)}><X size={17}/></button>
             </div>}
-            <div className="message-scroller" ref={scrollerRef} onScroll={onMessageScroll}>
-              <div className="messages-wrap" ref={contentRef}>
             <div className="chat-context"><span><Monitor size={13}/>{active.hostId}</span>{active.project && <span><Folder size={13}/>{getProjectName(active.project, active.hostId)}</span>}<button className="context-refresh" onClick={() => void live.refresh(active.hostId).then(() => live.select(active.hostId, active.id)).then((messages) => {
               setOptimisticSubmissions((old) => reconcileOptimisticAfterRead(
                 old, 'thread:' + conversationKey(active.hostId, active.id), messages));
             }).catch(() => setNotice('刷新失败，请检查连接'))}>刷新真实记录</button></div>
+            <div className="message-scroller" ref={scrollerRef} onScroll={onMessageScroll}>
+              <div className="messages-wrap" ref={contentRef}>
             {active.messages.map((message, index) => {
               const turn = message.turnId ? turnActions.get(message.turnId) : undefined;
               const endOfTurn = Boolean(turn && turn.lastIndex === index);
