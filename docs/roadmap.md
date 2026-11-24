@@ -9,6 +9,13 @@ the stable builder to sync the generated Gradle metadata. Verify the APK's
 embedded version and version code. For Windows, use the same release version in
 the portable package name and verify the EXE's ProductVersion and FileVersion.
 
+## 2026-11-24 Android Visualize readiness hotfix (0.2.2)
+
+- [x] Move native WebView capability injection outside the optional JavaScript block so every successfully completed page advertises support when frame-aware messaging is available. Preserve top-frame-only native message handling and migrate the incremental 0.2.1 patch idempotently.
+- [x] Root checks and Gateway build passed; verified compiled Java control flow and the live, existing Visualize HTML endpoint without model inference. No server deployment or Windows packaging required.
+- [x] Android 0.2.2 (versionCode 29) Release built using the stable entry, with ARM64, embedded JS, Visualize marker in DEX, v2 test signing and SHA-256 `4D2D3431C546ABC520E5052E16CD6C7935B5D71B20E6097B372ABBBF33F8EE3A`; delivered through CCM.
+- [ ] Verify physical phone installation and interaction with the original history component.
+
 ## 2026-11-24 Inline Visualize and project welcome (0.2.1)
 
 - [x] Render native Visualize references inline in the shared Web/desktop/Android UI; retain live controls across message refresh and use cached HTML on reopening without persisting widget state.
