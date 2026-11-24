@@ -6,7 +6,7 @@ export const text = (value: unknown): string => typeof value === 'string' ? valu
 const clip = (value: string, limit = 20_000) => value.length > limit ? value.slice(0, limit) + '\n…' : value;
 const jsonText = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? '';
 const unixMs = (timestamp: unknown) => typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0 ? timestamp * (timestamp < 1e12 ? 1000 : 1) : undefined;
-const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabToolCall', 'webSearch', 'imageView', 'functionCallOutput', 'contextCompaction', 'enteredReviewMode', 'exitedReviewMode']);
+const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabToolCall', 'collabAgentToolCall', 'subAgentActivity', 'webSearch', 'imageView', 'functionCallOutput', 'contextCompaction', 'enteredReviewMode', 'exitedReviewMode']);
 
 export type NativeProject = { id: string; hostId: HostId; name: string; roots: string[]; position: number | null };
 export type NativeModel = { id: string; model?: string; name: string; isDefault: boolean; efforts: string[]; defaultEffort: string | null };
@@ -198,7 +198,7 @@ function messageFromItem(item: Obj, turnId: string, ordinal: number, startedAtMs
 
 function summaryParts(value: unknown): string[] {
   if (typeof value === 'string') return [value];
-  return Array.isArray(value) ? value.map((part) => typeof part === 'string' ? part : text(obj(part).text)).filter(Boolean) : [];
+  return Array.isArray(value) ? value.slice(0, 64).map((part) => clip(typeof part === 'string' ? part : text(obj(part).text))) : [];
 }
 
 function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: boolean): Message | null {
@@ -210,8 +210,12 @@ function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: 
     kind === 'commandExecution' && typeof item.exitCode === 'number' && item.exitCode !== 0;
   if (kind === 'reasoning') {
     const parts = summaryParts(item.summary);
-    if (!parts.length) return null;
-    return { ...base, kind: 'reasoning', title: '思考摘要', content: clip(parts.join('\n\n')), summaryParts: parts, status };
+    // Only native, explicitly returned display text; never decode encrypted
+    // response payloads or reconstruct text that the server omitted.
+    const body = Array.isArray(item.content) ? item.content.slice(0, 64).map((p) => clip(text(p))) : [];
+    if (!parts.some(Boolean) && !body.some(Boolean)) return null;
+    return { ...base, kind: 'reasoning', title: '思考摘要', content: clip(parts.filter(Boolean).join('\n\n')),
+      summaryParts: parts, reasoningParts: body, reasoningText: clip(body.filter(Boolean).join('\n\n')), status };
   }
   if (kind === 'plan') return { ...base, kind: 'plan', title: '计划', content: clip(text(item.text)), status };
   let title = '工具调用', content = '', detail = '';
@@ -233,7 +237,13 @@ function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: 
       item.error != null ? '错误：\n' + jsonText(item.error) : ''].filter(Boolean).join('\n\n');
   } else if (kind === 'webSearch') { title = '网页搜索'; content = text(item.query); detail = jsonText(item.action); }
   else if (kind === 'imageView') { title = '查看图片'; content = text(item.path); }
-  else if (kind === 'collabToolCall') { title = '协作代理'; content = text(item.tool); detail = text(item.prompt); }
+  else if (kind === 'collabToolCall' || kind === 'collabAgentToolCall') { title = '协作代理'; content = text(item.tool); detail = text(item.prompt); }
+  else if (kind === 'subAgentActivity') {
+    const label = ({ started: '启动', interacted: '交互', interrupted: '中断', completed: '完成' } as Record<string, string>)[text(item.kind)] || '活动';
+    title = '子 Agent · ' + label;
+    content = [title, text(item.agentPath)].filter(Boolean).join(' · ');
+    detail = [text(item.model), text(item.reasoningEffort)].filter(Boolean).join(' · ');
+  }
   else if (kind === 'contextCompaction') { title = '上下文压缩'; }
   else if (kind === 'enteredReviewMode' || kind === 'exitedReviewMode') { title = kind === 'enteredReviewMode' ? '开始代码审查' : '完成代码审查'; }
   else { content = text(item.name) || kind; detail = jsonText(item.output); }
@@ -243,7 +253,8 @@ function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: 
     detail: clip(detail), status, failed,
     ...(pluginId ? { pluginId } : {}), ...(appId ? { appId } : {}),
     ...(text(item.server) ? { toolServer: text(item.server) } : {}),
-    ...(text(item.tool) ? { toolName: text(item.tool) } : {}) };
+    ...(text(item.tool) ? { toolName: text(item.tool) } : {}),
+    ...(kind === 'subAgentActivity' && text(item.agentThreadId) ? { agentThreadId: text(item.agentThreadId), agentPath: text(item.agentPath) } : {}) };
 }
 
 function merge(list: readonly Message[], message: Message): Message[] {
@@ -291,6 +302,37 @@ export function parseSnapshot(raw: unknown, expectedThreadId: string): Snapshot 
     running, activeTurnId, runningSinceMs: running ? unixMs(last.startedAt) ?? null : null };
 }
 
+/** A paginated snapshot may deliberately omit text from a known native
+ * reasoning item. Keep only text already delivered in this client session for
+ * an item that the new native history still contains. Never restore a removed
+ * turn or synthesize text from another item. */
+export function reconcileObservedReasoning(snapshot: Message[], previous: readonly Message[], raw: unknown): Message[] {
+  const thread = obj(obj(raw).thread);
+  if (!Array.isArray(thread.turns)) return snapshot;
+  const observed = new Map(previous.filter((message) => message.kind === 'reasoning').map((message) => [message.id, message]));
+  const result = new Map(snapshot.map((message) => [message.id, message]));
+  for (const [turnIndex, rawTurn] of thread.turns.entries()) {
+    const turn = obj(rawTurn), turnId = text(turn.id);
+    if (!turnId || !Array.isArray(turn.items)) continue;
+    for (const [index, rawItem] of turn.items.entries()) {
+      const item = obj(rawItem);
+      if (item.type !== 'reasoning' || !text(item.id)) continue;
+      const id = turnId + ':' + text(item.id), old = observed.get(id);
+      if (!old || !old.content && !old.reasoningText) continue;
+      const current = result.get(id);
+      if (current) result.set(id, { ...current,
+        content: current.content || old.content,
+        summaryParts: current.content ? current.summaryParts : old.summaryParts,
+        reasoningText: current.reasoningText || old.reasoningText,
+        reasoningParts: current.reasoningText ? current.reasoningParts : old.reasoningParts,
+      });
+      else result.set(id, { ...old, ordinal: turnIndex * 100_000 + index,
+        turnStatus: text(turn.status), complete: !['inProgress','in_progress','running'].includes(text(turn.status)) });
+    }
+  }
+  return [...result.values()].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
+}
+
 export function applyNotice(previous: readonly Message[], notice: NativeNotice): Message[] {
   const p = obj(notice.params), turnId = text(p.turnId) || text(obj(p.turn).id);
   if (!turnId) return [...previous];
@@ -325,6 +367,12 @@ export function applyNotice(previous: readonly Message[], notice: NativeNotice):
     if (!finished && existing) return [...previous];
     const convert = messageFromItem({ ...item, id: itemId }, turnId, nextOrdinal(previous)) ??
       activityFromItem({ ...item, id: itemId }, turnId, nextOrdinal(previous), finished);
+    if (convert?.kind === 'reasoning' && existing?.kind === 'reasoning') {
+      if (!convert.content) { convert.content = existing.content; convert.summaryParts = existing.summaryParts; }
+      if (!convert.reasoningText) { convert.reasoningText = existing.reasoningText; convert.reasoningParts = existing.reasoningParts; }
+    }
+    if (!convert && item.type === 'reasoning' && existing?.kind === 'reasoning' && finished)
+      return merge(previous, { ...existing, complete: true, status: 'completed' });
     return convert ? merge(previous, convert) : [...previous];
   }
   if (existing?.complete) return [...previous];
@@ -332,12 +380,17 @@ export function applyNotice(previous: readonly Message[], notice: NativeNotice):
     return merge(previous, { id, turnId, role: 'assistant', content: clip((existing?.content ?? '') + p.delta),
       ordinal: nextOrdinal(previous), complete: false });
   }
-  if (notice.method === 'item/reasoning/summaryTextDelta' && typeof p.delta === 'string') {
-    const index = typeof p.summaryIndex === 'number' && Number.isInteger(p.summaryIndex) && p.summaryIndex >= 0 && p.summaryIndex < 64 ? p.summaryIndex : 0;
-    const parts = [...(existing?.summaryParts ?? [])];
-    parts[index] = clip((parts[index] ?? '') + p.delta);
+  if (['item/reasoning/summaryTextDelta', 'item/reasoning/textDelta'].includes(notice.method) && typeof p.delta === 'string') {
+    const summary = notice.method === 'item/reasoning/summaryTextDelta';
+    const index = summary ? p.summaryIndex : p.contentIndex;
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= 64) return [...previous];
+    const parts = [...(existing?.summaryParts ?? [])], body = [...(existing?.reasoningParts ?? [])];
+    const target = summary ? parts : body;
+    target[index] = clip((target[index] ?? '') + p.delta);
     return merge(previous, { id, turnId, role: 'assistant', kind: 'reasoning', title: '思考摘要',
-      content: clip(parts.filter(Boolean).join('\n\n')), summaryParts: parts, ordinal: nextOrdinal(previous), complete: false, status: 'inProgress' });
+      content: clip(parts.filter(Boolean).join('\n\n')), summaryParts: parts,
+      reasoningText: clip(body.filter(Boolean).join('\n\n')), reasoningParts: body,
+      ordinal: nextOrdinal(previous), complete: false, status: 'inProgress' });
   }
   if (notice.method === 'item/plan/delta' && typeof p.delta === 'string') {
     return merge(previous, { id, turnId, role: 'assistant', kind: 'plan', title: '计划',

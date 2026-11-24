@@ -6,7 +6,7 @@ import {
   ArrowDown, ArrowUp, Archive, Check, ChevronDown, ChevronRight, Clock3, Copy, Ellipsis,
   FileText, Folder, GitBranch, Hand, Image, ListTodo, Menu, Monitor, Plug, RefreshCw, Square,
   Moon, PanelLeftClose, PanelLeftOpen, Pin, Share2, Link2, Eye, EyeOff, FolderInput, FolderOpen,
-  Plus, Puzzle, Search, Settings, ShieldCheck, ShieldLock, SquarePen, Sun, Target, Trash2, TriangleAlert, X, Pencil,
+  Plus, Puzzle, Search, Settings, ShieldCheck, ShieldLock, SquarePen, Sun, Target, Trash2, TriangleAlert, X, Pencil, Minimize2, PanelRightOpen,
   type LucideIcon,
 } from 'lucide-react';
 import { hosts } from './types';
@@ -46,6 +46,9 @@ import { cachedMentions, refreshCachedMentions, filteredMentions, mentionQuery, 
   type Mention } from '../../shared/mentions';
 import { quotaPercent, quotaResetLabel, type RateQuota } from '../../shared/rateLimits';
 import { contextUsagePercent, formatContextTokens } from '../../shared/contextUsage';
+import { compactionBusy } from './compaction';
+import { ReasoningActivity, SubAgentDetails } from './ThreadActivity';
+import { SideChatPanel } from './SideChatPanel';
 import { contextTargetFromAttributes, gestureMoved, readUnreadThreads, threadFromLink, threadLink,
   type ContextTarget } from './contextActions';
 
@@ -151,6 +154,9 @@ export default function DesktopApp() {
   const getProjectName = (id: string | null, hostId?: HostId) =>
     projects.find((p) => p.id === id && (!hostId || p.hostId === hostId))?.name ?? null;
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidePanelFor, setSidePanelFor] = useState<string | null>(null);
+  const [sideInitialSelection, setSideInitialSelection] = useState<string | undefined>();
+  const [sideDrafts, setSideDrafts] = useState<Record<string, string>>({});
   const conversationKey = (hostId: HostId, id: string) => hostId + ':' + id;
   const [newHost, setNewHost] = useState<HostId>('6v');
   const newHostRef = useRef<HostId>('6v');
@@ -425,6 +431,8 @@ export default function DesktopApp() {
   const activeQueue = active ? live.queues[currentHost + ':' + active.id] ?? [] : [];
   const contextUsage = active ? live.contextUsages[conversationKey(active.hostId, active.id)] : null;
   const contextPercent = contextUsage ? contextUsagePercent(contextUsage) : null;
+  const compactPhase = active ? live.compactions[conversationKey(active.hostId, active.id)] : undefined;
+  const compacting = compactionBusy(compactPhase);
   const displayedGoal = active ? activeGoal?.objective ?? '' : goal;
   const isRunning = active?.running === true;
   const { scrollerRef, contentRef, showJump, onScroll: onMessageScroll, jumpToLatest } =
@@ -512,7 +520,7 @@ export default function DesktopApp() {
     pathHosts, prepareAttachments, readyAttachments, retryUpload]);
   const canSend = Boolean(draft.trim() || pastedImages.length || pastedDocuments.length);
   const stopMode = isRunning && !canSend;
-  const composerBusy = submitting || stopping || goalWorking || pendingPermission !== null;
+  const composerBusy = submitting || stopping || goalWorking || pendingPermission !== null || compacting;
   const permissionLabels: Record<PermissionMode, string> = {
     default: '默认权限', 'auto-review': '自动审查', 'read-only': '只读',
     'full-access': '完整访问权限', custom: '自定义（config.toml）',
@@ -521,9 +529,9 @@ export default function DesktopApp() {
   // Streamed message deltas change Conversation.messages many times per second, but
   // the sidebar only needs metadata. Keep its sorting inputs stable until that
   // metadata actually changes (including status, title and recency updates).
-  const sidebarSignature = JSON.stringify(conversations.map(({ id, hostId, title, status, project, archived, updatedAt }) =>
+  const sidebarSignature = JSON.stringify(conversations.filter((item) => !item.attachedToThreadId).map(({ id, hostId, title, status, project, archived, updatedAt }) =>
     [id, hostId, title, status, project, archived, updatedAt]));
-  const sidebarConversations = useMemo<SidebarConversation[]>(() => conversations.map(({
+  const sidebarConversations = useMemo<SidebarConversation[]>(() => conversations.filter((item) => !item.attachedToThreadId).map(({
     id, hostId, title, status, project, archived, updatedAt,
   }) => ({ id, hostId, title, status, project, archived, updatedAt })), [sidebarSignature]);
   const recents = useMemo(() => [...sidebarConversations].filter((item) =>
@@ -740,6 +748,7 @@ export default function DesktopApp() {
         setSearchOpen(false); setPopup(null); setGoalEditor(false); setImageViewer(null);
         setProjectCreateOpen(false); setContextMenu(null); setRenameTarget(null); setChatFind(null);
         setPublicationTarget(null);
+        setSidePanelFor(null);
       }
     }
     function nativeBack(event: Event) {
@@ -763,6 +772,7 @@ export default function DesktopApp() {
       else if (goalEditor) { setGoalEditor(false); event.preventDefault(); }
       else if (renaming) { setRenaming(false); event.preventDefault(); }
       else if (popup) { setPopup(null); event.preventDefault(); }
+      else if (sidePanelFor && sidePanelFor === activeId) { setSidePanelFor(null); event.preventDefault(); }
       else if (sidebarOpen) { setSidebarOpen(false); event.preventDefault(); }
       else if (view === 'tasks') { setView('chat'); event.preventDefault(); }
       // Nothing remains: React Native moves the task to the Android background.
@@ -784,7 +794,7 @@ export default function DesktopApp() {
     };
   }, [imageViewer, publicationTarget, renameTarget, projectCreateOpen, settingsOpen, quotaDetail,
     searchOpen, contextMenu, inlineRename, chatFind, goalEditor, renaming,
-    popup, sidebarOpen, view]);
+    popup, sidebarOpen, view, sidePanelFor, activeId]);
   useEffect(() => {
     if (!popup && !goalEditor) return;
     // Dismiss by actual pointer target, not a full-screen button behind higher
@@ -879,7 +889,7 @@ export default function DesktopApp() {
       setDrafts((items) => ({ ...items, 'new:draft': draft }));
     }
     navigationKey.current = 'new:draft';
-    setNewHost(host); setNewProject(project); setActiveId(null); setView('chat');
+    setNewHost(host); setNewProject(project); setActiveId(null); setView('chat'); setSidePanelFor(null);
     clearImages(); setPopup(null); setGoal(''); setPlan(false); closeOnMobile();
     window.setTimeout(() => composeRef.current?.focus(), 0);
   }
@@ -887,6 +897,7 @@ export default function DesktopApp() {
     const item = conversations.find((c) => c.hostId === hostId && c.id === id) ?? searchHit;
     if (!item) return;
     setActiveId(conversationKey(hostId, id)); setNewHost(item.hostId); setNewProject(item.project);
+    setSidePanelFor((old) => old === conversationKey(hostId, id) ? old : null);
     setUnreadThreads((old) => {
       if (!old[conversationKey(hostId, id)]) return old;
       const next = { ...old };
@@ -1072,7 +1083,7 @@ export default function DesktopApp() {
     toggle(collapsedSections, id, setCollapsedSections);
   }
   function send() {
-    if (sendBusy.current || stopping || pendingPermission) return;
+    if (sendBusy.current || stopping || pendingPermission || compacting) return;
     if (stopMode) { stopTurn(); return; }
     if (live.status[currentHost] !== 'online') { setNotice('电脑尚未连接，消息仍保留在输入框'); return; }
     const value = draft.trim();
@@ -1507,7 +1518,40 @@ export default function DesktopApp() {
       <Icon size={16} aria-hidden="true"/><span>{label}</span>
     </button>;
   }
-  return <><DesktopTitlebar/><div className={'app-shell' + (sidebarOpen ? ' sidebar-is-open' : ' sidebar-is-closed') + (desktopBridge()?.openMenu ? ' native-desktop-app' : '')}
+  function setSideDraft(key: string, value: string, expected?: string) {
+    setSideDrafts((old) => {
+      if (expected !== undefined && (old[key] ?? '') !== expected) return old;
+      const next = { ...old };
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+  }
+  function openSideChat() {
+    if (!active || active.attachedToThreadId) return;
+    const key = conversationKey(active.hostId, active.id);
+    if (sidePanelFor === key) { setSidePanelFor(null); return; }
+    const selection = window.getSelection();
+    const selected = selection && selection.rangeCount && contentRef.current?.contains(selection.anchorNode) &&
+      contentRef.current?.contains(selection.focusNode) ? selection.toString().trim().slice(0, 4000) : '';
+    if (selected) {
+      const draftKey = key + ':new';
+      const quote = selected.split('\n').map((line) => '> ' + line).join('\n');
+      setSideDrafts((old) => ({ ...old, [draftKey]: quote + '\n\n' + (old[draftKey] ?? '') }));
+    }
+    setSideInitialSelection(selected || undefined);
+    if (mobileLayout()) setSidebarOpen(false);
+    setSidePanelFor(key); setPopup(null);
+  }
+  const sidePanelOpen = Boolean(active && view === 'chat' && sidePanelFor === activeId);
+  useEffect(() => {
+    if (!sidePanelOpen) return;
+    const closeNarrowSidebar = () => { if (mobileLayout()) setSidebarOpen(false); };
+    closeNarrowSidebar();
+    window.addEventListener('resize', closeNarrowSidebar);
+    return () => window.removeEventListener('resize', closeNarrowSidebar);
+  }, [sidePanelOpen]);
+  return <><DesktopTitlebar/><div className={'app-shell' + (sidebarOpen ? ' sidebar-is-open' : ' sidebar-is-closed') + (desktopBridge()?.openMenu ? ' native-desktop-app' : '') + (sidePanelOpen ? ' side-chat-is-open' : '')}
     onPointerDownCapture={handleContextPointerDown}
     onPointerMoveCapture={handleContextPointerMove}
     onPointerUpCapture={stopLongPress}
@@ -1623,6 +1667,10 @@ export default function DesktopApp() {
         </div>
         <div className="topbar-right">
           <span className="preview-tag"><span className={'preview-dot ' + live.status[currentHost]} />{live.status[currentHost] === 'online' ? '已连接 ' + currentHost : live.status[currentHost] === 'connecting' ? '连接中' : '未连接 ' + currentHost}</span>
+          {view === 'chat' && active && !active.attachedToThreadId && <button type="button" className="top-icon side-chat-trigger"
+            title="旁路对话" aria-label="旁路对话" aria-expanded={sidePanelOpen}
+            onMouseDown={(e) => { if (window.getSelection()?.toString().trim()) e.preventDefault(); }}
+            onClick={openSideChat}><PanelRightOpen size={20}/></button>}
           {view === 'chat' && <button data-popup-trigger className="top-icon top-more" aria-label="对话菜单" title="对话菜单" onClick={() => setPopup(popup === 'options' ? null : 'options')}><Ellipsis size={22}/></button>}
           {popup === 'options' && <div className="popover options-popover">
             <span className="popover-heading">当前会话</span>
@@ -1732,7 +1780,8 @@ export default function DesktopApp() {
                   {message.content !== '正在重连' && <p>{message.content}</p>}
                   {message.detail && <details><summary>错误详情</summary><pre>{message.detail}</pre></details>}
                 </div> :
-                message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') + (message.failed ? ' activity-failed' : '')} open={message.kind === 'reasoning' ? true : undefined}>
+                message.kind === 'reasoning' ? <ReasoningActivity message={message}/> :
+                message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') + (message.failed ? ' activity-failed' : '')}>
                   <summary>{message.complete ? <Check size={16}/> : <span className="activity-spinner"/>}
                     {isTool ? <>
                       {message.activityType === 'imageView' ? <Image size={15}/> :
@@ -1745,11 +1794,13 @@ export default function DesktopApp() {
                     </>
                       : <span className="activity-label">{message.title ?? '工具调用'}</span>}
                     {message.failed && <span className="activity-error">失败</span>}<ChevronDown size={15}/></summary>
-                  {(message.content || message.detail) && <div className="activity-native-body">
+                  {(message.content || message.detail || message.agentThreadId) && <div className="activity-native-body">
                     {message.content && (!isTool || !message.detail &&
-                      message.activityType !== 'imageView') && (message.kind === 'reasoning' || message.kind === 'plan'
+                      message.activityType !== 'imageView') && (message.kind === 'plan'
                       ? <MessageMarkdown text={message.content}/> : <p>{message.content}</p>)}
                     {message.detail && <pre>{message.detail}</pre>}
+                    {message.agentThreadId && <SubAgentDetails hostId={active.hostId} parentId={active.id}
+                      agentThreadId={message.agentThreadId} read={live.readSubAgent}/>}
                     {message.activityType === 'imageView' && message.turnId &&
                       <ToolImage hostId={active.hostId} threadId={active.id} turnId={message.turnId}
                         itemId={message.id.slice(message.id.indexOf(':') + 1)}
@@ -1909,26 +1960,48 @@ export default function DesktopApp() {
                 </div>
                 <div className="composer-actions-right">
                   <button data-popup-trigger className="composer-host-selector" onClick={() => setPopup(popup === 'project' ? null : 'project')} title="选择电脑或项目"><Monitor size={14}/>{currentHost}<ChevronDown size={13}/></button>
-                  {contextUsage && contextPercent !== null && <button type="button"
+                  {active && <button type="button"
                     data-popup-trigger="context" className="context-usage-button"
-                    aria-label={`上下文窗口占用 ${contextPercent}%，查看详情`}
+                    aria-label={contextPercent === null ? '上下文窗口，查看详情' : '上下文窗口占用 ' + contextPercent + '%，查看详情'}
                     aria-expanded={popup === 'context'}
-                    title={`上下文占用 ${contextPercent}% · ${formatContextTokens(contextUsage.usedTokens)} / ${formatContextTokens(contextUsage.windowTokens)} Token`}
+                    title={contextUsage && contextPercent !== null ? '上下文占用 ' + contextPercent + '% · ' +
+                      formatContextTokens(contextUsage.usedTokens) + ' / ' + formatContextTokens(contextUsage.windowTokens) + ' Token' : '上下文窗口'}
                     onClick={() => setPopup(popup === 'context' ? null : 'context')}>
                     <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
                       <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeOpacity=".27" strokeWidth="3"/>
                       <circle cx="12" cy="12" r="9" fill="none" stroke="#75a9ec" strokeWidth="3"
                         strokeLinecap="round" strokeDasharray={2 * Math.PI * 9}
-                        strokeDashoffset={2 * Math.PI * 9 * (1 - contextPercent / 100)}
+                        strokeDashoffset={2 * Math.PI * 9 * (1 - (contextPercent ?? 0) / 100)}
                         transform="rotate(-90 12 12)"/>
                     </svg>
-                    <span className="context-usage-percent">{contextPercent}%</span>
+                    <span className="context-usage-percent">{contextPercent === null ? '—' : contextPercent + '%'}</span>
                   </button>}
-                  {popup === 'context' && contextUsage && contextPercent !== null && <div
+                  {popup === 'context' && active && <div
                     className="popover context-usage-popover" role="group" aria-label="上下文窗口详情">
                     <strong>上下文窗口</strong>
-                    <div>已使用 {formatContextTokens(contextUsage.usedTokens)} / {formatContextTokens(contextUsage.windowTokens)} Token</div>
-                    <div>占用 {contextPercent}% · 剩余 {100 - contextPercent}%</div>
+                    {contextUsage && contextPercent !== null ? <>
+                      <div>已使用 {formatContextTokens(contextUsage.usedTokens)} / {formatContextTokens(contextUsage.windowTokens)} Token</div>
+                      <div>占用 {contextPercent}% · 剩余 {100 - contextPercent}%</div>
+                      <div className="context-usage-progress"><span style={{ width: contextPercent + '%' }}/></div>
+                    </> : <div>服务器暂未返回占用数据</div>}
+                    <div className="popover-divider"/>
+                    <button type="button" className="context-compact-action"
+                      disabled={!active || !connected || submitting || stopping || pendingPermission !== null ||
+                        compactPhase !== 'unknown' && !active.messages.length ||
+                        compactPhase !== 'unknown' && (isRunning || compacting || activeQueue.length > 0 || goalWorking)}
+                      onClick={() => { if (!active) return;
+                        void (compactPhase === 'unknown' ? live.recheckCompaction(active.hostId, active.id)
+                          : live.compactThread(active.hostId, active.id)).catch(() => setNotice('压缩操作未完成，请查看上下文窗口状态'));
+                      }}>
+                      {compactPhase === 'starting' || compactPhase === 'working' ? <span className="activity-spinner"/> : <Minimize2 size={16}/>}
+                      {compactPhase === 'starting' || compactPhase === 'working' ? '正在压缩上下文' : compactPhase === 'unknown' ? '检查压缩结果' : '压缩上下文'}
+                    </button>
+                    {compactPhase === 'completed' && <small>上下文已压缩</small>}
+                    {compactPhase === 'failed' && <small>压缩失败，可手动重试</small>}
+                    {compactPhase === 'unknown' && <small>压缩结果未确认，先检查记录</small>}
+                    {compactPhase === 'unconfirmed' && <small>结果未确认，当前空闲，可手动重试</small>}
+                    {!compacting && (isRunning || activeQueue.length > 0) && <small>任务执行或排队时不能压缩</small>}
+                    {!active.messages.length && <small>暂无可压缩的历史记录</small>}
                   </div>}
                   <button className={'send-button' + (stopMode ? ' stop-mode' : '')}
                     disabled={composerBusy || (stopMode ? !active?.activeTurnId : !canSend || (hasDraftAttachments && (attachmentsDisabled || !readyAttachments))) || live.status[currentHost] !== 'online'}
@@ -1946,6 +2019,7 @@ export default function DesktopApp() {
               </div>}
               {popup === 'permission' && <div className="popover composer-popover permission-popover"><span className="popover-heading">{nextPermission && followUpMode === "queue"
                 ? "服务器排队消息沿用当前权限" : "审批权限"}</span>
+                {permissionKey && live.customPermissionChanged[permissionKey] && <p className="popover-footnote">上次选择：自定义；当前原生权限已变化。</p>}
                 {(['default','auto-review','read-only','full-access','custom'] as PermissionMode[]).map((mode) => {
                   const PermissionIcon = permissionIcons[mode];
                   return <button key={mode} disabled={submitting || pendingPermission !== null} onClick={() => selectPermission(mode)}>
@@ -1978,6 +2052,9 @@ export default function DesktopApp() {
           </div></div>
         </div>}
     </main>
+    {sidePanelOpen && active && <SideChatPanel key={activeId} source={active} live={live} pathHosts={pathHosts}
+      drafts={sideDrafts} setDraft={setSideDraft} initialSelection={sideInitialSelection}
+      onClose={() => setSidePanelFor(null)}/>}
 
     {settingsOpen && <SettingsView key={settingsProject ? settingsProject.hostId + ':' + settingsProject.id : 'general'}
       browserNotifications={browserNotifications}

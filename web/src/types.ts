@@ -23,6 +23,10 @@ export type Message = {
   status?: string;
   failed?: boolean;
   summaryParts?: string[];
+  reasoningParts?: string[];
+  reasoningText?: string;
+  agentThreadId?: string;
+  agentPath?: string;
   /** Image references are matched to native user item IDs, never host paths. */
   images?: { itemId: string; imageIndex: number }[];
   /** Host-managed documents are identified through the native user item, not a browser path. */
@@ -48,6 +52,8 @@ export type Conversation = {
   runningSinceMs?: number | null;
   syncPending?: boolean;
   localCreated?: boolean;
+  /** A durable Side Chat, excluded from the ordinary navigation list. */
+  attachedToThreadId?: string;
   messages: Message[];
 };
 

@@ -75,6 +75,7 @@ const MOBILE_REQUESTS = new Set([
   'thread/read',
   'thread/resume',
   'thread/fork',
+  'thread/compact/start',
   'thread/start',
   'turn/start',
   'turn/steer',
@@ -158,7 +159,17 @@ function safeParams(method: string, value: unknown): boolean {
         ['user', 'auto_review'].includes(String(p.approvalsReviewer));
     case 'thread/resume':
       return subset(['threadId']) && id('threadId');
+    case 'thread/compact/start':
+      return subset(['threadId']) && id('threadId');
+    case 'thread/list':
+      if (p.attachedToThreadId === undefined) return true;
+      return subset(['attachedToThreadId', 'limit', 'cursor', 'archived', 'sortKey', 'modelProviders', 'useStateDbOnly']) &&
+        id('attachedToThreadId') && p.limit === 100 && p.archived === false && p.useStateDbOnly === true &&
+        p.sortKey === 'recency_at' && Array.isArray(p.modelProviders) && p.modelProviders.length === 0 &&
+        (p.cursor === undefined || id('cursor'));
     case 'thread/fork':
+      if (p.attachToSource === true)
+        return subset(['threadId', 'attachToSource', 'excludeTurns']) && id('threadId') && p.excludeTurns === true;
       // Fork only a completed, explicitly chosen turn in an existing thread.
       // Never expose path overrides, experimental prediction mode or ephemeral forks.
       return subset(['threadId', 'lastTurnId', 'excludeTurns']) &&

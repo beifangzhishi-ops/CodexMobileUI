@@ -1,60 +1,90 @@
-# CodexMobileUI tool activity & reasoning summaries
+# CodexMobileUI native conversation activities
 
-The authenticated Gateway forwards native Codex App Server notifications without
-interpreting or synthesizing the conversation. The phone maintains one canonical
-list of server item IDs for each turn; its SQLite cache is rebuilt from
-`thread/read` snapshots.
+The browser, Android WebView and Electron share web/src. Native thread/item IDs,
+turn ordering, actual runtime status and permissions remain authoritative on
+the owning App Server; none of the following creates artificial chat history.
 
-## Native data
+## Activity display
 
-- `item/started` and `item/completed` identify and finalize tool items.
-  The completed item is authoritative over earlier deltas.
-- `item/commandExecution/outputDelta` updates the existing command output.
-- `item/reasoning/summaryTextDelta` appends public summary sections indexed by
-  `summaryIndex`. Raw `item/reasoning/textDelta` and `reasoning.content`
-  are deliberately never displayed as reasoning summaries.
-- `item/plan/delta` is streamed and recovered from native plan items.
-- `thread/read` includes server items in their canonical turn/item order.
-  Native history is the baseline, but some native execution items have sparser
-  history than their earlier notifications. On reconnect/refresh the phone
-  merges only previously observed real item IDs from the same native turn;
-  it never invents an assistant command or treats socket status as an item.
-  A final server-provided output wins over earlier streamed fragments.
-  SQLite stores committed tool/summary metadata separately from text, including
-  bounded native command output captured in earlier notifications.
-- Out-of-order command output deltas establish a temporary native-ID-based
-  command row. The later `item/started` supplies its actual command and
-  `item/completed` supplies terminal status without dropping earlier output.
-- `fileChange.changes[].diff` is removed by the authenticated Gateway from
-  forwarded notifications and `thread/read` snapshots. File paths and status
-  remain; diff text is neither sent nor rendered on the phone.
+- Native reasoning summaries and explicitly returned display text are separate
+  fields. Summary is visible; additional native text starts collapsed. Streaming
+  sections use summaryIndex/contentIndex and the native turn/item identity.
+  Encrypted or omitted content is not decoded or reconstructed. A sparse
+  snapshot can retain only text previously delivered to the same live client
+  for an item the native history still contains; a page reload cannot recover
+  text absent from the native history.
+- Native subAgentActivity records (started, interacted, interrupted, completed)
+  are compact and expandable, with real agentPath, model and effort when present.
+  A read-only detail request verifies that the parent history actually refers to
+  the requested agentThreadId before retrieving the child on the same host.
+  Child messages remain separate from the parent. The user can refresh the child
+  detail; a failed read is not replaced with fabricated content.
+- Command, plan, tool and compaction activities keep the native IDs. The final
+  server item is authoritative when it provides text. Failures are understated
+  but visible. The UI does not treat socket acknowledgment as task completion.
 
-## Compact mobile presentation
+## Custom permission choice
 
-- Readable summary text appears inline between tool calls and responses; long
-  summaries expand on demand.
-- A single command, MCP call or file change shows an understated status line,
-  a short preview and optional expanded details. In-progress tools show a
-  spinner, and failures/nonzero exit codes are marked visibly.
-- Only **adjacent** `commandExecution` items (or adjacent `fileChange`
-  items) in the **same turn** form a collapsible group. A reasoning summary,
-  response, a different tool type or turn boundary always breaks the group.
-- In Desktop `STEPS_COMMANDS` presentation, grouped commands start expanded
-  so that each command is visible; the output/detail of an individual command
-  remains expandable for a narrow Android screen.
-- Groups exist exclusively in `src/ui/activityGrouping.ts`; no synthetic
-  group ID is sent to Codex or persisted as an authoritative message.
-- Search covers item titles, previews and expanded details. All merged items
-  remain individually inspectable and in their original order.
+The shared client stores a bounded per-host/per-thread display preference in
+its local browser profile. The SHA-256 fingerprint includes the confirmed
+native profile, reviewer, approval policy and sandbox semantics; raw policy
+objects and credentials are not written to localStorage. Reopening reads
+native settings and only restores the custom label if the fingerprint matches.
+A changed native permission is shown as the actual current setting, with a note
+that the last choice was custom. Selecting a preset clears the old preference.
+Opening a thread never reapplies config.toml or grants permission. Preferences
+are per client profile, not a host-wide authorization record.
+
+## Context compaction
+
+The existing context circle opens its popover on an established thread even
+before a token-usage notification is available. The popover contains the
+graphical compact action. No slash-command menu, init, reload, synthetic
+summary prompt or user message is added. The native RPC is
+thread/compact/start with only threadId. The client checks native history,
+queue and in-flight sends, disallows duplicate starts, observes a new
+contextCompaction item and its matching terminal turn, and uses native token
+usage for the updated ring. On ambiguous disconnect/timeout the client requires
+a read-back check rather than automatically retrying. Native history stays visible.
+
+## Side Chat
+
+The official installed desktop uses durable attached forks for supported
+paginated local sessions: thread/fork with attachToSource=true and
+excludeTurns=true, and thread/list with attachedToThreadId for discovery.
+MobileUI uses this native relationship and never substitutes a normal fork or
+injects parent history as a user prompt. Legacy/unsupported source histories
+fail closed instead of creating an ordinary conversation. The server inherits
+source context and permissions; the attached thread has its own visible turns.
+
+The main chat has a graphical entry. Wide screens open a right-hand panel;
+narrow screens open a full-width returnable panel. It can open while the main
+turn runs. The side composer, drafts, messages, stop target and native status
+are independent. Attached conversations are omitted from the main sidebar.
+Multiple attached chats may be selected or created; closing the panel does not
+stop or delete either chat. Selected main-message text can be placed into a
+visible editable side draft. The current side composer supports text; it does
+not introduce a separate attachment or permission-settings implementation.
 
 ## Verification
 
-Run `npm.cmd run check` and `npm.cmd run build:gateway`.
-`tests/activity-protocol.test.ts` covers snapshot recovery, summary streaming,
-out-of-order command output, terminal status, sparse-history reconciliation,
-final-item replacement, failure highlighting, turn isolation and grouping.
-The native App Server can omit some Desktop-internal tool kinds from its
-supported read RPC. This client shows the native data it actually receives;
-it does not silently claim byte-for-byte parity with Desktop private rollouts.
-A physical Android acceptance pass is still required for scrolling, expansion,
-branch navigation and real-time server events.
+2026-11-24: both private native App Servers reported 0.171.0-alpha.13.
+On 6v, a disposable native conversation produced a real compaction activity,
+terminal completed event and persisted item; attached fork was independently
+listed and its visible history started empty. A separate 6v test dispatched
+the attached fork on parent turn/started and received its acknowledgment
+before the parent completed. On noha, a disposable attached conversation
+answered a marker inherited from the parent, had its own one-turn history,
+matched the parent's effective read-only profile/sandbox/reviewer/policy,
+had no inherited Goal, and a parent compaction completed. All created test
+threads were removed. No real user thread was mutated.
+
+Root checks, Gateway compilation, Web build/tests and Desktop tests passed.
+A headless Chromium harness using mock native data passed the five graphical
+controls at 1280 and 390 px: reasoning expansion and child history, one compact
+request with 67% to 15% native fixture usage, custom permission selection after
+reload, one attached side creation and independent reply, no sidebar leakage.
+The narrow overlay stacking issue discovered in the first screenshot pass was
+fixed and rechecked visually. Actual Android device installation remains a
+separate acceptance step. Tests live in web/tests/conversationControls.test.mjs
+and tests/rpc-policy.test.ts.

@@ -578,6 +578,11 @@ function allowedFrame(msg) {
       (p.cursor === undefined || validId(p.cursor)) &&
       (!titlesOnly || p.useStateDbOnly === true && Array.isArray(p.modelProviders) && p.modelProviders.length === 0);
   }
+  if (msg.method === 'thread/list' && p.attachedToThreadId !== undefined)
+    return subset(p, ['attachedToThreadId', 'limit', 'cursor', 'archived', 'sortKey', 'modelProviders', 'useStateDbOnly']) &&
+      validId(p.attachedToThreadId) && p.limit === 100 && p.archived === false && p.useStateDbOnly === true &&
+      p.sortKey === 'recency_at' && Array.isArray(p.modelProviders) && p.modelProviders.length === 0 &&
+      (p.cursor === undefined || validId(p.cursor));
   if (msg.method === 'thread/list') return subset(p, ['limit', 'cursor', 'archived', 'sortKey', 'modelProviders']) &&
     p.limit === 100 && p.sortKey === 'recency_at' && Array.isArray(p.modelProviders) && p.modelProviders.length === 0 &&
     (p.archived === undefined || p.archived === true) && (p.cursor === undefined || validId(p.cursor));
@@ -586,6 +591,12 @@ function allowedFrame(msg) {
   if (msg.method === 'thread/resume') return subset(p, ['threadId']) && validId(p.threadId);
   if (msg.method === 'web/permissionFromConfig') return subset(p, ['threadId']) &&
     typeof p.threadId === 'string' && /^[0-9a-f-]{36}$/i.test(p.threadId);
+  if (msg.method === 'web/subAgent/read') return subset(p, ['threadId', 'agentThreadId']) &&
+    validId(p.threadId) && validId(p.agentThreadId) && p.threadId !== p.agentThreadId;
+  if (msg.method === 'thread/compact/start') return subset(p, ['threadId']) && validId(p.threadId);
+  if (msg.method === 'thread/fork' && p.attachToSource === true)
+    return subset(p, ['threadId', 'attachToSource', 'excludeTurns']) &&
+      validId(p.threadId) && p.excludeTurns === true;
   if (msg.method === 'thread/fork') return subset(p, ['threadId','lastTurnId','excludeTurns']) &&
     validId(p.threadId) && validId(p.lastTurnId) && p.excludeTurns === true;
   if (msg.method === 'thread/settings/update') {
@@ -649,10 +660,10 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   const createdHere = new Map();
   const firstTurnRequests = new Map();
   let internalId = 1_000_000_000;
-  const internalRequest = (method, params) => new Promise((resolvePromise, rejectPromise) => {
+  const internalRequest = (method, params, timeoutMs = 15000) => new Promise((resolvePromise, rejectPromise) => {
     if (!upstreamReady) { rejectPromise(Error('HOST_OFFLINE')); return; }
     const id = internalId++;
-    const timer = setTimeout(() => { pendingInternal.delete(id); rejectPromise(Error('NATIVE_TIMEOUT')); }, 15000);
+    const timer = setTimeout(() => { pendingInternal.delete(id); rejectPromise(Error('NATIVE_TIMEOUT')); }, timeoutMs);
     pendingInternal.set(id, { resolvePromise, rejectPromise, timer });
     upstream.send(JSON.stringify({ id, method, params }));
   });
@@ -878,6 +889,32 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     } else if ((msg.method === 'turn/start' || msg.method === 'turn/steer') && !remotePeer &&
       msg.params.input.some((item) => item.type === 'localImage' && !images.owns(item.path))) {
       safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_NOT_UPLOADED_ON_THIS_CONNECTION' } }));
+    } else if (msg.method === 'web/subAgent/read' && !remotePeer) {
+      void (async () => {
+        const { threadId, agentThreadId } = msg.params;
+        const parent = (await internalRequest('thread/read', { threadId, includeTurns: true }))?.thread;
+        if (parent?.id !== threadId || !parent.turns?.some((turn) => Array.isArray(turn.items) &&
+          turn.items.some((item) => item.type === 'subAgentActivity' && item.agentThreadId === agentThreadId))) {
+          throw Error('AGENT_NOT_ATTACHED');
+        }
+        const child = await internalRequest('thread/read', { threadId: agentThreadId, includeTurns: true });
+        if (child?.thread?.id !== agentThreadId) throw Error('AGENT_NOT_FOUND');
+        return child;
+      })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'AGENT_NOT_AVAILABLE' } })));
+    } else if (msg.method === 'thread/fork' && msg.params.attachToSource === true && !remotePeer) {
+      void (async () => {
+        const { threadId } = msg.params;
+        const parent = (await internalRequest('thread/read', { threadId, includeTurns: false }))?.thread;
+        if (parent?.id !== threadId || parent.historyMode !== 'paginated' || parent.ephemeral === true)
+          throw Error('SIDE_CHAT_UNAVAILABLE');
+        const result = await internalRequest('thread/fork', {
+          threadId, attachToSource: true, excludeTurns: true,
+        }, 60000);
+        if (!result?.thread?.id || result.thread.id === threadId) throw Error('SIDE_CHAT_UNCONFIRMED');
+        return result;
+      })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+        .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'SIDE_CHAT_UNCONFIRMED' } })));
     } else if (msg.method === 'web/permissionFromConfig' && !remotePeer) {
       void (async () => {
         const threadId = msg.params.threadId;

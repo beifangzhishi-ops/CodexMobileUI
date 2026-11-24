@@ -1,5 +1,20 @@
 # CodexMobileUI
 
+## 2026-11-24 Native conversation controls
+
+The shared chat UI separates native reasoning summaries from explicitly
+returned display text, keeps the additional text collapsed, and exposes real
+sub-agent activity with a verified read-only child history. Custom permission
+selection is remembered per client profile and checked against the full native
+effective permission fingerprint before restoring its label.
+
+The existing context-usage popup now offers native compaction, without a slash
+command or synthetic user message. Side Chat uses native durable attached
+threads, with a right panel on wide screens and a returnable full-screen
+panel on phones. Parent and side turns, drafts and interruption targets are
+independent. See [native conversation activities](docs/activity-forwarding.md)
+for protocol details and verification.
+
 ## 2026-11-24 Conversation file previews, resizable sidebar and forks
 
 The shared Web/Android/Electron client now handles assistant file links as

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Conversation, HostId, Message } from './types';
 import {
   applyNotice, obj, parseGoal, parseModels, parsePermissions, parseProjects, parseQueue,
-  parseSnapshot, parseThreads, parseThreadForkResponse, text, threadPreviewTitle,
+  parseSnapshot, parseThreads, parseThreadForkResponse, reconcileObservedReasoning, text, threadPreviewTitle,
 } from './nativeProtocol';
 import type {
   NativeGoal, NativeModel, NativePermission, NativeProject, NativeQueueEntry,
@@ -17,6 +17,8 @@ import { uploadDocument } from './documentUpload';
 import { hasAbsolutePaths, type PathHosts } from './pathHosts';
 import { displayOriginalPaths, readPathOverlays, storePathOverlay, type PathChange } from './pathOverlays';
 import { desktopBridge } from './desktopBridge';
+import { permissionFingerprint, readCustomPermission, storeCustomPermission } from './permissionPreference';
+import { compactionBusy, compactionOutcome, type CompactionJob, type CompactionPhase } from './compaction';
 
 type Params = Record<string, unknown>;
 type Frame = { id?: number; method?: string; params?: Params; result?: unknown; error?: { message?: string; code?: number }; type?: string };
@@ -64,9 +66,22 @@ export function useLiveCodex() {
   const [models, setModels] = useState<Record<HostId, NativeModel[]>>({ '6v': [], noha: [] });
   const [permissions, setPermissions] = useState<Record<HostId, NativePermission[]>>({ '6v': [], noha: [] });
   const [threadPermissions, setThreadPermissions] = useState<Record<string, PermissionMode>>({});
+  const [customPermissionChanged, setCustomPermissionChanged] = useState<Record<string, boolean>>({});
   const [goals, setGoals] = useState<Record<string, NativeGoal | null>>({});
   const [queues, setQueues] = useState<Record<string, NativeQueueEntry[]>>({});
   const [contextUsages, setContextUsages] = useState<Record<string, ContextWindowUsage>>({});
+  const [compactions, setCompactions] = useState<Record<string, CompactionPhase>>({});
+  const compactionJobs = useRef(new Map<string, CompactionJob>());
+  const setCompactionPhase = useCallback((key: string, phase: CompactionPhase) => {
+    const job = compactionJobs.current.get(key);
+    if (!job) return;
+    job.phase = phase;
+    if (!compactionBusy(phase) || phase === 'unknown') {
+      if (job.timer !== undefined) window.clearTimeout(job.timer);
+      job.timer = undefined;
+    }
+    setCompactions((all) => ({ ...all, [key]: phase }));
+  }, []);
   const waitingForModelTurn = useRef(new Set<string>());
   const [approval, setApproval] = useState<Approval | null>(null);
   const clients = useRef(new Map<HostId, Client>());
@@ -74,7 +89,7 @@ export function useLiveCodex() {
   // Keep an explicitly chosen config-based mode across in-page navigation,
   // even when config.toml resolves to the same named profile as a preset.
   const permissionSelections = useRef(new Map<string, {
-    mode: PermissionMode; profile: string | null; reviewer: string | null;
+    mode: PermissionMode; profile: string | null; reviewer: string | null; fingerprint?: string | null;
   }>());
   const permissionEpochs = useRef(new Map<string, number>());
   /** Serializes settings writes for each native thread; turn/start waits for pending writes. */
@@ -84,6 +99,7 @@ export function useLiveCodex() {
   // processed. Never revive a completed turn as "running" on late ack.
   const completedTurnIds = useRef(new Map<string, string>());
   const startingTurns = useRef(new Set<string>());
+  const sideLoadedThreads = useRef(new Set<string>());
   const refreshTimer = useRef(new Map<string, number>());
   const pollQueued = useRef(new Map<string, number>());
   const alive = useRef(false);
@@ -152,7 +168,7 @@ export function useLiveCodex() {
       // absent from the complete native list was deleted or moved elsewhere.
       // Only retain fresh, not-yet-indexed native thread/start acknowledgments.
       const pending = [...previous.values()].filter((item) => !byId.has(item.id) && !item.archived &&
-        item.localCreated && (item.running || Date.now() - item.updatedAt < 10 * 60_000));
+        (item.attachedToThreadId || item.localCreated && (item.running || Date.now() - item.updatedAt < 10 * 60_000)));
       return [...all.filter((item) => item.hostId !== hostId), ...pending, ...next];
     });
     setErrors((all) => ({ ...all, [hostId]: null }));
@@ -172,6 +188,7 @@ export function useLiveCodex() {
     setConversations((all) => all.filter((item) => !(item.hostId === hostId && item.id === threadId)));
     waitingForModelTurn.current.delete(threadKey(hostId, threadId));
     modelUpdates.current.delete(threadKey(hostId, threadId));
+    storeCustomPermission(threadKey(hostId, threadId), null);
     setContextUsages((all) => {
       const next = { ...all };
       delete next[threadKey(hostId, threadId)];
@@ -200,6 +217,11 @@ export function useLiveCodex() {
       readPathOverlays(hostId, threadId).catch(() => []),
     ]);
     const snapshot = parseSnapshot(native, threadId);
+    const job = compactionJobs.current.get(key);
+    if (job?.dispatched && compactionBusy(job.phase)) {
+      const outcome = compactionOutcome(job, snapshot.messages);
+      if (outcome === 'completed' || outcome === 'failed') setCompactionPhase(key, outcome);
+    }
     const thread = obj(obj(native).thread);
     snapshot.messages = displayOriginalPaths(snapshot.messages, overlays);
     if (eventVersion !== (changed.current.get(key) ?? 0)) {
@@ -210,7 +232,8 @@ export function useLiveCodex() {
       if (item.hostId !== hostId || item.id !== threadId) return item;
       const liveError = snapshot.activeTurnId && item.messages.find((message) =>
         message.kind === 'turnError' && message.turnId === snapshot.activeTurnId);
-      const messages = liveError ? [...snapshot.messages, liveError] : snapshot.messages;
+      const observed = reconcileObservedReasoning(snapshot.messages, item.messages, native);
+      const messages = liveError ? [...observed, liveError] : observed;
       const runningSinceMs = snapshot.activeTurnId && snapshot.activeTurnId === item.activeTurnId
         ? item.runningSinceMs ?? snapshot.runningSinceMs : snapshot.runningSinceMs;
       return { ...item, ...snapshot, messages, runningSinceMs,
@@ -219,6 +242,56 @@ export function useLiveCodex() {
         status: snapshot.running ? 'running' : 'idle', syncPending: false };
     }));
     return snapshot.messages;
+  }, [request, setCompactionPhase]);
+
+  const listSideChats = useCallback(async (hostId: HostId, parentId: string) => {
+    const result = await pageList(hostId, 'thread/list', { attachedToThreadId: parentId,
+      archived: false, useStateDbOnly: true });
+    const rows = parseThreads(result, hostId).filter((item) => item.id !== parentId)
+      .map((item) => ({ ...item, attachedToThreadId: parentId }));
+    setConversations((all) => {
+      const previous = new Map(all.filter((item) => item.hostId === hostId).map((item) => [item.id, item]));
+      const ids = new Set(rows.map((item) => item.id));
+      return [...all.filter((item) => item.hostId !== hostId ||
+        !ids.has(item.id) && (item.attachedToThreadId !== parentId || item.localCreated)),
+        ...rows.map((item) => {
+          const old = previous.get(item.id);
+          return old ? { ...old, ...item, messages: old.messages, localCreated: false,
+            running: item.running, activeTurnId: item.running ? old.activeTurnId : null,
+            runningSinceMs: item.running ? old.runningSinceMs : null } : item;
+        })];
+    });
+    return rows;
+  }, [pageList]);
+
+  const creatingSideChats = useRef(new Set<string>());
+  const createSideChat = useCallback(async (hostId: HostId, parentId: string) => {
+    const key = threadKey(hostId, parentId);
+    if (creatingSideChats.current.has(key)) throw Error('SIDE_CHAT_BUSY');
+    creatingSideChats.current.add(key);
+    try {
+      const response = obj(await request(hostId, 'thread/fork',
+        { threadId: parentId, attachToSource: true, excludeTurns: true }, 90_000));
+      const thread = obj(response.thread), id = text(thread.id);
+      if (!id || id === parentId) throw Error('SIDE_CHAT_UNCONFIRMED');
+      const [parsed] = parseThreads({ data: [thread] }, hostId);
+      if (!parsed) throw Error('SIDE_CHAT_UNCONFIRMED');
+      setConversations((all) => [...all.filter((item) => item.hostId !== hostId || item.id !== id),
+        { ...parsed, attachedToThreadId: parentId, localCreated: true, updatedAt: Date.now() }]);
+      void listSideChats(hostId, parentId).catch(() => undefined);
+      return id;
+    } finally { creatingSideChats.current.delete(key); }
+  }, [request, listSideChats]);
+
+  const loadSideChat = useCallback(async (hostId: HostId, threadId: string) => {
+    await request(hostId, 'thread/resume', { threadId });
+    sideLoadedThreads.current.add(threadKey(hostId, threadId));
+    return readThread(hostId, threadId);
+  }, [request, readThread]);
+
+  const readSubAgent = useCallback(async (hostId: HostId, threadId: string, agentThreadId: string) => {
+    const result = await request(hostId, 'web/subAgent/read', { threadId, agentThreadId });
+    return parseSnapshot(result, agentThreadId);
   }, [request]);
 
   const refreshQueue = useCallback(async (hostId: HostId, threadId: string) => {
@@ -244,7 +317,7 @@ export function useLiveCodex() {
     const messages = await readThread(hostId, threadId);
     const key = threadKey(hostId, threadId);
     const epoch = permissionEpochs.current.get(key) ?? 0;
-    void request(hostId, 'thread/resume', { threadId }).then((result) => {
+    void request(hostId, 'thread/resume', { threadId }).then(async (result) => {
       if ((permissionEpochs.current.get(key) ?? 0) !== epoch) return;
       const resumed = obj(result);
       setConversations((all) => all.map((item) => item.hostId === hostId && item.id === threadId
@@ -256,8 +329,12 @@ export function useLiveCodex() {
       const inferred: PermissionMode = profile === ':workspace' ? (reviewer === 'auto_review' ? 'auto-review' : 'default') :
         profile === ':read-only' ? 'read-only' : profile === ':danger-full-access' ? 'full-access' : 'custom';
       const selected = permissionSelections.current.get(key);
-      const mode = selected && selected.profile === profile && selected.reviewer === reviewer
-        ? selected.mode : inferred;
+      const saved = selected?.mode === 'custom' ? selected.fingerprint || readCustomPermission(key) : readCustomPermission(key);
+      const actual = saved ? await permissionFingerprint(resumed).catch(() => null) : null;
+      if ((permissionEpochs.current.get(key) ?? 0) !== epoch) return;
+      const mode = saved && actual === saved ? 'custom' :
+        !saved && selected && selected.profile === profile && selected.reviewer === reviewer ? selected.mode : inferred;
+      setCustomPermissionChanged((all) => ({ ...all, [key]: Boolean(saved && actual && actual !== saved) }));
       if (selected && mode !== selected.mode) permissionSelections.current.delete(key);
       setThreadPermissions((all) => ({ ...all, [key]: mode }));
     }).catch(() => undefined);
@@ -398,6 +475,22 @@ export function useLiveCodex() {
         const threadId = text(params.threadId) || text(obj(params.thread).id);
         if (threadId) {
           const key = threadKey(hostId, threadId);
+          const compaction = compactionJobs.current.get(key);
+          if (compaction?.dispatched && compactionBusy(compaction.phase)) {
+            if (['item/started', 'item/completed'].includes(frame.method) &&
+                obj(params.item).type === 'contextCompaction') {
+              const turnId = text(params.turnId), itemId = text(obj(params.item).id);
+              if (turnId && itemId && !compaction.baseline.has(turnId + ':' + itemId)) {
+                compaction.turnId = turnId;
+                setCompactionPhase(key, 'working');
+              }
+            }
+            if (frame.method === 'turn/completed' && compaction.turnId &&
+                text(obj(params.turn).id) === compaction.turnId) {
+              const status = text(obj(params.turn).status);
+              setCompactionPhase(key, status === 'completed' ? 'completed' : 'failed');
+            }
+          }
           if (frame.method === 'thread/tokenUsage/updated') {
             const usage = parseContextWindowUsage(params.tokenUsage);
             if (usage && !waitingForModelTurn.current.has(key))
@@ -434,6 +527,7 @@ export function useLiveCodex() {
             }));
           } else if (frame.method === 'error' || frame.method === 'item/started' || frame.method === 'item/completed' ||
                      frame.method === 'item/agentMessage/delta' || frame.method === 'item/reasoning/summaryTextDelta' ||
+                     frame.method === 'item/reasoning/textDelta' ||
                      frame.method === 'item/plan/delta' || frame.method === 'item/commandExecution/outputDelta') {
             setConversations((all) => all.map((c) => c.hostId === hostId && c.id === threadId
               ? { ...c, messages: applyNotice(c.messages, { method: frame.method!, params }) } : c));
@@ -448,7 +542,8 @@ export function useLiveCodex() {
             } catch { /* Ignore malformed goal event. */ }
           }
           if (frame.method === 'thread/goal/cleared') setGoals((g) => ({ ...g, [key]: null }));
-          if (frame.method === 'turn/completed' && active.current?.hostId === hostId && active.current.threadId === threadId) {
+          if (frame.method === 'turn/completed' && (sideLoadedThreads.current.has(key) ||
+              active.current?.hostId === hostId && active.current.threadId === threadId)) {
             if (refreshTimer.current.has(key)) clearTimeout(refreshTimer.current.get(key));
             refreshTimer.current.set(key, window.setTimeout(() => {
               void readThread(hostId, threadId).catch(() => undefined);
@@ -471,6 +566,8 @@ export function useLiveCodex() {
         if (!alive.current || clients.current.get(hostId) !== client) return;
         client.ready = false;
         setStatus((s) => ({ ...s, [hostId]: 'offline' }));
+        for (const [key, job] of compactionJobs.current)
+          if (key.startsWith(hostId + ':') && compactionBusy(job.phase)) setCompactionPhase(key, 'unknown');
         setConversations((all) => all.map((item) => item.hostId === hostId && item.running
           ? { ...item, syncPending: true } : item));
         if (active.current?.hostId === hostId) setApproval(null);
@@ -502,7 +599,46 @@ export function useLiveCodex() {
       refreshTimer.current.clear();
       pollQueued.current.clear();
     };
-  }, [refresh, refreshGoal, readThread, refreshQueue, request, select, refreshRateQuota]);
+  }, [refresh, refreshGoal, readThread, refreshQueue, request, select, refreshRateQuota, setCompactionPhase]);
+
+  const recheckCompaction = useCallback(async (hostId: HostId, threadId: string) => {
+    const key = threadKey(hostId, threadId), job = compactionJobs.current.get(key);
+    if (!job || job.phase !== 'unknown') return;
+    const native = await request(hostId, 'thread/read', { threadId, includeTurns: true });
+    const snapshot = parseSnapshot(native, threadId);
+    const outcome = compactionOutcome(job, snapshot.messages);
+    if (outcome === 'completed' || outcome === 'failed') setCompactionPhase(key, outcome);
+    else if (!snapshot.running) setCompactionPhase(key, 'unconfirmed');
+    void readThread(hostId, threadId).catch(() => undefined);
+  }, [request, readThread, setCompactionPhase]);
+
+  const compactThread = useCallback(async (hostId: HostId, threadId: string) => {
+    const key = threadKey(hostId, threadId), old = compactionJobs.current.get(key);
+    if (compactionBusy(old?.phase) || startingTurns.current.has(key)) throw Error('THREAD_BUSY');
+    const job: CompactionJob = { phase: 'starting', baseline: new Set() };
+    compactionJobs.current.set(key, job);
+    setCompactionPhase(key, 'starting');
+    let dispatched = false;
+    try {
+      const native = await request(hostId, 'thread/read', { threadId, includeTurns: true });
+      const snapshot = parseSnapshot(native, threadId);
+      if (snapshot.running || !snapshot.messages.length || startingTurns.current.has(key)) throw Error('THREAD_BUSY');
+      job.baseline = new Set(snapshot.messages.filter((m) => m.activityType === 'contextCompaction').map((m) => m.id));
+      if ((await refreshQueue(hostId, threadId)).length || startingTurns.current.has(key)) throw Error('THREAD_BUSY');
+      dispatched = true;
+      job.dispatched = true;
+      job.timer = window.setTimeout(() => {
+        if (compactionBusy(job.phase)) setCompactionPhase(key, 'unknown');
+      }, 120_000);
+      await request(hostId, 'thread/compact/start', { threadId }, 30_000);
+      if (job.phase === 'starting') setCompactionPhase(key, 'working');
+      void readThread(hostId, threadId).catch(() => undefined);
+    } catch (error) {
+      if (job.phase !== 'completed' && job.phase !== 'failed')
+        setCompactionPhase(key, dispatched && (String(error).includes('UNCONFIRMED') || job.phase === 'unknown') ? 'unknown' : 'failed');
+      throw error;
+    }
+  }, [request, refreshQueue, readThread, setCompactionPhase]);
 
   const prepareAttachments = useCallback(async (hostId: HostId, files: File[],
     documents: File[], options: SendOptions) => {
@@ -557,9 +693,15 @@ export function useLiveCodex() {
       if (!['user', 'auto_review', 'guardian_subagent'].includes(text(applied.reviewer))) {
         throw Error('PERMISSION_NOT_CONFIRMED');
       }
+      const actual = obj(await request(hostId, 'thread/resume', { threadId }));
+      const fingerprint = await permissionFingerprint(actual).catch(() => null);
+      if (text(obj(actual.activePermissionProfile).id) !== text(applied.profile) ||
+          text(actual.approvalsReviewer) !== text(applied.reviewer)) throw Error('PERMISSION_NOT_CONFIRMED');
       permissionSelections.current.set(key, {
-        mode, profile: text(applied.profile) || null, reviewer: text(applied.reviewer),
+        mode, profile: text(applied.profile) || null, reviewer: text(applied.reviewer), fingerprint,
       });
+      storeCustomPermission(key, fingerprint);
+      setCustomPermissionChanged((all) => ({ ...all, [key]: false }));
       setThreadPermissions((all) => ({ ...all, [key]: mode }));
       return;
     }
@@ -573,6 +715,8 @@ export function useLiveCodex() {
       mode, profile: text(obj(actual.activePermissionProfile).id) || null,
       reviewer: text(actual.approvalsReviewer) || null,
     });
+    storeCustomPermission(key, null);
+    setCustomPermissionChanged((all) => ({ ...all, [key]: false }));
     setThreadPermissions((all) => ({ ...all, [key]: mode }));
   }, [permissions, request]);
 
@@ -613,6 +757,7 @@ export function useLiveCodex() {
         messageText.length > 12_000 || files.length + documents.length > 4)
       throw Error('TEXT_OR_IMAGE_REQUIRED_OR_TOO_LONG');
     if (status[hostId] !== 'online') throw Error('HOST_OFFLINE');
+    if (existingId && compactionBusy(compactionJobs.current.get(threadKey(hostId, existingId))?.phase)) throw Error('THREAD_BUSY');
     if ((files.length || documents.length) && existingId && options.followUpMode === 'queue')
       throw Error('QUEUE_IMAGES_UNSUPPORTED');
     const perm = options.permissionMode ?? 'default';
@@ -725,6 +870,7 @@ export function useLiveCodex() {
     if (running && !currentThread?.activeTurnId) throw Error('RUNNING_TURN_SYNC_PENDING');
     if (running && (options.plan || options.goal)) throw Error('WAIT_FOR_NEXT_TURN');
     const key = threadKey(hostId, id);
+    if (compactionBusy(compactionJobs.current.get(key)?.phase)) throw Error('THREAD_BUSY');
     if (!running && existingId && options.nextPermission) {
       try {
         await setThreadPermission(hostId, id, options.nextPermission);
@@ -842,8 +988,9 @@ export function useLiveCodex() {
   return {
     prepareAttachments,
     status, errors, rateQuota, refreshRateQuota,
-    projects, conversations, models, permissions, threadPermissions, approval, goals, queues,
-    contextUsages, clearContextUsage,
+    projects, conversations, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
+    contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
+    listSideChats, createSideChat, loadSideChat, readSubAgent,
     request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,
     readAssistantImage, readToolImage,
     send, interrupt, renameThread, moveThread, setThreadPermission, setThreadModel, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,

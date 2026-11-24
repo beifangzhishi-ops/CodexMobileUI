@@ -15,6 +15,25 @@ the portable package name and verify the EXE's ProductVersion and FileVersion.
   **27**. Delete this subsection after the new packages are built, verified, and
   delivered.
 
+## 2026-11-24 Native conversation controls
+
+- [x] Keep native reasoning summary and explicitly returned display text
+  separate, with default-collapsed additional text and no reconstruction.
+- [x] Display native sub-agent activity and verify the parent relationship
+  before opening a read-only child history.
+- [x] Persist the custom permission selection in each client profile and
+  compare the real effective native settings when reopening.
+- [x] Add the graphical compaction action to the existing context popover,
+  with native completion, duplicate prevention and no slash command.
+- [x] Use durable native Side Chat attachment relationships, independent
+  conversation state, and responsive panel navigation.
+- [x] Native disposable-thread verification on 6v/noha: attached context,
+  permission inheritance, isolated turns, active-parent fork on 6v, and
+  native compaction terminal success.
+- [x] Root, Gateway, Web (95 tests) and Desktop checks; headless Chromium
+  controls at 1280 and 390 px, with visual verification of the mobile overlay.
+- [ ] Physical Android installation and touch acceptance remain separate.
+
 ## 2026-11-24 Conversation experience (source)
 
 - [x] Publish only a clicked, exact native assistant Markdown link; opening a

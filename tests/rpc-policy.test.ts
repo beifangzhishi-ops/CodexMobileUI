@@ -64,12 +64,13 @@ test('follow-up RPC allowlist permits only bounded text and owned queue item act
     permitMobileRpcFrame(JSON.stringify({ id: 11, method, params }), false).allowed, false, method);
 });
 
-test('Funnel permits only turn-bounded native thread forks', () => {
+test('Gateway permits bounded native forks and attached side chats without permission overrides', () => {
   const allowed = (params: unknown) => permitMobileRpcFrame(
     JSON.stringify({ id: 22, method: 'thread/fork', params }), false).allowed;
   assert.equal(allowed({
     threadId: 'source-thread', lastTurnId: 'completed-turn', excludeTurns: true,
   }), true);
+  assert.equal(allowed({ threadId: 'source-thread', attachToSource: true, excludeTurns: true }), true);
   for (const params of [
     { threadId: 'source-thread' },
     { threadId: 'source-thread', lastTurnId: 'completed-turn' },
@@ -78,7 +79,22 @@ test('Funnel permits only turn-bounded native thread forks', () => {
       path: 'C:\\arbitrary' },
     { threadId: 'source-thread', lastTurnId: 'completed-turn', excludeTurns: true,
       ephemeral: true },
+    { threadId: 'source-thread', attachToSource: true, excludeTurns: true, lastTurnId: 't' },
+    { threadId: 'source-thread', attachToSource: true, excludeTurns: true, sandbox: 'danger-full-access' },
+    { threadId: 'source-thread', attachToSource: true, excludeTurns: true, developerInstructions: 'override' },
   ]) assert.equal(allowed(params), false);
+});
+
+test('compact and attached-list RPCs permit only explicit bounded native parameters', () => {
+  const allowed = (method: string, params: unknown) => permitMobileRpcFrame(
+    JSON.stringify({ id: 22, method, params }), false).allowed;
+  assert.equal(allowed('thread/compact/start', { threadId: 't' }), true);
+  assert.equal(allowed('thread/compact/start', {}), false);
+  assert.equal(allowed('thread/compact/start', { threadId: 't', model: 'override' }), false);
+  const attached = { attachedToThreadId: 'p', limit: 100, archived: false, sortKey: 'recency_at',
+    modelProviders: [], useStateDbOnly: true };
+  assert.equal(allowed('thread/list', attached), true);
+  assert.equal(allowed('thread/list', { ...attached, parentThreadId: 'other' }), false);
 });
 
 test('Funnel gateway allows only the native RPC methods used by Stage 1 mobile', () => {
