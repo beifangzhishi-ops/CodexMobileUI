@@ -25,6 +25,10 @@ an unconfirmed result.
 This section describes source changes. The next coordinated Android and Windows
 release is tracked in docs/roadmap.md.
 
+## 2026-11-23 Android build troubleshooting
+
+The 0.1.24 Release build for the restored mobile settings/diagnostics UI **succeeded on the subsequent authorized CCM retry**. Initial restricted execution stalled at native Ninja/CMake and failed to remove generated files (`Access denied`) from the separate short-path build checkout. ACL inspection showed CCM sandbox read/execute versus host-user full control. After automatic approval recovered, the existing `scripts/build-android-stable.ps1 -Variant Release -RegenerateCMake` ran with CCM `require_escalated` (without Windows administrator or global ACL changes) and completed Gradle in 8m 23s. The **new** signed ARM64 APK was verified: `.tmp/android-artifacts/CodexMobileUI-0.1.24-release-arm64.apk`, 23,035,150 bytes, SHA-256 `FB837438112765445F081BBF48AD8524C131C52BDA04572160E75C0EDB4E5552`. The file was delivered through CCM publication. Toolchain, logs, safe recovery steps and the exact build outcome are recorded in [`docs/windows-android-toolchain.md`](docs/windows-android-toolchain.md). Phone installation and UI behavior have not yet been verified.
+
 ## Composer and turn errors
 
 The shared new-chat menu shows the selected host and project. The attachment
