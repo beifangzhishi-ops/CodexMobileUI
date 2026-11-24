@@ -9,6 +9,15 @@ the stable builder to sync the generated Gradle metadata. Verify the APK's
 embedded version and version code. For Windows, use the same release version in
 the portable package name and verify the EXE's ProductVersion and FileVersion.
 
+## 2026-11-24 Inline Visualize and project welcome (0.2.1)
+
+- [x] Render native Visualize references inline in the shared Web/desktop/Android UI; retain live controls across message refresh and use cached HTML on reopening without persisting widget state.
+- [x] Show the selected project name on the new-chat welcome screen.
+- [x] Source implementation and browser checks recorded in `0a7ed8d`.
+- [x] Deployed Gateway and Web Coordinator/Agent on both hosts; verified new Web process identities, 43 noha deployment file hashes, private HTTPS and JS HTTP 200, and both Gateway health endpoints. App Servers were not restarted.
+- [x] Built and delivered Android 0.2.1 (versionCode 28, ARM64, embedded JS, v2 test signature) and Windows 0.2.1 x64 portable ZIP (EXE ProductVersion/FileVersion verified).
+- [ ] Physical Android touch/installation acceptance and live native Visualize round-trip on the newly deployed hosts remain separate.
+
 ## 2026-11-24 Native conversation controls
 
 - [x] Keep native reasoning summary and explicitly returned display text
