@@ -150,7 +150,6 @@ export default function DesktopApp() {
   const { conversations, projects } = live;
   const getProjectName = (id: string | null, hostId?: HostId) =>
     projects.find((p) => p.id === id && (!hostId || p.hostId === hostId))?.name ?? null;
-  const [newChatId, setNewChatId] = useState(() => localMessageId());
   const [activeId, setActiveId] = useState<string | null>(null);
   const conversationKey = (hostId: HostId, id: string) => hostId + ':' + id;
   const [newHost, setNewHost] = useState<HostId>('6v');
@@ -326,8 +325,8 @@ export default function DesktopApp() {
     }));
   }, [currentHost, currentQuota]);
   const currentProject = active?.project ?? newProject;
-  const draftKey = active ? 'thread:' + conversationKey(active.hostId, active.id) :
-    'new:' + newChatId;
+  // The unsent new-thread draft belongs to the composer, not a transient chat ID.
+  const draftKey = active ? 'thread:' + conversationKey(active.hostId, active.id) : 'new:draft';
   const navigationKey = useRef(draftKey);
   navigationKey.current = draftKey;
   const draft = drafts[draftKey] ?? '';
@@ -853,9 +852,11 @@ export default function DesktopApp() {
   }
 
   function createNewChat(host = newHost, project: string | null = null) {
-    const id = localMessageId();
-    navigationKey.current = 'new:' + id;
-    setNewChatId(id);
+    // Navigating away from an existing chat should not erase the text the user typed.
+    if (active && draft.trim()) {
+      setDrafts((items) => ({ ...items, 'new:draft': draft }));
+    }
+    navigationKey.current = 'new:draft';
     setNewHost(host); setNewProject(project); setActiveId(null); setView('chat');
     clearImages(); setPopup(null); setGoal(''); setPlan(false); closeOnMobile();
     window.setTimeout(() => composeRef.current?.focus(), 0);

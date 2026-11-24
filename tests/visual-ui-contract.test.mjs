@@ -20,6 +20,13 @@ test('conversation context and native-history refresh stay above the scrolling m
   assert.match(uiStyle, /\.message-scroller\s*\{[^}]*overflow-y:\s*auto/);
 });
 
+test('new-chat draft survives host/project navigation without rotating transient IDs', () => {
+  assert.match(webApp, /const draftKey = active \? 'thread:'[\s\S]+? : 'new:draft';/);
+  assert.match(webApp, /navigationKey\.current = 'new:draft'/);
+  assert.doesNotMatch(webApp, /setNewChatId|setNewChatId\(/);
+  assert.match(webApp, /'new:draft': draft/);
+});
+
 test('one React UI owns conversations on browser, Android and future desktop', () => {
   assert.match(app, /<WebView<WebViewProps>/);
   assert.match(app, /unifiedWebUrl\(coordinator\)/);
