@@ -104,6 +104,23 @@ BOOT_COMPLETED receiver. Verify actual notification delivery on a physical
 Android device after installing a release APK; source-level checks do not
 prove device-specific background behavior.
 
+## 2026-11-24 DS namespaced model compatibility (6v Web deployed)
+
+- The native `model/list` catalog identifies DeepSeek as `ds/deepseek-flash`
+  (efforts: `low`, `high`, `max`; default: `high`). The Web Bridge used to reject
+  `/` in model IDs before forwarding `web/start`, `turn/start`, model settings,
+  or Plan mode. Model identifiers now accept bounded provider/model namespaces,
+  reject empty or traversal segments, and still require native catalog validation.
+  The native Gateway policy uses the same bounded model-id shape.
+- The 6v Web Coordinator was restarted via its existing Windows scheduled task;
+  the old live rejection `RPC_NOT_ALLOWED` no longer occurs for this model.
+  A real DS/high new thread and first `turn/start` were acknowledged by the
+  dedicated App Server; the test run was interrupted at a native approval wait,
+  then the test thread was deleted. No completed model answer was asserted.
+  Web checks and production Vite build plus root checks and Gateway compilation
+  passed. No Android APK or desktop EXE was built. The noha host-only Web Agent
+  remains on its separately deployed code and was not restarted in this fix.
+
 ## 2026-11-23 Mobile sidebar pull-to-refresh
 
 The shared responsive sidebar supports a downward pull from the top of its

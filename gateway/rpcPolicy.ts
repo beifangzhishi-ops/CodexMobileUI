@@ -6,6 +6,13 @@
  */
 import { isManagedImagePath } from './attachments.js';
 
+/** Native model/list identifiers can contain a provider namespace. */
+function validNativeModelId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 80 &&
+    /^[\w.-]+(?:\/[\w.-]+)*$/.test(value) &&
+    !value.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
 /** Catalog discovery is read-only. Keep privileged / unknown native operations private. */
 function catalogRequest(method: string, params: unknown): boolean {
   // Query family, not an RPC-method allowlist: new catalog reads do not need
@@ -238,7 +245,7 @@ function safeParams(method: string, value: unknown): boolean {
         'collaborationMode', 'permissions', 'approvalsReviewer'])) return false;
       if (p.threadId === undefined && p.input === undefined && keys.length === 0) return true;
       return id('threadId') && boundedTurnInput(p.input) &&
-        (p.model === undefined || typeof p.model === 'string' && /^[\w.-]{1,80}$/.test(p.model)) &&
+        (p.model === undefined || validNativeModelId(p.model)) &&
         (p.effort === undefined || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(String(p.effort))) &&
         (p.serviceTierForTurn === undefined || ['default', 'fast'].includes(String(p.serviceTierForTurn))) &&
         (p.permissions === undefined ||
@@ -256,7 +263,7 @@ function safeParams(method: string, value: unknown): boolean {
           const s = m.settings as Record<string, unknown>;
           return Object.keys(s).length === 3 &&
             ['model', 'reasoning_effort', 'developer_instructions'].every((key) => key in s) &&
-            typeof s.model === 'string' && /^[\w.-]{1,80}$/.test(s.model) &&
+            validNativeModelId(s.model) &&
             s.model === p.model && s.developer_instructions === null &&
             (s.reasoning_effort === null || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
               .includes(String(s.reasoning_effort))) &&

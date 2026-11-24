@@ -13,6 +13,7 @@ import { PathSettingsStore } from './pathSettings.mjs';
 import { PathOverlayStore } from './pathOverlays.mjs';
 import { respondLocalIdentity } from './localIdentity.mjs';
 import { NotificationFeed, watchNativeCompletions } from './notificationFeed.mjs';
+import { validModelIdentifier } from './modelIdentifier.mjs';
 import {
   ISOLATED_MARKUP_CSP, parsePublicationRange, streamPublicationRange,
 } from './publicationPreview.mjs';
@@ -468,7 +469,7 @@ function validCollaborationMode(mode, model) {
   const settings = mode.settings;
   return settings && typeof settings === 'object' &&
     subset(settings, ['model','reasoning_effort','developer_instructions']) &&
-    typeof settings.model === 'string' && /^[\w.-]{1,80}$/.test(settings.model) &&
+    validModelIdentifier(settings.model) &&
     settings.model === model &&
     (settings.reasoning_effort === null ||
       ['minimal','low','medium','high','xhigh','max','ultra'].includes(settings.reasoning_effort)) &&
@@ -595,7 +596,7 @@ function allowedFrame(msg) {
   if (msg.method === 'turn/start') return subset(p, ['threadId','input','model','effort',
     'permissions','approvalsReviewer','collaborationMode']) &&
     validId(p.threadId) && validTextInput(p.input, true) &&
-    (p.model === undefined || typeof p.model === 'string' && /^[\w.-]{1,80}$/.test(p.model)) &&
+    (p.model === undefined || validModelIdentifier(p.model)) &&
     (p.effort === undefined || ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(p.effort)) &&
     validPermissions(Object.fromEntries(Object.entries(p).filter(([key]) => ['permissions','approvalsReviewer'].includes(key)))) &&
     validCollaborationMode(p.collaborationMode, p.model);
