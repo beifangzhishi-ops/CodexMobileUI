@@ -1,5 +1,16 @@
 # CodexMobileUI
 
+## Inline Visualize and new project chats
+
+The shared chat renders official Visualize references inline when the referenced
+HTML is available on the computer that generated it. The private Coordinator
+retrieves the component by native thread, message and reference index. The
+client caches the HTML and runs it in an isolated frame. Reopening the
+conversation starts each control at its original value. Android needs a shell
+build that restricts native WebView messages to the top frame.
+
+The new-chat screen shows the selected project's name before the first message.
+
 ## 2026-11-24 Native conversation controls
 
 The shared chat UI separates native reasoning summaries from explicitly

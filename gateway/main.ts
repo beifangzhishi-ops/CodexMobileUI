@@ -18,6 +18,7 @@ import { HostFileError, readHostFile, writeHostFile } from './hostFiles.js';
 import { SchedulerService } from './schedulerService.js';
 import { SidebarPinsStore } from './sidebarPins.js';
 import { readNativeToolImage, type VerifiedToolImage } from './toolImages.js';
+import { readVisualize } from './visualize.js';
 import {
   classifyGatewayClient, classifyGatewayRoute, createGatewayJournal,
   type GatewayTrace,
@@ -380,12 +381,26 @@ export function createGateway(config: Config) {
             }
           } catch { /* Unrelated or malformed frames use the existing strict policy. */ }
         }
-        // Only imageView items in a native thread permit tool-image reads.
+        // Preview assets must be selected from an existing native item.
         if (!binary) {
           try {
             const request = JSON.parse(bytes.toString()) as {
               id?: unknown; method?: string; params?: unknown;
             };
+            if (request.method === 'workspace/visualize/read') {
+              const id = request.id;
+              if (!Number.isSafeInteger(id) || Number(id) < 0 || Number(id) >= 1_000_000_000) return;
+              void readVisualize(request.params, requestInternal)
+                .then((result) => {
+                  if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ id, result }));
+                })
+                .catch(() => {
+                  if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({
+                    id, error: { code: -32602, message: 'VISUALIZE_UNAVAILABLE' },
+                  }));
+                });
+              return;
+            }
             if (request.method === 'workspace/toolImage/read') {
               const id = request.id;
               if (!Number.isSafeInteger(id) || Number(id) < 0 || Number(id) >= 1_000_000_000) return;

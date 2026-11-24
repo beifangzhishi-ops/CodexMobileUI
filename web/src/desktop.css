@@ -175,7 +175,8 @@ button:hover { transition: background-color 100ms; }
 .preview-dot.connecting { background: #deb76a; animation: pulse 1400ms ease-in-out infinite; }
 .chat-region { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-region.is-landing .landing-heading { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 35px 20px 38px; }
-.landing-heading h1 { margin: 0; font-size: clamp(24px,2.5vw,31px); letter-spacing: -.65px; font-weight: 600; }
+.landing-heading h1 { margin: 0; max-width: 100%; text-align: center; overflow-wrap: anywhere; font-size: clamp(24px,2.5vw,31px); letter-spacing: -.65px; font-weight: 600; }
+.landing-project-name { text-decoration: underline dotted var(--dim); text-underline-offset: .22em; }
 .landing-heading p { color: var(--dim); margin: 11px 0 0; font-size: 13px; }
 .chat-region.is-landing .composer-zone { padding-bottom: min(24vh,185px); }
 .message-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -231,6 +232,9 @@ button:hover { transition: background-color 100ms; }
 .assistant-image-reference .history-image img { max-width: min(380px, 72vw); max-height: 310px; object-fit: contain; }
 .assistant-image-path { max-width: min(400px, 75vw); color: var(--muted); font-size: 11px; overflow-wrap: anywhere; white-space: normal; text-align: left; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
 .assistant-image-path:hover { color: var(--text); }
+.visualize-frame { display: block; width: min(100%, 736px); border: 0; margin-block: .65em; }
+.visualize-frame.visualize-wide { width: 100%; }
+.visualize-status { color: var(--dim); }
 .chat-file-tile { display: flex; align-items: center; gap: 9px; max-width: 100%; min-width: 0; text-align: left; padding: 8px 10px; border-radius: 11px; background: var(--surface); margin-top: 8px; }
 .chat-file-tile span { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .chat-file-tile svg { flex: none; }

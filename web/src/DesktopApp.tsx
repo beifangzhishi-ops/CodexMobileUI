@@ -332,6 +332,7 @@ export default function DesktopApp() {
     }));
   }, [currentHost, currentQuota]);
   const currentProject = active?.project ?? newProject;
+  const landingProjectName = !active ? getProjectName(newProject, currentHost) : undefined;
   // The unsent new-thread draft belongs to the composer, not a transient chat ID.
   const draftKey = active ? 'thread:' + conversationKey(active.hostId, active.id) : 'new:draft';
   const navigationKey = useRef(draftKey);
@@ -1850,7 +1851,11 @@ export default function DesktopApp() {
             </button>}
           </div> : visibleLocalSubmissions.length > 0
              ? <div className="messages-wrap pending-first-message">{visibleLocalSubmissions.map(renderOptimisticSubmission)}</div>
-             : <div className="landing-heading"><h1>有什么可以帮忙的？</h1><p>在 {currentHost} 上开始新的 Codex 会话</p></div>}
+             : <div className="landing-heading">
+               <h1>{landingProjectName ? <>在 <span className="landing-project-name">{landingProjectName}</span> 中开始新对话</>
+                 : '有什么可以帮忙的？'}</h1>
+               <p>{landingProjectName ? currentHost : <>在 {currentHost} 上开始新的 Codex 会话</>}</p>
+             </div>}
           <div className="composer-zone"><div className="composer-shell">
             {active && <div className="composer-followup">
               <span>{live.status[currentHost] === 'online' ? '已连接 ' + currentHost : '电脑离线 · 请刷新核对'}</span>

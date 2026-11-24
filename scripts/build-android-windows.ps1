@@ -129,6 +129,8 @@ try {
 $androidRoot = Join-Path $projectRoot 'android'
 & node.exe (Join-Path $projectRoot 'scripts\configure-android-photo-picker.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the Android WebView photo picker.' }
+& node.exe (Join-Path $projectRoot 'scripts\restrict-android-webview-bridge.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to restrict the Android WebView bridge.' }
 if ($RegenerateCMake) {
     # Reset ONLY generated app-side native build state when switching away
     # from SDK CMake 3.22.1/Ninja 1.10.2. Never delete source or the SDK.

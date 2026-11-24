@@ -132,7 +132,8 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
                 agentThreadId={message.agentThreadId} read={live.readSubAgent}/>}
             </div>
           </details> : message.role === 'user' ? <div className="user-bubble">{message.content}</div> :
-            <MessageMarkdown text={message.content}/>}
+            <MessageMarkdown text={message.content} hostId={hostId} threadId={side?.id}
+              itemId={message.id.slice(message.id.indexOf(':') + 1)} imageReady={message.complete !== false}/>}
       </article>)}
       {side?.running && <p className="side-status"><span className="activity-spinner"/>旁路任务运行中</p>}
     </div>

@@ -17,6 +17,7 @@ import { validModelIdentifier } from './modelIdentifier.mjs';
 import {
   ISOLATED_MARKUP_CSP, parsePublicationRange, streamPublicationRange,
 } from './publicationPreview.mjs';
+import { VISUALIZE_FRAME_CSP, VISUALIZE_FRAME_VERSION, visualizeFrame } from './visualizeFrame.mjs';
 
 // This file is copied unchanged to noha's host-only bundle for agent mode.
 // Neither endpoint ever listens on a non-loopback interface.
@@ -39,6 +40,8 @@ const { ScheduleTaskCalls, scheduleTaskTool, listScheduleModelsTool } =
 const {
   PUBLICATION_TEXT_PREVIEW_BYTES, isValidPublicationId, safePublicationFileName,
 } = await import(pathToFileURL(resolve('dist/shared/publicationProtocol.js')).href);
+const { MAX_VISUALIZE_BYTES, validVisualizeSelection } =
+  await import(pathToFileURL(resolve('dist/shared/visualizeReferences.js')).href);
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
   : { SidebarPinsStore: null };
@@ -80,7 +83,7 @@ async function requestLocalGateway(method, params) {
       handshakeTimeout: 10000, perMessageDeflate: false,
     });
     let settled = false;
-    const needsNativeRead = method === 'workspace/publication/publish';
+    const needsNativeRead = ['workspace/publication/publish', 'workspace/visualize/read'].includes(method);
     let phase = 'connecting';
     const finish = (error, result) => {
       if (settled) return;
@@ -161,7 +164,9 @@ function openGatewaySession(hostId) {
       }
     };
     const timer = setTimeout(() => fail(Error('GATEWAY_TIMEOUT')), 15000);
-    ws.on('open', () => ws.send(JSON.stringify({ type: 'connect' })));
+    // A Web Agent sends ready once its native socket is open. Only the
+    // Gateway transport expects a connect frame before sending ready.
+    if (!remote) ws.on('open', () => ws.send(JSON.stringify({ type: 'connect' })));
     ws.on('message', (frame, binary) => {
       if (binary) return;
       let data;
@@ -259,6 +264,51 @@ const server = http.createServer((req, res) => {
   }
   const requestUrl = new URL(req.url ?? '/', 'http://localhost');
   const name = requestUrl.pathname;
+  if (name === '/api/visualize' && req.method === 'GET') {
+    const hostId = requestUrl.searchParams.get('host');
+    const selection = {
+      threadId: requestUrl.searchParams.get('thread'),
+      itemId: requestUrl.searchParams.get('item'),
+      index: Number(requestUrl.searchParams.get('index')),
+    };
+    if (!['6v', 'noha'].includes(hostId) || requestUrl.searchParams.size !== 4 ||
+        !/^[0-7]$/.test(requestUrl.searchParams.get('index') ?? '') ||
+        !validVisualizeSelection(selection)) {
+      res.writeHead(400); res.end(); return;
+    }
+    void (async () => {
+      let session;
+      res.setHeader('Content-Security-Policy', VISUALIZE_FRAME_CSP);
+      res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      try {
+        const known = new RegExp('^"v' + VISUALIZE_FRAME_VERSION + '-([a-f0-9]{64})"$')
+          .exec(typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'] : '');
+        const params = known ? { ...selection, etag: '"' + known[1] + '"' } : selection;
+        if (hostId === 'noha') session = await openGatewaySession(hostId);
+        const method = 'workspace/visualize/read';
+        const result = await (session ? session.request(method, params) : requestLocalGateway(method, params));
+        if (!/^"[a-f0-9]{64}"$/.test(result?.etag)) throw Error('VISUALIZE_UNAVAILABLE');
+        const etag = '"v' + VISUALIZE_FRAME_VERSION + '-' + result.etag.slice(1);
+        if (known && etag === known[0]) {
+          res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, max-age=300' });
+          res.end(); return;
+        }
+        if (typeof result.data !== 'string' || result.data.length > Math.ceil(MAX_VISUALIZE_BYTES / 3) * 4) {
+          throw Error('VISUALIZE_UNAVAILABLE');
+        }
+        const bytes = Buffer.from(result.data, 'base64');
+        if (!bytes.length || bytes.length >= MAX_VISUALIZE_BYTES) throw Error('VISUALIZE_UNAVAILABLE');
+        const html = visualizeFrame(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        res.writeHead(200, { ETag: etag, 'Cache-Control': 'private, max-age=300' });
+        res.end(html);
+      } catch {
+        res.writeHead(404);
+        res.end(visualizeFrame('<p role="status">互动组件暂时无法打开。</p>'));
+      } finally { session?.close(); }
+    })();
+    return;
+  }
   if (name === '/api/publication' && ['GET', 'HEAD'].includes(req.method ?? '')) {
     void (async () => {
       const hostId = requestUrl.searchParams.get('host');
@@ -521,8 +571,9 @@ function allowedFrame(msg) {
       ['AGENTS.md', 'AGENTS.override.md', 'config.toml'].includes(f.filename);
   }
   if (msg.method === 'web/publication') {
-    if (!subset(p, ['method','params']) || Object.keys(p).length !== 2 ||
-        !['workspace/publication/list','workspace/publication/publish',
+    if (!subset(p, ['method','params']) || Object.keys(p).length !== 2) return false;
+    if (p.method === 'workspace/visualize/read') return !coordinator && validVisualizeSelection(p.params);
+    if (!['workspace/publication/list','workspace/publication/publish',
           'workspace/publication/stat','workspace/publication/read'].includes(p.method) ||
         !p.params || typeof p.params !== 'object' || Array.isArray(p.params)) return false;
     const f = p.params;

@@ -20,3 +20,4 @@ import './gateway.test';
 import './scheduler.test';
 import './sidebar-pins.test';
 import './tool-images.test';
+import './visualize.test';

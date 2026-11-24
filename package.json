@@ -5,7 +5,7 @@
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "dev": "expo start --dev-client --localhost",
-    "preandroid": "node scripts/configure-android-photo-picker.mjs",
+    "preandroid": "node scripts/configure-android-photo-picker.mjs && node scripts/restrict-android-webview-bridge.mjs",
     "android": "expo run:android",
     "gateway": "node dist/gateway/main.js",
     "build:gateway": "tsc -p tsconfig.gateway-build.json",

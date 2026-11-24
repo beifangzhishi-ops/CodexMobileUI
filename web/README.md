@@ -48,6 +48,7 @@ CCM publish 发布，不再上传夸克。手机实际拍照、文件选择和�
 - `web/server/bridge.mjs` → `scripts/web-bridge.mjs`
 - `web/server/imageStore.mjs` → `scripts/imageStore.mjs`
 - `web/server/assistantImageRefs.mjs` → `scripts/assistantImageRefs.mjs`
+- `web/server/visualizeFrame.mjs` → `scripts/visualizeFrame.mjs`
 - `web/server/securityPolicy.mjs` → `scripts/securityPolicy.mjs`
 - `web/server/attachmentProtocol.mjs` → `scripts/attachmentProtocol.mjs`
 
