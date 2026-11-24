@@ -8,6 +8,10 @@ retrieves the component by native thread, message and reference index. The
 client caches the HTML and runs it in an isolated frame. Reopening the
 conversation starts each control at its original value. Android needs a shell
 build that restricts native WebView messages to the top frame.
+Android 0.2.2 refreshes the Visualize capability marker after every completed
+document load, even without a custom JavaScript injection prop, so navigation
+does not lose the marker set during native bridge creation. Legacy WebViews
+without the frame-aware native messaging feature remain unsupported.
 
 The new-chat screen shows the selected project's name before the first message.
 

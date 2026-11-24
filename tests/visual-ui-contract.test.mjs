@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { patchWebViewBridge } from '../scripts/restrict-android-webview-bridge.mjs';
 
 const read = (path) => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 const app = read('App.tsx');
@@ -10,6 +11,23 @@ const client = read('web/src/useLiveCodex.ts');
 const bridge = read('web/server/bridge.mjs');
 const config = JSON.parse(read('app.json'));
 const packageFile = JSON.parse(read('package.json'));
+
+test('Android advertises Visualize after each main document load without an injectedJS prop', () => {
+  const dir = 'node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/';
+  const installed = read(dir + 'RNCWebView.java');
+  const client = read(dir + 'RNCWebViewClient.java');
+  const patched = patchWebViewBridge(installed);
+  assert.equal(patchWebViewBridge(patched), patched, 'incremental build patch is idempotent');
+  assert.match(client, /public void onPageFinished\([\s\S]+?reactWebView\.callInjectedJavaScript\(\);/);
+  assert.match(patched, /public void callInjectedJavaScript\(\)\s*\{\s*if\s*\([\s\S]+?evaluateJavascriptWithFallback\([^\r\n]+\);\s*\}\s*injectJavascriptObject\(\); \/\/ CodexMobileUI: advertise capability on every completed page\.\s*\}/);
+  assert.match(patched, /if \(!isMainFrame\) return;[^\r\n]*\s+RNCWebView\.this\.onMessage/);
+  assert.match(patched, /if \(messagingEnabled && WebViewFeature\.isFeatureSupported\(WebViewFeature\.WEB_MESSAGE_LISTENER\)\) \{\s*evaluateJavascriptWithFallback\("window\.codexMobileVisualizeReady=true;/);
+  const previous = patched.replace(/        injectJavascriptObject\(\); \/\/ CodexMobileUI: advertise capability on every completed page\.\r?\n/, '')
+    .replace(/(evaluateJavascriptWithFallback\([^\r\n]+\);)(\r?\n)(        \}\r?\n    \}\r?\n\r?\n    public void callInjectedJavaScriptBeforeContentLoaded)/,
+      '$1$2            injectJavascriptObject(); // re-inject the Javascript object in case it has been overwritten.$2$3');
+  assert.notEqual(previous, patched);
+  assert.equal(patchWebViewBridge(previous), patched, 'migrates the 0.2.1 native patch');
+});
 
 test('conversation context and native-history refresh stay above the scrolling messages', () => {
   const context = webApp.indexOf('<div className="chat-context">');
