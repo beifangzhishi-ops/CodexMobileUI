@@ -235,6 +235,12 @@ hosts' Gateway/Web services are now running the newly compiled code.
 `4190` 网页入口与 `48889` 手机版入口的区别及故障案例见
 [手机 FlClash 内置 Tailscale 推荐配置](docs/mobile-flclash-tailscale.md)。
 
+## 电脑/手机 FlClash 配置差异（2026-11-23 实测）
+
+- **Windows 电脑：** 使用已安装的独立 Tailscale 客户端；FlClash 内为当前 Tailnet 域名设置 `DNS → Nameserver Policy`，将 `+.tail7c23f0.ts.net` 指向 `100.100.100.100`。用户确认 DNS 方案解决了 HTTPS `4190` 访问问题；仅有 `DIRECT` 规则此前仍会 TLS 超时。步骤、验证和避免系统代理改动的注意事项见 [电脑 FlClash + Tailscale DNS 配置](docs/desktop-flclash-tailnet.md)。
+- **Android 手机：** 在支持的 FlClash/Mihomo 内核中，通过订阅脚本增加 `type: tailscale` 出站及路由规则，并保留原有 Fake-IP 过滤项。**手机脚本不可直接复制到当前 Windows FlClash**：用户实际尝试会报「不支持的代理」。见 [手机脚本与已验证的过滤合并方法](docs/mobile-flclash-tailscale.md)。
+- 当前 Web Coordinator 使用私有 HTTPS `https://cpa-node.tail7c23f0.ts.net:4190/`；这不等同于旧 APK 的 HTTP `48889` Gateway 入口。此次记录仅修改文档，不修改 Windows 系统代理、环境变量、FlClash 配置或部署。
+
 ## 2026-11-20 mobile Tailnet cutover (Gateway deployed, Android APK not built)
 
 - Mobile uses one coordinator address, `http://100.76.74.124:48889`,

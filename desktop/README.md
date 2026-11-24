@@ -21,6 +21,7 @@ npm.cmd --prefix desktop run package:win
 ## 连接与文件
 
 - 默认 Coordinator 使用 Tailnet 私有 HTTPS 的 4190 端口。已安装的桌面端可在「文件 → 连接设置」中填写新地址。
+- 如果开着 Windows FlClash 后 HTTPS 4190 无法访问，而系统 Tailscale 已正常连接，请参考 [独立 Tailscale + FlClash DNS 设置](../docs/desktop-flclash-tailnet.md)。不要复制手机的 `type: tailscale` 出站脚本；当前桌面版实测报「不支持的代理」。
 - 从文件菜单打开 **连接设置**：选择当前电脑 6v / noha，配置各自私有 IP 和可选的 C 盘共享名。这些客户端首选项仅存在当前 Windows 用户的 Electron `userData/desktop-settings.json`，**不写入 Codex Home**。
 - 助手显式本地链接可尝试在 Windows 资源管理器中定位；当前机器用原始盘符路径，另一台机器先试 `\\IP\C$` / `\\IP\D$` 等管理共享，C 盘另试用户配置的 `\\IP\共享名`。仅在文件实际存在且可访问时定位。不能访问时显示错误，不假装成功、不下载文件伪装为本地路径。**不同共享根的实际映射需在真机测试，不能仅凭 IP 推定**。
 - 原始路径仍可复制；助手发布的文件可单独使用 **下载**，Windows 原生“另存为”保存。不暴露任意路径文件读取接口，也不自动执行本地 EXE 或脚本。
