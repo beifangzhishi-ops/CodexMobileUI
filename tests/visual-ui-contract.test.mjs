@@ -27,6 +27,15 @@ test('new-chat draft survives host/project navigation without rotating transient
   assert.match(webApp, /'new:draft': draft/);
 });
 
+test('native model is per-thread and new threads prewarm the chosen model', () => {
+  assert.match(webApp, /active\?\.model/);
+  assert.match(client, /thread\/settings\/update/);
+  assert.match(client, /modelUpdates\.current\.get\(key\)/);
+  assert.match(client, /web\/start'[\s\S]*?model: nativeModel\.id/);
+  assert.match(bridge, /model_reasoning_effort: request\.params\.effort/);
+  assert.match(bridge, /MODEL_UPDATE_REJECTED/);
+});
+
 test('Android diagnostics and mobile settings remain accessible and scrollable', () => {
   const settings = read('web/src/SettingsView.tsx');
   assert.match(app, /<DiagnosticsPanel visible=\{diagnosticsOpen\}/);
@@ -35,15 +44,6 @@ test('Android diagnostics and mobile settings remain accessible and scrollable',
   assert.match(uiStyle, /\.modal-backdrop\.settings-backdrop\s*\{[^}]*align-items: center/);
   assert.match(uiStyle, /\.shared-settings > \*\s*\{\s*flex-shrink: 0/);
   assert.match(uiStyle, /\.shared-settings\s*\{[^}]*overflow-y: auto/);
-});
-
-test('native model is per-thread and new threads prewarm the chosen model', () => {
-  assert.match(webApp, /active\?\.model/);
-  assert.match(client, /thread\/settings\/update/);
-  assert.match(client, /modelUpdates\.current\.get\(key\)/);
-  assert.match(client, /web\/start'[\s\S]*?model: nativeModel\.id/);
-  assert.match(bridge, /model_reasoning_effort: request\.params\.effort/);
-  assert.match(bridge, /MODEL_UPDATE_REJECTED/);
 });
 
 test('one React UI owns conversations on browser, Android and future desktop', () => {
