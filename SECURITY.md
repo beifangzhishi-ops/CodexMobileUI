@@ -1,5 +1,15 @@
 # Security
 
+## Current deployment
+
+The shared Web, Android and Electron clients connect to a self-hosted Coordinator over a private Tailnet. Keep the Coordinator, peer Agent, Gateway and Codex App Server on their intended private/loopback interfaces and restrict access to trusted devices. Do not expose the Coordinator using a public reverse proxy or Tailscale Funnel. Access to the private client may permit actions with the host's Codex permissions; network membership is therefore a meaningful trust boundary.
+
+Keep actual credentials and signing keys out of Git. Use per-host local configuration, generate unique secrets, and never reuse example values. The repository's public source, license and maintenance notes do not grant access to any running instance. Do not treat private host examples in the development history as your deployment configuration.
+
+## Historical OAuth gateway notes
+
+The following describes the earlier mobile OAuth/Funnel design. It is retained for reference, not as the recommended current deployment topology.
+
 This repository has **no public account registration** and no hosted access service. It is intended for self-hosted personal use, but all source should be safe to publish.
 
 Do not place real host names or Funnel URLs, OAuth approval secrets, refresh tokens, access tokens, Code/Codex/CMP credentials, Android signing keys, device backups, private transcripts or Windows file paths into commits or issue reports.

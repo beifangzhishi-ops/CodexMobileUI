@@ -1,5 +1,46 @@
 # CodexMobileUI
 
+An unofficial, self-hosted client for the Codex App Server on Windows, Android and the web. It shares one React chat interface across all three clients and uses each host's existing Codex projects, conversations and model access.
+
+## Overview
+
+- Multi-host connection through a private Tailscale network, with native Codex conversations and project management.
+- Streaming messages, tool activity, model selection, permissions, approvals, goals, side chats and context compaction.
+- File and image attachments, private file previews, inline Visualize components, notifications and quota indicators.
+- Android WebView and Windows Electron shells reuse the shared web interface.
+
+## Getting started
+
+This is a source repository, not a hosted Codex service. You need your own Windows host, a compatible Codex App Server, your own Codex authentication and a private network. The Android and desktop clients connect to a Coordinator you operate yourself; do not expose it to the public internet.
+
+| Area | Documentation |
+| --- | --- |
+| Host and private network architecture | [Architecture](docs/architecture.md), [Web Coordinator](web/README.md), [host setup](docs/mobile-host.md) |
+| Windows desktop client | [Desktop setup](desktop/README.md) |
+| Android build | [Windows Android toolchain](docs/windows-android-toolchain.md) |
+| Tailscale and FlClash | [Android](docs/mobile-flclash-tailscale.md), [Windows](docs/desktop-flclash-tailnet.md) |
+| Development progress and release verification | [Roadmap](docs/roadmap.md) |
+| Security and deployment boundaries | [Security](SECURITY.md) |
+
+Development uses Node.js and npm. From the repository root, install the dependencies for the relevant package, then use the existing package scripts. For example, the web checks and build are:
+
+```powershell
+npm.cmd --prefix web ci
+npm.cmd --prefix web run check
+npm.cmd --prefix web run test
+npm.cmd --prefix web run build
+```
+
+The root package also provides gateway builds, type checks and offline tests. See the linked setup documents for host-specific configuration. The maintenance notes below include the original developer's example topology and historical workflows; substitute your own hosts, paths and network settings. Older entries may describe superseded behavior.
+
+## License
+
+[MIT](LICENSE). This project is not an official OpenAI client and is not affiliated with OpenAI.
+
+---
+
+## Development and maintenance history
+
 ## Inline Visualize and new project chats
 
 The shared chat renders official Visualize references inline when the referenced
