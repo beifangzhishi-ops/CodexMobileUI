@@ -74,10 +74,12 @@ move, overwrite or delete its contents.
 - Verified immutable runtime copy: `<checkout>\.runtime\mobile\<sha256-fingerprint>\`.
 - Private persistent `CODEX_HOME`: `%LOCALAPPDATA%\CodexMobileUI\CodexHome`. The default Windows `%USERPROFILE%\.codex` is not read or altered. No session, project, login, configuration or writer-lock import is performed.
 - MobileUI App Server: `ws://127.0.0.1:45891` (native WebSocket + local `/readyz`). It has a private PID and startup mutex.
-- Authenticated Gateway: `http://127.0.0.1:48888` (OAuth PKCE + WSS) with a fixed upstream of `ws://127.0.0.1:45891`.
-- Gateway process owner: Windows Task Scheduler, per-user task `CodexMobileUI Gateway`, interactive token and **Limited** (not administrator) run level. At-logon auto-start and on-demand launch use the same task; an ordinary `Start-Process` launched by CCM would inherit its restricted token.
+- Private Tailnet Gateway: explicitly bound to `127.0.0.1:48889` and the
+  single configured local Tailscale IPv4 at `48889`, with a fixed upstream of
+  `ws://127.0.0.1:45891`. The retired public 48888/OAuth path must remain closed.
+- Process owner: two per-user Windows Task Scheduler tasks, each with an interactive token and **Limited** (not administrator) run level. `CodexMobileUI Gateway` is on-demand only and retains the validated `gateway-only.ps1 -Action task-run` action. `CodexMobileUI Startup` has the sole user-logon trigger and runs `mobile-launcher.ps1 -Action logon`: start and verify the isolated App Server, wait up to 120 seconds for exactly one configured local Tailscale IPv4, then start and verify the Gateway. The Startup task can retry through Task Scheduler after one minute, up to three times. There is no periodic trigger or watchdog. An ordinary `Start-Process` launched by CCM would inherit its restricted token.
 - Uploaded camera/gallery/document attachments: `<checkout>\.state\mobile-uploads\` (Git-ignored, Gateway-writable). Do not put them under the independent App Server `CODEX_HOME`: the workspace-scoped Gateway may not have write access there. Each file is named by the Gateway, with an 8 MiB limit and restricted extensions. The Gateway and its App Server use the same host paths to reference the completed files. New `workspace/attachmentRead` uses the same authenticated WSS session, bounded 64 KiB chunks, exact managed-directory/filename checks and non-symlink file checks; there is no generic path read. A Gateway rebuild and controlled restart are required to deploy this method, separately from Android APK builds.
-- Public routing, when already explicitly authorized: Tailscale Funnel HTTPS 8443 -> loopback Gateway 48888. The native backend is never public.
+- The Gateway and native backend have no public listener.
 
 These paths and identities are intentionally independent of the developer's everyday Desktop sessions. The two products can run at the same time, but they do not automatically share conversations, projects or login state. Reusing a project working directory can still cause ordinary concurrent filesystem edits: `CODEX_HOME` isolation is not a file sandbox.
 
@@ -90,20 +92,27 @@ These paths and identities are intentionally independent of the developer's ever
 - `scripts/mobile-app-server.ps1 -Action status`: backend identity, readiness and data-home location.
 - `scripts/gateway-only.ps1 -Action status`: Gateway ownership and HTTP health.
 - `npm.cmd run build:gateway`: compile Gateway from this checkout before starting it.
-- `scripts/install-gateway-task.ps1`: run once per host from a normal Windows PowerShell session, or by CCM with approved sandbox escalation, to register the least-privilege task. The existing task is left intact if it matches this checkout; mismatched tasks are not overwritten. `scripts/gateway-only.ps1 -Action start` starts this task; `-Action task-run` is reserved for the Task Scheduler action.
+- `scripts/install-gateway-task.ps1`: run once per host from a normal Windows PowerShell session, or by CCM with approved sandbox escalation, to install or migrate both least-privilege tasks. It validates both task names before writing, accepts an existing Gateway task only when its action/user/principal match this checkout, registers the new logon orchestrator before removing a validated legacy Gateway logon trigger, and rejects mismatched tasks. It does not start either task. `scripts/gateway-only.ps1 -Action start` starts the now trigger-free Gateway task on demand. `-Action task-run` is reserved for its Task Scheduler action.
 
-**CCM note:** its default restricted execution context cannot query/register Windows Task Scheduler tasks and should not start the long-lived Gateway directly. When managing start/installation through CCM, request authorized escalation for the narrowly scoped command rather than granting the Gateway administrator access. Once launched, the Gateway process remains independent of CCM. Verify by reading the Gateway PID from `.state/mobile-gateway.pid`, confirming the owner/listener and `TokenIsRestricted=0`, then testing `127.0.0.1:48888/health` and authenticated WSS.
+**CCM note:** its default restricted execution context cannot query/register Windows Task Scheduler tasks and should not start the long-lived Gateway directly. When managing start/installation through CCM, request authorized escalation for the narrowly scoped command rather than granting the Gateway administrator access. Once launched, the Gateway process remains independent of CCM. Verify Gateway ownership from `.state/mobile-gateway.pid`, its exact loopback listener on 48889 and `TokenIsRestricted=0`. Separately verify the App Server owner/readiness and the private Tailnet connection.
 
 All launcher operations are local to their host. Use existing workspace paths for scripts; do not run binaries from another project's source. The 6v private profile, backend and login have been verified. On noha, the single Host-only root installation replaces `host-runtime/` as of 2026-11-13; its isolated backend and Gateway are both running and healthy with normal Windows tokens. Keep noha's `.runtime`, `.env`, `.state` and independent `CODEX_HOME` on that machine. Transfer only 6v's compiled Host JS and Host scripts; never redeploy a nested `host-runtime`.
 
 ## Safe startup and switch
 
 1. Build and test the new source with `npm.cmd run check` and `npm.cmd run build:gateway`.
-2. Check the existing Gateway's private `.env`: `CODEX_APP_SERVER_WS` must be `ws://127.0.0.1:45891` before the new Gateway can be started. Keep the original OAuth secret, Funnel origin and callback unchanged.
-3. Start and verify the private App Server first. Validate `/readyz`, native `initialize`, `project/list` and `thread/list` with no access to the default Desktop home. A newly created profile normally has zero projects/threads.
-4. Authenticate the private Codex home separately using the interactive login entry if necessary; do not copy `auth.json` from another profile.
-5. Only after the backend is confirmed healthy should the owner-controlled Gateway be restarted and tested through OAuth/WSS. Do not change public Funnel routing.
-6. Install the updated mobile APK and validate new chat, first turn, project creation/selection, title generation, file operations, drafts and offline recovery. These steps require a real device before marking deployment complete.
+2. Check the existing Gateway's private `.env`: `CODEX_APP_SERVER_WS` must be `ws://127.0.0.1:45891` before the new Gateway can be started. Preserve the host's private secret and callback values.
+3. Confirm `.state/mobile-tailnet-hosts.json` contains only valid private Tailnet host URLs and that the local Tailscale adapter exposes exactly one address matched by that manifest. The startup orchestrator mirrors `gateway/main.ts`. It never falls back to a wildcard or arbitrary bind.
+4. Run `scripts/install-gateway-task.ps1` from the target host in a normal Windows PowerShell session. It installs and validates the trigger-free Gateway task and the user-logon Startup task without starting them. Review the result before signing out or restarting.
+5. Start and verify the private App Server first. Validate `/readyz`, native `initialize`, `project/list` and `thread/list` with no access to the default Desktop home. A newly created profile normally has zero projects/threads.
+6. Authenticate the private Codex home separately using the interactive login entry if necessary. Do not copy `auth.json` from another profile.
+7. Only after the backend is confirmed healthy should the owner-controlled Gateway be started and tested. Do not change unrelated Web Agent, Web Coordinator, Desktop or public routing processes.
+8. Install and validate the updated mobile clients separately. These steps require a real device before marking deployment complete.
+
+The 2026-11-26 two-task login implementation is source-only. It has not been
+registered, run or verified live on 6v or noha. The earlier 2026-11-13
+single Gateway task and any already-running services remain in place until the
+owner explicitly performs the migration above.
 
 Never infer successful model authentication from a running `/readyz` endpoint. Changing `CODEX_HOME` separates sessions and projects; the same HTTPS hostname/token can still reach the Gateway after its upstream is switched, but old Android thread caches must not be reused.
 

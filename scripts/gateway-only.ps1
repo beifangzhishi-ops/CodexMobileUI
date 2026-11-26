@@ -14,6 +14,90 @@ $pidFile = Join-Path $state 'mobile-gateway.pid'
 $port = 48889
 $taskName = 'CodexMobileUI Gateway'
 
+function Get-HostPowerShell {
+    $pwsh = Join-Path $env:LOCALAPPDATA 'Programs\PowerShell\7\pwsh.exe'
+    if (Test-Path -LiteralPath $pwsh) { return $pwsh }
+    $pwsh = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $pwsh) { return $pwsh }
+    throw 'PowerShell executable is unavailable.'
+}
+
+function Get-RegisteredGatewayTask {
+    try {
+        $tasks = @(Get-ScheduledTask -TaskName $taskName -ErrorAction Stop)
+    } catch {
+        if ($_.FullyQualifiedErrorId -match 'CmdletizationQuery_NotFound' -or
+            $_.Exception.Message -match 'No .*ScheduledTask.*found') {
+            return $null
+        }
+        throw ('Unable to inspect Gateway scheduled task: ' + $_.Exception.Message)
+    }
+    if (@($tasks | Where-Object { $_.TaskPath -ne '\' }).Count -gt 0) {
+        throw 'A scheduled task with the Gateway name exists outside the root task folder.'
+    }
+    if ($tasks.Count -eq 0) { return $null }
+    if ($tasks.Count -ne 1) { throw 'More than one Gateway scheduled task was found.' }
+    return $tasks[0]
+}
+
+function Get-NonNullTaskTriggers($Task) {
+    return @($Task.Triggers | Where-Object { $null -ne $_ })
+}
+
+function Test-CurrentUser([string]$UserId) {
+    if ([string]::IsNullOrWhiteSpace($UserId)) { return $false }
+    if ($UserId -match '^S-\d-\d+(?:-\d+)+$') {
+        return [string]::Equals($UserId,
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+            [StringComparison]::OrdinalIgnoreCase)
+    }
+    try {
+        $sid = ([System.Security.Principal.NTAccount]$UserId).Translate(
+            [System.Security.Principal.SecurityIdentifier]).Value
+        return $sid -eq [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    } catch {
+        return [string]::Equals($UserId,
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().Name,
+            [StringComparison]::OrdinalIgnoreCase)
+    }
+}
+
+function Test-ValidLogonTrigger($Trigger) {
+    $className = ''
+    if ($Trigger.CimClass) { $className = [string]$Trigger.CimClass.CimClassName }
+    if ($className -ne 'MSFT_TaskLogonTrigger') { return $false }
+    if (-not (Test-CurrentUser ([string]$Trigger.UserId))) { return $false }
+    $interval = ''
+    if ($Trigger.Repetition) { $interval = [string]$Trigger.Repetition.Interval }
+    return [string]::IsNullOrWhiteSpace($interval)
+}
+
+function Test-ScheduledDuration($Value, [TimeSpan]$Expected, [switch]$AllowEmptyAsZero) {
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return ($AllowEmptyAsZero -and $Expected -eq [TimeSpan]::Zero)
+    }
+    try {
+        return [System.Xml.XmlConvert]::ToTimeSpan($text) -eq $Expected
+    } catch {
+        return $false
+    }
+}
+
+function Test-DemandGatewaySettings($Task) {
+    $settings = $Task.Settings
+    return ([bool]$settings.Enabled -and
+        [bool]$settings.AllowDemandStart -and
+        [string]$settings.MultipleInstances -eq 'IgnoreNew' -and
+        (Test-ScheduledDuration $settings.ExecutionTimeLimit ([TimeSpan]::Zero)) -and
+        $null -ne $settings.RestartCount -and
+        [uint32]$settings.RestartCount -eq 0 -and
+        (Test-ScheduledDuration $settings.RestartInterval ([TimeSpan]::Zero) -AllowEmptyAsZero) -and
+        -not [bool]$settings.StartWhenAvailable -and
+        -not [bool]$settings.DisallowStartIfOnBatteries -and
+        -not [bool]$settings.StopIfGoingOnBatteries)
+}
+
 function Get-ListeningGatewayPid {
     try {
         $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop |
@@ -112,21 +196,29 @@ if ($Action -eq 'start') {
     if (Test-GatewayHealth -or (Get-ListeningGatewayPid)) {
         throw 'Gateway port is occupied by an unknown process; refusing to adopt.'
     }
-    try {
-        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-    } catch {
-        throw 'Gateway scheduled task is missing or inaccessible; install it or run this action from a normal Windows session (CCM requires authorized escalation).'
-    }
-    if (-not $task -or $task.TaskPath -ne '\') {
-        throw 'Gateway scheduled task is not installed; run scripts/install-gateway-task.ps1 first.'
+    $task = Get-RegisteredGatewayTask
+    if (-not $task) { throw 'Gateway scheduled task is not installed; run scripts/install-gateway-task.ps1 first.' }
+    if (-not [bool]$task.Settings.Enabled) {
+        throw 'Gateway scheduled task is disabled; rerun scripts/install-gateway-task.ps1.'
     }
     $expectedScript = Join-Path $PSScriptRoot 'gateway-only.ps1'
-    $taskAction = @($task.Actions)[0]
-    if (@($task.Actions).Count -ne 1 -or
-        $taskAction.Arguments -notlike ('*-File "' + $expectedScript + '" -Action task-run') -or
-        $taskAction.WorkingDirectory -ne $root -or
+    $taskActions = @($task.Actions)
+    if ($taskActions.Count -ne 1) {
+        throw 'Gateway scheduled task definition differs from this checkout; refusing to launch.'
+    }
+    $taskAction = $taskActions[0]
+    $taskTriggers = @(Get-NonNullTaskTriggers $task)
+    if (-not [string]::Equals([string]$taskAction.Arguments,
+            ('-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $expectedScript + '" -Action task-run'),
+            [StringComparison]::Ordinal) -or
+        -not [string]::Equals([string]$taskAction.Execute, (Get-HostPowerShell), [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals([string]$taskAction.WorkingDirectory, $root, [StringComparison]::OrdinalIgnoreCase) -or
         $task.Principal.LogonType -ne 'Interactive' -or
-        $task.Principal.RunLevel -ne 'Limited') {
+        $task.Principal.RunLevel -ne 'Limited' -or
+        -not (Test-CurrentUser ([string]$task.Principal.UserId)) -or
+        -not (Test-DemandGatewaySettings $task) -or
+        $taskTriggers.Count -gt 1 -or
+        ($taskTriggers.Count -eq 1 -and -not (Test-ValidLogonTrigger $taskTriggers[0]))) {
         throw 'Gateway scheduled task definition differs from this checkout; refusing to launch.'
     }
     Start-ScheduledTask -TaskName $taskName

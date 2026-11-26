@@ -83,10 +83,14 @@ Node.js, PowerShell, and a machine-local Tailscale Funnel setup.
 1. Create a PRIVATE .env based on .env.example; never copy another host's
    MOBILE_APPROVAL_SECRET. Keep the target host's existing OAuth secret and origin.
 2. For this dedicated App Server, CODEX_APP_SERVER_WS=ws://127.0.0.1:45891.
-3. Start-CodexMobile.cmd starts the private App Server and authenticated Gateway.
+3. Run scripts\install-gateway-task.ps1 from this bundle to validate/migrate the
+   on-demand Gateway task and the user-logon Startup task. Installation does not
+   start them. Startup waits for one manifest-matched Tailscale IPv4 before it
+   asks the Gateway task to run.
+4. Start-CodexMobile.cmd remains the explicit manual start entry.
    Check ownership and existing listeners before switching a live Gateway.
-4. Login-CodexMobile.cmd authenticates the isolated Codex profile (interactive).
-5. Stop-CodexMobile.cmd stops only processes owned by this bundle.
+5. Login-CodexMobile.cmd authenticates the isolated Codex profile (interactive).
+6. Stop-CodexMobile.cmd stops only processes owned by this bundle.
 
 The host's .env, .state, .runtime and CODEX_HOME are NOT part of the bundle.
 Never copy the Android source tree, authentication data or runtime caches.

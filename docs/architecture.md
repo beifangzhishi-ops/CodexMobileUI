@@ -58,7 +58,19 @@ Android `src/storage/database.ts` 仍使用原 SQLite 文件 `codexmobileui.db`�
 
 6v、noha 各自拥有独立的 Codex App Server、Gateway（48889，loopback + 自己的 Tailscale IPv4）、`.state`、`.runtime/mobile`、`%LOCALAPPDATA%\CodexMobileUI\CodexHome`、登录凭据、项目和任务调度器数据库。手机保存私有 Tailnet HTTPS 网页入口。原有 6v Gateway 的内网端口 48889 继续提供机器发现。旧的 48888 和公网 8443 Funnel 移动入口已经废弃。
 
-所有服务均由各自主机现有的、交互用户权限级别为 Limited 的 Windows 计划任务启动。6v 项目是完整开发源码；noha 仅有 Host-only 运行包。仅发布编译后的 Gateway、同版本 Web Agent 及配套模块，绝不覆盖对方私有配置、凭据、Codex Home 或运行时。
+MobileUI 登录启动在源码中拆成两个各主机独立的交互用户、Limited 运行级别
+Windows 计划任务。`CodexMobileUI Gateway` 仅保留已验证的
+`gateway-only.ps1 -Action task-run` 按需入口且没有触发器；
+`CodexMobileUI Startup` 是唯一用户登录触发器，先启动并核验隔离 App Server，
+再按 `gateway/main.ts` 相同的 manifest/接口选择等待恰好一个本机 Tailscale
+IPv4，最后启动并核验 Gateway。启动任务只允许 Task Scheduler 的一分钟间隔、
+最多三次重试，没有周期触发器或 watchdog。安装器会先验证两个任务名，再在
+迁移有效旧 Gateway 登录触发器前注册新 orchestrator。
+
+该双任务实现尚未在 6v 或 noha 注册、运行或验收；截至本次文档更新，两边仍是
+此前部署状态。Web Agent、Coordinator、Desktop 和其他服务不由这组任务管理。
+6v 项目是完整开发源码；noha 仅有 Host-only 运行包。仅发布编译后的 Gateway、
+同版本 Web Agent 及配套模块，绝不覆盖对方私有配置、凭据、Codex Home 或运行时。
 
 ## 权限与数据边界
 

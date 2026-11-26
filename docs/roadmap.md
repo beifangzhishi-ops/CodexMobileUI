@@ -175,6 +175,14 @@ the portable package name and verify the EXE's ProductVersion and FileVersion.
 - [x] Native backend endpoint and Gateway target made MobileUI-only: loopback 45891 and 48888.
 - [x] Host-owned launcher separates native App Server, Gateway and login operations. It discovers verified Desktop-distributed kernel files, copies a fingerprinted runtime and refuses unknown listener/process takeovers.
 - [x] 6v Gateway moved to a normal-user Windows scheduled task (`CodexMobileUI Gateway`) after confirming CCM sandbox inheritance. New Gateway token checked as `TokenIsRestricted=0`, normal App Server unchanged, listener 48888 healthy. New-host task registration and on-device behavior require separate validation.
+- [x] Source-only two-task login startup: the validated Gateway task becomes
+  trigger-free and on demand, while `CodexMobileUI Startup` starts/verifies the
+  isolated App Server, waits for one manifest-matched Tailscale IPv4, and then
+  starts/verifies the Gateway. Registration is idempotent, rejects conflicting
+  task names, preserves a valid legacy Gateway trigger until the orchestrator
+  exists, and applies only a one-minute/three-restart retry.
+- [ ] Register, migrate and verify both tasks on 6v and noha. No scheduler task
+  was registered or run and no live service was changed by the source update.
 - [x] noha redundant `host-runtime` removed in favor of root-only Host deployment, preserving private OAuth config/state and locally identical runtime. App Server and Gateway started from root with `TokenIsRestricted=0`, local ports 45891/48888 healthy. noha no longer carries Android/Web development sources or their npm dependencies.
 - [ ] noha post-migration authenticated public Funnel readback and physical Android acceptance.
 - [x] Private persistent `CODEX_HOME=%LOCALAPPDATA%\CodexMobileUI\CodexHome`. No copying user profile, projects, sessions or credentials; no Desktop lifecycle control.

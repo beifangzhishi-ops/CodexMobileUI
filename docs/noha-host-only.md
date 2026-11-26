@@ -11,22 +11,35 @@ Build the Windows backend/Gateway on 6v and transfer only a versioned **Host-onl
   scripts/package-mobile-host.ps1                    # reproducible host packer
   .tmp/noha-host-<version>-<date>/                   # ignored deployment artifact
 
-noha/CodexMobileUI/host-runtime/                     # temporary host-only rollout location
+noha/CodexMobileUI/                                  # single host-only deployment root
   Start-CodexMobile.cmd, Stop-CodexMobile.cmd, Login-CodexMobile.cmd
-  scripts/{mobile-app-server.ps1,mobile-launcher.ps1,mobile-runtime.js,gateway-only.ps1}
+  scripts/{mobile-app-server.ps1,mobile-launcher.ps1,mobile-runtime.js,gateway-only.ps1,install-gateway-task.ps1}
   dist/gateway/*.js
   node_modules/ws/
   .env                                                # noha-specific secret, never transfer
   .state/, .runtime/                                  # per-host only, never transfer
 ```
 
-The **old full noha checkout is retained solely for rollback**. Do not update or compile its mobile source. Once real phone authentication, model inference and restart acceptance pass, relocate the host bundle into a dedicated noha host project and retire the old checkout separately. Avoid moving active processes by renaming directories.
+Noha does not carry Android/Web source or development dependencies. Do not
+update or compile an old checkout in place. Avoid moving active processes by
+renaming this deployment directory.
 
 ## Packaging / updates
 
 On 6v run `npm.cmd run typecheck:gateway`, `npm.cmd run build:gateway`, then `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-mobile-host.ps1 -OutputDirectory .tmp\noha-host-<version>-<date>`. The bundle includes neither `.env` nor an auth profile, and has SHA-256 checksums.
 
 Transfer to a new noha release directory, verify checksums and the `ws` module, then stage the *noha-owned* `.env` and persistent OAuth state. The Gateway requires `CODEX_APP_SERVER_WS=ws://127.0.0.1:45891`; preserve the noha HTTPS Funnel origin, approval secret and redirect URI. Start/stop scripts only act on verified processes owned by their exact deployment directory. Never overwrite a live release in place or stop a listener merely by port number.
+
+The current source installs two user-level Interactive/Limited tasks. The
+on-demand `CodexMobileUI Gateway` task keeps the validated `-Action task-run`
+entry and has no trigger. `CodexMobileUI Startup` owns the user-logon trigger,
+starts and verifies the isolated App Server, waits for exactly one configured
+local Tailscale IPv4, and then starts the Gateway. Its only retry is the
+bounded one-minute, three-restart Task Scheduler policy. Run
+`scripts/install-gateway-task.ps1` on noha only as part of an explicitly
+approved deployment. It safely migrates the matching legacy Gateway logon task
+and refuses mismatched task names. This source change has not been registered
+or run on noha, and the existing live task/service remains untouched.
 
 ## Verified on 2026-11-13
 
@@ -36,7 +49,7 @@ Transfer to a new noha release directory, verify checksums and the `ws` module, 
 - Tailscale Funnel remains `https://noha.tail7c23f0.ts.net:8443 -> http://127.0.0.1:48888`; HTTPS `/health` returned 200 from 6v.
 - **Pending:** independent noha Codex account/device login (`account_present=false`), authenticated mobile OAuth/WSS and actual model turn. Do not call this an end-to-end accepted deployment until those pass.
 
-For day-to-day operation, use **`host-runtime\Start-CodexMobile.cmd`**, **`host-runtime\Stop-CodexMobile.cmd`**, and **`host-runtime\Login-CodexMobile.cmd`** on noha. Its private `CODEX_HOME` is `%LOCALAPPDATA%\CodexMobileUI\CodexHome`, separate from Desktop's `%USERPROFILE%\.codex`.
+For day-to-day operation, use **`Start-CodexMobile.cmd`**, **`Stop-CodexMobile.cmd`**, and **`Login-CodexMobile.cmd`** at noha's single Host-only root. Its private `CODEX_HOME` is `%LOCALAPPDATA%\CodexMobileUI\CodexHome`, separate from Desktop's `%USERPROFILE%\.codex`.
 
 ## GitHub source/release sync (private)
 
