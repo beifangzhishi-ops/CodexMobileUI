@@ -9,6 +9,8 @@ import { NotificationFeed, notificationContentFromRead, validCursor } from '../s
 
 const THREAD = '12345678-1234-1234-1234-123456789abc';
 const TURN = 'abcdef12-1234-1234-1234-123456789abc';
+const CHILD_THREAD = '22345678-1234-1234-1234-123456789abc';
+const SIDE_THREAD = '32345678-1234-1234-1234-123456789abc';
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'codex-notices-'));
   const path = join(root, 'notice-events.json');
@@ -93,6 +95,78 @@ test('completed event items can fill a racing thread/read, and previews are boun
   assert.equal(result.title, '一个新任务');
   assert.equal([...result.preview].length, 360);
   assert.equal(result.preview, '结果'.repeat(180));
+});
+
+test('native sub-agent completions stay silent while ordinary and attached side chats notify', async () => {
+  const f = fixture();
+  try {
+    const feed = new NotificationFeed(f.path);
+    const childTurn = 'bbbbbbbb-1234-1234-1234-123456789abc';
+    const sourceOnlyChildTurn = 'cccccccc-1234-1234-1234-123456789abc';
+    const classificationChildTurn = 'abbbbbbb-1234-1234-1234-123456789abc';
+    const sideTurn = 'dddddddd-1234-1234-1234-123456789abc';
+    const ordinaryTurn = 'eeeeeeee-1234-1234-1234-123456789abc';
+    const snapshots = new Map([
+      [CHILD_THREAD, { thread: {
+        id: CHILD_THREAD, parentThreadId: THREAD, forkedFromId: null,
+        source: 'appServer', threadSource: null, name: '子任务',
+      } }],
+      [SIDE_THREAD, { thread: {
+        id: SIDE_THREAD, parentThreadId: null, forkedFromId: THREAD,
+        source: 'appServer', threadSource: null, name: '侧边对话',
+      } }],
+      [THREAD, { thread: {
+        id: THREAD, parentThreadId: null, forkedFromId: null,
+        source: 'appServer', threadSource: null, name: '主对话',
+      } }],
+    ]);
+    const resolveThread = async (_hostId, threadId) => snapshots.get(threadId) ?? null;
+    const client = socket();
+    feed.subscribe(client);
+    client.subscribe(0);
+
+    await feed.observe('6v', { threadId: CHILD_THREAD, turn: { id: childTurn } }, resolveThread);
+    await feed.observe('6v', { threadId: CHILD_THREAD, turn: { id: sourceOnlyChildTurn } },
+      async () => ({ thread: {
+        id: CHILD_THREAD, parentThreadId: null, forkedFromId: null,
+        source: { subAgent: 'review' }, threadSource: 'subAgentReview', name: '独立子任务',
+      } }));
+    await feed.observe('6v', { threadId: CHILD_THREAD, turn: { id: classificationChildTurn } },
+      async () => ({ thread: {
+        id: CHILD_THREAD, parentThreadId: null, forkedFromId: null,
+        source: 'unknown', threadSource: 'subAgentCompact', name: '压缩子任务',
+      } }));
+    await feed.observe('6v', { threadId: SIDE_THREAD, turn: { id: sideTurn } }, resolveThread);
+    await feed.observe('noha', { threadId: THREAD, turn: { id: ordinaryTurn } }, resolveThread);
+    await feed.observe('noha', { threadId: THREAD, turn: { id: ordinaryTurn } }, resolveThread);
+
+    assert.deepEqual(feed.events.map((event) => [event.seq, event.hostId, event.threadId]),
+      [[1, '6v', SIDE_THREAD], [2, 'noha', THREAD]]);
+    assert.equal(feed.sequence, 2);
+    assert.deepEqual(client.sent.slice(1).map((frame) => frame.event.threadId), [SIDE_THREAD, THREAD]);
+    const restored = new NotificationFeed(f.path);
+    assert.deepEqual(restored.events.map((event) => event.turnId), [sideTurn, ordinaryTurn]);
+    client.close();
+  } finally { f.cleanup(); }
+});
+
+test('read failures and unknown thread metadata retain ordinary completion alerts', async () => {
+  const f = fixture();
+  try {
+    const feed = new NotificationFeed(f.path);
+    const failedReadTurn = 'faaaaaaa-1234-1234-1234-123456789abc';
+    const unknownTurn = 'fabbbbbb-1234-1234-1234-123456789abc';
+    const mismatchedTurn = 'fbbbbbbb-1234-1234-1234-123456789abc';
+    await feed.observe('6v', { threadId: THREAD, turn: { id: failedReadTurn } },
+      async () => { throw Error('read failed'); });
+    await feed.observe('6v', { threadId: THREAD, turn: { id: unknownTurn } }, async () => null);
+    await feed.observe('noha', { threadId: THREAD, turn: { id: mismatchedTurn } },
+      async () => ({ thread: {
+        id: CHILD_THREAD, parentThreadId: THREAD, source: { subAgent: 'review' },
+      } }));
+    assert.deepEqual(feed.events.map((event) => [event.hostId, event.turnId]),
+      [['6v', failedReadTurn], ['6v', unknownTurn], ['noha', mismatchedTurn]]);
+  } finally { f.cleanup(); }
 });
 
 test('fresh subscriptions baseline existing notices; reconnect replays each seq', async () => {
