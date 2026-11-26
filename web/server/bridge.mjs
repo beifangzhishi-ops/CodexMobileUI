@@ -54,22 +54,19 @@ const { MAX_VISUALIZE_BYTES, validVisualizeSelection } =
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
   : { SidebarPinsStore: null };
-<<<<<<< HEAD
 const { ThreadCompletionStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/threadCompletions.js')).href)
   : { ThreadCompletionStore: null };
 const { handleThreadCompletionsHttp } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/threadCompletionsHttp.js')).href)
   : { handleThreadCompletionsHttp: null };
-const titleService = new WebTitleService(resolve('.state'));
-=======
->>>>>>> b97c6657b4b25931825bdbd3afb7647c966f37c3
+const titleService = new WebTitleService(resolve('.state'), coordinator ? '6v' : 'noha');
 const config = JSON.parse(readFileSync(resolve('.state/web-bridge.json'), 'utf8').replace(/^\uFEFF/, ''));
 const credential = readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
 if (!/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');
 const coordinator = mode === 'coordinator';
 const quotaGuardStore = new QuotaGuardSettingStore(resolve('.state'));
-const titleService = new WebTitleService(resolve('.state'));
+const titleService = new WebTitleService(resolve('.state'), coordinator ? '6v' : 'noha');
 const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state')) : null;
 const threadCompletions = coordinator ? new ThreadCompletionStore(resolve('.state')) : null;
 const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json')) : null;

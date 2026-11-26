@@ -14,13 +14,10 @@ import type { Conversation, HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
   type SidebarPinsSnapshot } from './sidebarPins';
-<<<<<<< HEAD
 import { fetchThreadCompletions, parseThreadCompletions, setThreadCompletion,
   writeCachedThreadCompletions,
   type CompletedThread, type ThreadCompletionsSnapshot } from './threadCompletions';
-=======
 import { PROJECT_THREAD_PREVIEW_LIMIT, visibleProjectThreads } from './projectThreadVisibility';
->>>>>>> 18d9cddab0a0cb36e66c5b051742c7056ba8899f
 import {
   clampSidebarWidth, defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences,
 } from './sidebarPreferences';

@@ -203,7 +203,6 @@ test('shared frontend keeps real status, events, permissions, models and image u
   assert.match(webApp, /className="composer-actions"/);
 });
 
-<<<<<<< HEAD
 test('sidebar completion checkbox stays leftmost without replacing pin actions', () => {
   assert.match(webApp, /className=\{'conversation-completion'/);
   assert.match(webApp, /role="checkbox" aria-checked=\{completed\}/);
@@ -224,7 +223,6 @@ test('new custom permissions are verified without per-turn or start overrides', 
   assert.match(newThreadPermission, /permissionFingerprint\(input\.startResponse\)/);
   assert.match(newThreadPermission, /void Promise\.resolve\(\)\.then\(\(\) => input\.readResume/);
   assert.match(client, /const nativePerms = existingId \? \{\} : permissionParams\(perm\)/);
-=======
 test('both quota popovers share one 6v-owned 3% guard control and status', () => {
   assert.equal((webApp.match(/className="quota-guard"/g) ?? []).length, 1);
   assert.equal((webApp.match(/className="quota-guard-toggle"/g) ?? []).length, 1);
@@ -249,5 +247,5 @@ test('both quota popovers share one 6v-owned 3% guard control and status', () =>
   assert.match(bridge, /parseQuotaGuardPeerSyncRequest/);
   assert.match(uiStyle, /\.quota-guard-toggle/);
   assert.match(uiStyle, /\.quota-guard-status/);
->>>>>>> b97c6657b4b25931825bdbd3afb7647c966f37c3
+});
 });
