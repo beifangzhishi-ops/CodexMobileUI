@@ -14,6 +14,7 @@ import {
   type HostRequest, type PublishedFile,
 } from './publicationDownload';
 import { localFileName } from '../../shared/localFileLinks';
+import { ImageZoomSurface } from './ImageZoomSurface';
 import {
   MAX_PUBLICATION_BYTES, PUBLICATION_TEXT_PREVIEW_BYTES,
 } from '../../shared/publicationProtocol';
@@ -147,7 +148,7 @@ function PdfPreview({ url, name }: { url: string; name: string }) {
 function PreviewContent({ file, hostId }: { file: PublishedFile; hostId: HostId }) {
   const url = publicationUrl(hostId, file.id, 'preview');
   if (file.previewKind === 'image') {
-    return <img className="publication-preview-image" src={url} alt={file.name}/>;
+    return <ImageZoomSurface className="publication-preview-image" src={url} alt={file.name}/>;
   }
   if (file.previewKind === 'audio') {
     return <audio className="publication-preview-audio" controls preload="metadata" src={url}/>;
