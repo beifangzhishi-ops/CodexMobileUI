@@ -5,6 +5,6 @@
     "rootDir": ".",
     "outDir": ".tmp/testdist"
   },
-  "include": ["gateway/**/*.ts", "src/core/host.ts", "src/core/unifiedWeb.ts", "tests/**/*.ts"],
+  "include": ["gateway/**/*.ts", "shared/publicationProtocol.ts", "shared/visualizeReferences.ts", "src/core/host.ts", "src/core/unifiedWeb.ts", "tests/**/*.ts"],
   "exclude": ["node_modules"]
 }
