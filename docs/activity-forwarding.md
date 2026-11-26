@@ -56,6 +56,13 @@ MobileUI uses this native relationship and never substitutes a normal fork or
 injects parent history as a user prompt. Legacy/unsupported source histories
 fail closed instead of creating an ordinary conversation. The server inherits
 source context and permissions; the attached thread has its own visible turns.
+New forks receive one fixed trusted developer-instruction policy. It treats
+inherited history as reference only, permits read/search and non-mutating
+checks, prohibits creating or interacting with subagents, and limits mutations
+to actions explicitly requested in the side chat. Browser clients cannot
+override this policy. Existing side chats created before this change have no
+retroactive coverage because the current native protocol exposes the policy
+only at fork creation.
 
 The main chat has a graphical entry. Wide screens open a right-hand panel;
 narrow screens open a full-width returnable panel. It can open while the main

@@ -47,6 +47,8 @@ const { ScheduleTaskCalls, scheduleTaskTool, listScheduleModelsTool } =
 const {
   PUBLICATION_TEXT_PREVIEW_BYTES, isValidPublicationId, safePublicationFileName,
 } = await import(pathToFileURL(resolve('dist/shared/publicationProtocol.js')).href);
+const { trustedSideChatForkParams } =
+  await import(pathToFileURL(resolve('dist/shared/sideChatPolicy.js')).href);
 const { MAX_VISUALIZE_BYTES, validVisualizeSelection } =
   await import(pathToFileURL(resolve('dist/shared/visualizeReferences.js')).href);
 const { SidebarPinsStore } = mode === 'coordinator'
@@ -801,6 +803,8 @@ function allowedFrame(msg) {
 }
 
 function attachRelay(browser, upstreamUrl, headers = {}) {
+  // Headers identify the Coordinator's outbound relay to an Agent. The Agent's
+  // inner relay to its own native App Server omits them and owns mobile transforms.
   const remotePeer = typeof headers.Authorization === 'string';
   const relayHostId = remotePeer ? null : coordinator ? '6v' : 'noha';
   const upstream = new WebSocket(upstreamUrl, { headers, perMessageDeflate: false, handshakeTimeout: 10000, maxPayload: 16 * 1024 * 1024 });
@@ -1115,9 +1119,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         const parent = (await internalRequest('thread/read', { threadId, includeTurns: false }))?.thread;
         if (parent?.id !== threadId || parent.historyMode !== 'paginated' || parent.ephemeral === true)
           throw Error('SIDE_CHAT_UNAVAILABLE');
-        const result = await internalRequest('thread/fork', {
-          threadId, attachToSource: true, excludeTurns: true,
-        }, 60000);
+        const params = trustedSideChatForkParams(msg.params);
+        if (!params) throw Error('SIDE_CHAT_INVALID');
+        const result = await internalRequest('thread/fork', params, 60000);
         if (!result?.thread?.id || result.thread.id === threadId) throw Error('SIDE_CHAT_UNCONFIRMED');
         return result;
       })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))

@@ -14,9 +14,13 @@ import type { Conversation, HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
   type SidebarPinsSnapshot } from './sidebarPins';
+<<<<<<< HEAD
 import { fetchThreadCompletions, parseThreadCompletions, setThreadCompletion,
   writeCachedThreadCompletions,
   type CompletedThread, type ThreadCompletionsSnapshot } from './threadCompletions';
+=======
+import { PROJECT_THREAD_PREVIEW_LIMIT, visibleProjectThreads } from './projectThreadVisibility';
+>>>>>>> 18d9cddab0a0cb36e66c5b051742c7056ba8899f
 import {
   clampSidebarWidth, defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences,
 } from './sidebarPreferences';
@@ -190,6 +194,7 @@ export default function DesktopApp() {
   const [hostFilter, setHostFilter] = useState<'all' | HostId>('all');
   const [hostCollapsed, setHostCollapsed] = useState<HostId[]>(initialSidebar.collapsedHosts);
   const [openedProjects, setOpenedProjects] = useState<string[]>(initialSidebar.openedProjects);
+  const [expandedProjectThreadLists, setExpandedProjectThreadLists] = useState<string[]>([]);
   const [showAllRecent, setShowAllRecent] = useState(initialSidebar.showAllRecent);
   const [showArchived, setShowArchived] = useState(false);
   const [recentLimit, setRecentLimit] = useState(10);
@@ -1475,9 +1480,11 @@ export default function DesktopApp() {
   function projectRow(project: NativeProject) {
     const key = conversationKey(project.hostId, project.id);
     const expanded = openedProjects.includes(key);
+    const showAllThreads = expandedProjectThreadLists.includes(key);
     const pinned = pinnedProjectIds.includes(key);
     const children = sidebarConversations.filter((item) =>
       item.project === project.id && item.hostId === project.hostId && !item.archived);
+    const visibleChildren = visibleProjectThreads(children, showAllThreads);
     return <div className="tree-project" key={key}>
       <div className="project-line context-press-target" data-context-kind="project"
         data-context-host={project.hostId} data-context-id={project.id}>
@@ -1495,7 +1502,14 @@ export default function DesktopApp() {
           onClick={() => createNewChat(project.hostId, project.id)}><Plus size={17}/></button>
       </div>
       {expanded && <div className="nested-conversations">{children.length
-        ? children.map((item) => conversationRow(item, true, 'project'))
+        ? <>
+            {visibleChildren.map((item) => conversationRow(item, true, 'project'))}
+            {children.length > PROJECT_THREAD_PREVIEW_LIMIT && <button className="project-thread-toggle"
+              aria-expanded={showAllThreads}
+              onClick={() => toggle(expandedProjectThreadLists, key, setExpandedProjectThreadLists)}>
+              {showAllThreads ? '收起对话' : '展开全部对话'}
+            </button>}
+          </>
         : <button className="empty-project" onClick={() => createNewChat(project.hostId, project.id)}>＋ 新建项目聊天</button>}</div>}
     </div>;
   }

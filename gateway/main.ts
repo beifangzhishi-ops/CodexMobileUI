@@ -748,6 +748,7 @@ export function createGateway(config: Config) {
           }
           return;
         }
+<<<<<<< HEAD
         if (!binary && quotaGuard) {
           try {
             const request = JSON.parse(bytes.toString()) as {
@@ -764,9 +765,14 @@ export function createGateway(config: Config) {
             }
           } catch { /* The policy gate already accepted a valid JSON frame. */ }
         }
+=======
+        // rpcPolicy returns a canonical frame only after validating an attached
+        // side-chat request and inserting the fixed trusted instructions.
+        const forwarded = frame.forwarded ?? bytes;
+>>>>>>> 18d9cddab0a0cb36e66c5b051742c7056ba8899f
         const traceId = traceRequest(bytes, binary);
         if (upstream?.readyState === WebSocket.OPEN) {
-          upstream.send(bytes, { binary }, (error) => {
+          upstream.send(forwarded, { binary }, (error) => {
             if (error && traceId !== null) finishTrace(traceId, 'send_failed');
           });
         } else if (traceId !== null) finishTrace(traceId, 'send_failed');
