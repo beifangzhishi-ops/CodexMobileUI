@@ -32,6 +32,7 @@ type PublicationReadParams = {
 };
 
 function bridge(): NativeBridge | null {
+  if (typeof window === 'undefined') return null;
   const native = (window as Window & { ReactNativeWebView?: NativeBridge }).ReactNativeWebView;
   return typeof native?.postMessage === 'function' ? native : null;
 }

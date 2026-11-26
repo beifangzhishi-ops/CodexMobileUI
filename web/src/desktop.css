@@ -843,7 +843,9 @@ button:hover { transition: background-color 100ms; }
   .conversation-row,.conversation-row.nested { height: 44px; }
   .conversation-row-wrap .conversation-row,
   .conversation-row-wrap .conversation-row.nested { padding-left: 46px; }
-  .conversation-completion { width: 42px; }
+  .pinned-section .nested-conversations,
+  .tree-projects .nested-conversations { margin-left: -17px; padding-left: 0; }
+  .conversation-completion { width: 42px; left: -8px; }
   .conversation-completion-box { width: 21px; height: 21px; }
   .composer-tool,.send-button { width: 44px; height: 44px; }
   .model-selector,.composer-host-selector,.composer-popover button { min-height: 44px; }
