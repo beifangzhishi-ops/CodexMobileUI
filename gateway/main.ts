@@ -733,9 +733,12 @@ export function createGateway(config: Config) {
           }
           return;
         }
+        // rpcPolicy returns a canonical frame only after validating an attached
+        // side-chat request and inserting the fixed trusted instructions.
+        const forwarded = frame.forwarded ?? bytes;
         const traceId = traceRequest(bytes, binary);
         if (upstream?.readyState === WebSocket.OPEN) {
-          upstream.send(bytes, { binary }, (error) => {
+          upstream.send(forwarded, { binary }, (error) => {
             if (error && traceId !== null) finishTrace(traceId, 'send_failed');
           });
         } else if (traceId !== null) finishTrace(traceId, 'send_failed');

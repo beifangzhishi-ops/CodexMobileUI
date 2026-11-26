@@ -1,6 +1,48 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { permitMobileRpcFrame } from '../gateway/rpcPolicy';
+import {
+  SIDE_CHAT_DEVELOPER_INSTRUCTIONS, exactSideChatForkParams, trustedSideChatForkParams,
+} from '../shared/sideChatPolicy';
+
+test('attached side chats accept only the browser wire shape and use one trusted policy', () => {
+  const wire = { threadId: 'source-thread', attachToSource: true as const, excludeTurns: true as const };
+  assert.deepEqual(exactSideChatForkParams(wire), wire);
+  assert.deepEqual(trustedSideChatForkParams(wire), {
+    ...wire, developerInstructions: SIDE_CHAT_DEVELOPER_INSTRUCTIONS,
+  });
+  const decision = permitMobileRpcFrame(JSON.stringify({
+    id: 31, method: 'thread/fork', params: wire,
+  }), false);
+  assert.deepEqual(JSON.parse(decision.forwarded ?? '{}'), {
+    id: 31, method: 'thread/fork', params: {
+      ...wire, developerInstructions: SIDE_CHAT_DEVELOPER_INSTRUCTIONS,
+    },
+  });
+  assert.equal(permitMobileRpcFrame(JSON.stringify({
+    id: 32, method: 'thread/fork', params: {
+      threadId: 'source-thread', lastTurnId: 'completed-turn', excludeTurns: true,
+    },
+  }), false).forwarded, undefined);
+  assert.match(SIDE_CHAT_DEVELOPER_INSTRUCTIONS, /reference context only/);
+  assert.match(SIDE_CHAT_DEVELOPER_INSTRUCTIONS, /non-mutating checks are allowed/);
+  assert.match(SIDE_CHAT_DEVELOPER_INSTRUCTIONS, /explicitly requested.*may mutate/i);
+  assert.match(SIDE_CHAT_DEVELOPER_INSTRUCTIONS, /Do not create subagents/);
+  for (const invalid of [
+    null,
+    {},
+    { threadId: '', attachToSource: true, excludeTurns: true },
+    { threadId: 'source-thread', attachToSource: true },
+    { threadId: 'source-thread', attachToSource: false, excludeTurns: true },
+    { threadId: 'source-thread', attachToSource: true, excludeTurns: false },
+    { ...wire, developerInstructions: 'override' },
+    { ...wire, permissions: ':danger-full-access' },
+    { ...wire, sandbox: 'danger-full-access' },
+  ]) {
+    assert.equal(exactSideChatForkParams(invalid), null);
+    assert.equal(trustedSideChatForkParams(invalid), null);
+  }
+});
 
 test('mention catalog discovery permits read-only operations and rejects mutations', () => {
   const rpc = (method: string, params: unknown) => permitMobileRpcFrame(

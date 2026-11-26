@@ -5,6 +5,7 @@
  * bounded by their existing permission/argument rules.
  */
 import { isManagedImagePath } from './attachments.js';
+import { trustedSideChatForkParams } from '../shared/sideChatPolicy.js';
 
 /** Native model/list identifiers can contain a provider namespace. */
 function validNativeModelId(value: unknown): value is string {
@@ -291,6 +292,7 @@ function safeParams(method: string, value: unknown): boolean {
 export function permitMobileRpcFrame(data: string, isBinary: boolean): {
   allowed: boolean;
   id?: number;
+  forwarded?: string;
 } {
   if (isBinary || data.length > 1_048_576) return { allowed: false };
   let request: unknown;
@@ -312,6 +314,12 @@ export function permitMobileRpcFrame(data: string, isBinary: boolean): {
         MOBILE_REQUESTS.has(rpc.method) && safeParams(rpc.method, rpc.params)) ||
       id === undefined || 'result' in rpc || 'error' in rpc) {
     return { allowed: false, id };
+  }
+  if (rpc.method === 'thread/fork' &&
+      (rpc.params as Record<string, unknown>).attachToSource === true) {
+    const params = trustedSideChatForkParams(rpc.params);
+    if (!params) return { allowed: false, id };
+    return { allowed: true, id, forwarded: JSON.stringify({ ...rpc, params }) };
   }
   return { allowed: true, id };
 }

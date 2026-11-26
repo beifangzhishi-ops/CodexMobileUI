@@ -133,6 +133,8 @@ button:hover { transition: background-color 100ms; }
 .control-spin { animation: spin 1200ms linear infinite; }
 .empty-project,.empty-recents { color: var(--muted); font-size: 12px; padding: 9px 10px; text-align: left; }
 .empty-project { width: 100%; }
+.project-thread-toggle { width: 100%; padding: 9px 10px; text-align: left; color: var(--muted); font-size: 12px; border-radius: 8px; }
+.project-thread-toggle:hover,.project-thread-toggle:focus-visible { background: var(--selected); color: var(--text); }
 .recent-header { margin-top: 15px; }
 .recent-settings { border: 1px solid var(--stroke); border-radius: 11px; margin: 1px 6px 8px; padding: 8px 10px; background: var(--surface); display: grid; gap: 10px; }
 .recent-settings label { cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px; }
