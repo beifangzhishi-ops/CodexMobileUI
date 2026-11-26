@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { syncDiagnosticsNative } from "../scripts/sync-diagnostics-native.mjs";
 
 const launcher = readFileSync(new URL("../scripts/mobile-launcher.ps1", import.meta.url), "utf8");
 const mobileStop = readFileSync(new URL("../Stop-CodexMobile.cmd", import.meta.url), "utf8");
@@ -9,6 +12,10 @@ const appSettings = JSON.parse(readFileSync(new URL("../app.json", import.meta.u
 const mainApp = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
 const coordinatorStorage = readFileSync(new URL("../src/storage/database.ts", import.meta.url), "utf8");
 const nativeFileSave = readFileSync(new URL("../src/core/nativePublicationDownload.ts", import.meta.url), "utf8");
+const diagnosticsExport = readFileSync(new URL("../src/diagnostics/export.ts", import.meta.url), "utf8");
+const diagnosticsPanel = readFileSync(new URL("../src/diagnostics/DiagnosticsPanel.tsx", import.meta.url), "utf8");
+const diagnosticsDownload = readFileSync(new URL("../native/diagnostics/DiagnosticsDownloadModule.kt", import.meta.url), "utf8");
+const diagnosticsSync = readFileSync(new URL("../scripts/sync-diagnostics-native.mjs", import.meta.url), "utf8");
 const splashColors = readFileSync(new URL("../android/app/src/main/res/values/colors.xml", import.meta.url), "utf8");
 const splashStyles = readFileSync(new URL("../android/app/src/main/res/values/styles.xml", import.meta.url), "utf8");
 const packageSettings = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -114,4 +121,68 @@ test("Android keeps the private coordinator, native file sink and isolated diagn
   assert.match(nativeFileSave, /job\.staging\.copy\(destination\)/);
   assert.match(nativeFileSave, /safePublicationFileName\(request\.name\)/);
   assert.doesNotMatch(coordinatorStorage, /CREATE TABLE IF NOT EXISTS messages/);
+});
+
+test("diagnostics save directly through a private MediaStore React Native module", () => {
+  assert.match(packageSettings.scripts.preandroid, /sync-diagnostics-native\.mjs/);
+  assert.match(androidStableBuild,
+    /sync-diagnostics-native\.mjs[\s\S]*?Sync-Tree|\$LASTEXITCODE -ne 0 \{ throw 'Unable to synchronize native Android diagnostics\.'/);
+  assert.match(diagnosticsSync, /native\/diagnostics\/DiagnosticsDownloadModule\.kt/);
+  assert.match(diagnosticsSync, /add\(DiagnosticsDownloadPackage\(\)\)/);
+  assert.match(diagnosticsExport, /NativeModules\.DiagnosticsDownload/);
+  assert.match(diagnosticsExport, /saveJson\(fileName, JSON\.stringify\(snapshot, null, 2\)\)/);
+  assert.match(diagnosticsPanel, /保存日志到下载目录/);
+  assert.match(diagnosticsPanel, /role="status"/);
+  assert.match(diagnosticsPanel, /role="alert"/);
+  assert.doesNotMatch(diagnosticsExport + diagnosticsPanel, /expo-sharing|Sharing\.shareAsync|系统分享/);
+  assert.match(diagnosticsDownload, /MediaStore\.Downloads\.getContentUri/);
+  assert.match(diagnosticsDownload, /MediaStore\.Downloads\.IS_PENDING, 1/);
+  assert.match(diagnosticsDownload, /resolver\.delete\(uri, null, null\)/);
+  assert.match(diagnosticsDownload,
+    /Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.Q[\s\S]*?WRITE_EXTERNAL_STORAGE/);
+  assert.match(diagnosticsDownload,
+    /RELATIVE_PATH, Environment\.DIRECTORY_DOWNLOADS\)/);
+  assert.match(diagnosticsDownload,
+    /arrayOf\(MediaStore\.Downloads\.DISPLAY_NAME\)[\s\S]*?actualName/);
+  assert.doesNotMatch(diagnosticsSync, /AndroidManifest|WRITE_EXTERNAL_STORAGE/);
+  assert.doesNotMatch(diagnosticsDownload, /WebView|injectJavaScript|addJavascriptInterface/);
+});
+
+test("diagnostics sync supports current and fresh Expo MainApplication fixtures", () => {
+  const templates = [
+    `class MainApplication {
+  PackageList(this).packages.apply {
+    // add(MyReactNativePackage())
+    add(QuotaWidgetPackage())
+  }
+}`,
+    `class MainApplication {
+  PackageList(this).packages.apply {
+    // Packages that cannot be autolinked yet can be added manually here.
+    // add(MyReactNativePackage())
+  }
+}`,
+    `class MainApplication {
+  PackageList(this).packages.apply {
+  }
+}`,
+  ];
+  for (const source of templates) {
+    const root = mkdtempSync(join(tmpdir(), "codex-diagnostics-sync-"));
+    const packageRoot = join(root, "android", "app", "src", "main", "java", "dev", "codexmobileui", "app");
+    try {
+      mkdirSync(packageRoot, { recursive: true });
+      mkdirSync(join(root, "native", "diagnostics"), { recursive: true });
+      writeFileSync(join(packageRoot, "MainApplication.kt"), source);
+      writeFileSync(join(root, "native", "diagnostics", "DiagnosticsDownloadModule.kt"), "module");
+      syncDiagnosticsNative(root);
+      syncDiagnosticsNative(root);
+      const application = readFileSync(join(packageRoot, "MainApplication.kt"), "utf8");
+      assert.equal(application.match(/add\(DiagnosticsDownloadPackage\(\)\)/g)?.length, 1);
+      assert.equal(readFileSync(join(packageRoot, "DiagnosticsDownloadModule.kt"), "utf8"), "module");
+      assert.equal(existsSync(join(root, "android", "app", "src", "main", "AndroidManifest.xml")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 });

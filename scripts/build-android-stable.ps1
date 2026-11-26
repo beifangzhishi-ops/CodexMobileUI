@@ -54,6 +54,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize quota widget native file
 if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize task notification native files.' }
 & node.exe (Join-Path $sourceRoot 'scripts\sync-app-navigation-native.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize native Android navigation.' }
+& node.exe (Join-Path $sourceRoot 'scripts\sync-diagnostics-native.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to synchronize native Android diagnostics.' }
 $nativeText = Get-Content -LiteralPath $nativeFile -Raw
 $nativeCode = [regex]::Match($nativeText, '(?m)^\s*versionCode\s+(\d+)').Groups[1].Value
 $nativeVersion = [regex]::Match($nativeText, '(?m)^\s*versionName\s+"([^"]+)"').Groups[1].Value

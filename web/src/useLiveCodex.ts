@@ -17,7 +17,10 @@ import { uploadDocument } from './documentUpload';
 import { hasAbsolutePaths, type PathHosts } from './pathHosts';
 import { displayOriginalPaths, readPathOverlays, storePathOverlay, type PathChange } from './pathOverlays';
 import { desktopBridge } from './desktopBridge';
-import { permissionFingerprint, readCustomPermission, storeCustomPermission } from './permissionPreference';
+import {
+  permissionFingerprint, readCustomPermission, resolveResumedPermission, storeCustomPermission,
+} from './permissionPreference';
+import { rememberNewThreadCustomPermission } from './newThreadPermission';
 import { compactionBusy, compactionOutcome, type CompactionJob, type CompactionPhase } from './compaction';
 
 type Params = Record<string, unknown>;
@@ -326,17 +329,18 @@ export function useLiveCodex() {
       const profile = text(obj(resumed.activePermissionProfile).id) || null;
       const reviewer = text(resumed.approvalsReviewer) || null;
       if (!profile && !reviewer) return;
-      const inferred: PermissionMode = profile === ':workspace' ? (reviewer === 'auto_review' ? 'auto-review' : 'default') :
-        profile === ':read-only' ? 'read-only' : profile === ':danger-full-access' ? 'full-access' : 'custom';
       const selected = permissionSelections.current.get(key);
       const saved = selected?.mode === 'custom' ? selected.fingerprint || readCustomPermission(key) : readCustomPermission(key);
       const actual = saved ? await permissionFingerprint(resumed).catch(() => null) : null;
+      // An explicit permission choice can interleave while hashing the native
+      // policy. Never let this older select continuation replace the newer one.
       if ((permissionEpochs.current.get(key) ?? 0) !== epoch) return;
-      const mode = saved && actual === saved ? 'custom' :
-        !saved && selected && selected.profile === profile && selected.reviewer === reviewer ? selected.mode : inferred;
-      setCustomPermissionChanged((all) => ({ ...all, [key]: Boolean(saved && actual && actual !== saved) }));
-      if (selected && mode !== selected.mode) permissionSelections.current.delete(key);
-      setThreadPermissions((all) => ({ ...all, [key]: mode }));
+      const resolved = resolveResumedPermission({
+        profile, reviewer, selected, savedFingerprint: saved, actualFingerprint: actual,
+      });
+      setCustomPermissionChanged((all) => ({ ...all, [key]: resolved.changed }));
+      if (selected && resolved.mode !== selected.mode) permissionSelections.current.delete(key);
+      setThreadPermissions((all) => ({ ...all, [key]: resolved.mode }));
     }).catch(() => undefined);
     void refreshQueue(hostId, threadId).catch(() => undefined);
     void refreshGoal(hostId, threadId).catch(() => undefined);
@@ -822,6 +826,25 @@ export function useLiveCodex() {
       threadId = text(obj(response.thread).id);
       if (!threadId) throw Error('THREAD_START_UNCONFIRMED');
       const id = threadId;
+      const key = threadKey(hostId, id);
+      if (perm === 'custom') {
+        const permissionEpoch = permissionEpochs.current.get(key) ?? 0;
+        // The start response is authoritative. A resume fallback is scheduled
+        // without gating selection, onCreated, or the first turn.
+        await rememberNewThreadCustomPermission({
+          threadId: id,
+          startResponse: response,
+          readResume: async (newThreadId) =>
+            obj(await request(hostId, 'thread/resume', { threadId: newThreadId })),
+          isCurrent: () => (permissionEpochs.current.get(key) ?? 0) === permissionEpoch,
+          remember: (selection) => {
+            permissionSelections.current.set(key, selection);
+            storeCustomPermission(key, selection.fingerprint);
+            setCustomPermissionChanged((all) => ({ ...all, [key]: false }));
+            setThreadPermissions((all) => ({ ...all, [key]: 'custom' }));
+          },
+        });
+      }
       setConversations((current) => current.some((c) => c.id === id && c.hostId === hostId) ? current : [{
         id, hostId, project: projectId, archived: false,
         model: nativeModel?.id ?? null, reasoningEffort: options.effort || nativeModel?.defaultEffort || null,

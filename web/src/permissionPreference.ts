@@ -13,7 +13,11 @@ function canonical(value: unknown): unknown {
 
 export async function permissionFingerprint(value: Record<string, unknown>): Promise<string | null> {
   const profile = value.activePermissionProfile as { id?: unknown } | null | undefined;
-  if (!value.sandbox || typeof value.approvalsReviewer !== 'string' || value.approvalPolicy == null ||
+  const sandbox = value.sandbox as { type?: unknown } | null | undefined;
+  if (!sandbox || !['dangerFullAccess', 'readOnly', 'workspaceWrite', 'externalSandbox']
+    .includes(String(sandbox.type)) ||
+      !['user', 'auto_review', 'guardian_subagent'].includes(String(value.approvalsReviewer)) ||
+      value.approvalPolicy == null ||
       !globalThis.crypto?.subtle) return null;
   const json = JSON.stringify(canonical({
     profile: profile?.id ?? null, reviewer: value.approvalsReviewer,
@@ -22,6 +26,50 @@ export async function permissionFingerprint(value: Record<string, unknown>): Pro
   if (json.length > 65536) return null;
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
   return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export type SavedPermissionSelection = {
+  mode: 'default' | 'auto-review' | 'read-only' | 'full-access' | 'custom';
+  profile: string | null;
+  reviewer: string | null;
+  fingerprint?: string | null;
+};
+
+export type ResolvedPermission = {
+  mode: SavedPermissionSelection['mode'];
+  changed: boolean;
+};
+
+export function inferPermissionMode(profile: string | null, reviewer: string | null) {
+  return profile === ':workspace' ? (reviewer === 'auto_review' ? 'auto-review' : 'default') :
+    profile === ':read-only' ? 'read-only' : profile === ':danger-full-access' ? 'full-access' : 'custom';
+}
+
+/**
+ * A saved fingerprint is required to call a thread explicitly custom after a
+ * reload. Legacy threads without one remain at their native-profile inference
+ * instead of being retroactively relabeled.
+ */
+export function resolveResumedPermission(input: {
+  profile: string | null;
+  reviewer: string | null;
+  selected?: SavedPermissionSelection;
+  savedFingerprint?: string;
+  actualFingerprint?: string | null;
+}): ResolvedPermission {
+  const inferred = inferPermissionMode(input.profile, input.reviewer);
+  if (input.savedFingerprint) {
+    const matches = input.actualFingerprint === input.savedFingerprint;
+    return {
+      mode: matches ? 'custom' : inferred,
+      changed: Boolean(input.actualFingerprint && !matches),
+    };
+  }
+  if (input.selected && input.selected.profile === input.profile &&
+      input.selected.reviewer === input.reviewer) {
+    return { mode: input.selected.mode, changed: false };
+  }
+  return { mode: inferred, changed: false };
 }
 
 function preferences(): Saved {

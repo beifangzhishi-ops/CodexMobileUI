@@ -19,5 +19,6 @@ import './diagnostics.test';
 import './gateway.test';
 import './scheduler.test';
 import './sidebar-pins.test';
+import './thread-completions.test';
 import './tool-images.test';
 import './visualize.test';

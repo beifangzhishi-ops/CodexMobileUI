@@ -14,6 +14,9 @@ import type { Conversation, HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
   type SidebarPinsSnapshot } from './sidebarPins';
+import { fetchThreadCompletions, parseThreadCompletions, setThreadCompletion,
+  writeCachedThreadCompletions,
+  type CompletedThread, type ThreadCompletionsSnapshot } from './threadCompletions';
 import {
   clampSidebarWidth, defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences,
 } from './sidebarPreferences';
@@ -130,6 +133,14 @@ function savedSharedPins(): SidebarPinsSnapshot {
   try { return parseSidebarPins(JSON.parse(localStorage.getItem('codex-web-shared-pins') ?? 'null')); }
   catch { return { revision: 0, items: [] }; }
 }
+function savedThreadCompletions(): ThreadCompletionsSnapshot {
+  try {
+    return parseThreadCompletions(
+      JSON.parse(localStorage.getItem('codex-web-thread-completions') ?? 'null'));
+  } catch {
+    return { revision: 0, items: [] };
+  }
+}
 function dateLabel(ts: number) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return ts >= today.getTime() ? '今天' : ts >= today.getTime() - 86400000 ? '昨天' : '更早';
@@ -174,6 +185,11 @@ export default function DesktopApp() {
     .map((pin) => pin.hostId + ':' + pin.id), [sharedPins.items]);
   const pinnedProjectIds = useMemo(() => sharedPins.items.filter((pin) => pin.type === 'project')
     .map((pin) => pin.hostId + ':' + pin.id), [sharedPins.items]);
+  const [threadCompletions, setThreadCompletions] =
+    useState<ThreadCompletionsSnapshot>(savedThreadCompletions);
+  const completionsRevision = useRef(threadCompletions.revision);
+  const completedThreadIds = useMemo(() => threadCompletions.items
+    .map((item) => item.hostId + ':' + item.threadId), [threadCompletions.items]);
   const [collapsedSections, setCollapsedSections] = useState<string[]>(initialSidebar.collapsedSections);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draftRevisions = useRef<Record<string, number>>({});
@@ -643,13 +659,24 @@ export default function DesktopApp() {
     try { acceptPins(await fetchSidebarPins()); }
     catch { /* Offline browser keeps last successfully fetched pins. */ }
   }
+  function acceptThreadCompletions(snapshot: ThreadCompletionsSnapshot) {
+    if (snapshot.revision < completionsRevision.current) return;
+    completionsRevision.current = snapshot.revision;
+    setThreadCompletions(snapshot);
+    writeCachedThreadCompletions(() => localStorage, snapshot);
+  }
+  async function refreshThreadCompletions() {
+    try { acceptThreadCompletions(await fetchThreadCompletions()); }
+    catch { /* Offline browser keeps the last completed snapshot. */ }
+  }
   async function refreshSidebar() {
     if (sidebarRefreshBusy.current) return;
     sidebarRefreshBusy.current = true;
     setSidebarRefreshing(true);
     try {
       const results = await Promise.allSettled(hosts.map((host) => live.refresh(host.id)));
-      await Promise.allSettled([refreshPins(), ...hosts.map((host) => live.refreshRateQuota(host.id))]);
+      await Promise.allSettled([refreshPins(), refreshThreadCompletions(),
+        ...hosts.map((host) => live.refreshRateQuota(host.id))]);
       setNotice(results.some((result) => result.status === 'rejected')
         ? '部分电脑刷新失败，请检查连接' : '侧栏已刷新');
     } finally {
@@ -718,10 +745,18 @@ export default function DesktopApp() {
     try { acceptPins(await setSidebarPin(pin, pinned)); }
     catch { setNotice('置顶未能保存到 6v，请检查主机连接'); }
   }
+  async function changeThreadCompletion(thread: CompletedThread, completed: boolean) {
+    try { acceptThreadCompletions(await setThreadCompletion(thread, completed)); }
+    catch { setNotice('完成状态未能保存到 6v，请检查主机连接'); }
+  }
   useEffect(() => {
     void refreshPins();
+    void refreshThreadCompletions();
     if (!sidebarOpen) return;
-    const timer = window.setInterval(() => { void refreshPins(); }, 15_000);
+    const timer = window.setInterval(() => {
+      void refreshPins();
+      void refreshThreadCompletions();
+    }, 15_000);
     return () => window.clearInterval(timer);
   }, [sidebarOpen]);
   useEffect(() => {
@@ -1341,13 +1376,27 @@ export default function DesktopApp() {
   function conversationRow(item: SidebarConversation, nested = false, location: RenameLocation = 'recent') {
     const key = conversationKey(item.hostId, item.id);
     const pinned = pinnedIds.includes(key);
+    const completed = completedThreadIds.includes(key);
     const editingHere = inlineRename?.hostId === item.hostId &&
       inlineRename.threadId === item.id && inlineRename.location === location;
     return <div key={key} className={'conversation-row-wrap context-press-target' + (nested ? ' nested' : '')}
       data-context-kind="thread" data-context-host={item.hostId} data-context-id={item.id}>
+      <button className={'conversation-completion' + (completed ? ' is-completed' : '')}
+        type="button" role="checkbox" aria-checked={completed}
+        title={completed ? '标记为未完成' : '标记为完成'}
+        aria-label={(completed ? '标记为未完成：' : '标记为完成：') + item.title}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void changeThreadCompletion({ hostId: item.hostId, threadId: item.id }, !completed);
+        }}>
+        <span className="conversation-completion-box">
+          {completed && <Check size={14} aria-hidden="true"/>}
+        </span>
+      </button>
       {editingHere ? <div className={'conversation-row conversation-rename-row' + (nested ? ' nested' : '') +
         (activeId === key ? ' is-selected' : '')}>
-        <span className="conversation-name is-editing">{pinned && <Pin size={12} />}
+        <span className="conversation-name is-editing">
           <input className="conversation-inline-input" ref={inlineRenameInputRef} type="text"
             aria-label={'重命名聊天：' + item.title} autoFocus maxLength={80}
             disabled={inlineRename.saving} value={inlineRename.draft}
@@ -1372,7 +1421,7 @@ export default function DesktopApp() {
         onClick={() => chooseConversation(item.hostId, item.id)}>
         <span className="conversation-name" onDoubleClick={(event) => {
           event.preventDefault(); event.stopPropagation(); beginInlineRename(item, location);
-        }}>{pinned && <Pin size={12} />} {item.title}</span>
+        }}>{item.title}</span>
         <span className="conversation-end">{!nested && <span className="conversation-host">{item.hostId}</span>}<StatusMark status={unreadThreads[key] && item.status !== 'running' ? 'unread' : item.status} /></span>
       </button>}
       <div className="conversation-row-actions">

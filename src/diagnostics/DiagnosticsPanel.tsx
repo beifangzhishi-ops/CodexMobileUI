@@ -14,6 +14,7 @@ export function DiagnosticsPanel({ visible, onClose }: {
   const [summary, setSummary] = useState<DiagnosticSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -28,19 +29,21 @@ export function DiagnosticsPanel({ visible, onClose }: {
     if (!visible) return;
     logDiagnostic('diagnostics.panelOpened');
     setError(null);
+    setSavedPath(null);
     void refresh();
   }, [visible, refresh]);
 
-  const share = async () => {
+  const save = async () => {
     logDiagnostic('diagnostics.exportPressed');
     setBusy(true);
     setError(null);
+    setSavedPath(null);
     try {
-      await exportDiagnostics();
+      setSavedPath(await exportDiagnostics());
       await refresh();
     } catch (e) {
       logDiagnostic('diagnostics.exportFailed', classifyDiagnosticError(e));
-      setError('导出失败：请确认设备有可用的文件分享应用，然后重试');
+      setError('保存失败：请确认设备存储可用且已允许写入下载目录，然后重试');
     } finally {
       setBusy(false);
     }
@@ -79,18 +82,20 @@ export function DiagnosticsPanel({ visible, onClose }: {
               '正在读取日志…'}
           </Text>
           <Text style={styles.hint}>
-            复现连接、网页加载或后台通知问题后，可回到这里导出 JSON 文件。
+            复现连接、网页加载或后台通知问题后，可直接保存 JSON 到公共下载目录。
             日志仅包含安全的事件类别与状态，不包含授权密钥、电脑地址或聊天正文。
           </Text>
           <Pressable
             accessibilityRole="button"
             disabled={busy}
             style={[styles.exportButton, busy && styles.disabled]}
-            onPress={() => { void share(); }}
+            onPress={() => { void save(); }}
           >
-            {busy ? <ActivityIndicator color="#13253b" /> : <Text style={styles.exportText}>导出 JSON 日志（系统分享）</Text>}
+            {busy ? <ActivityIndicator color="#13253b" /> :
+              <Text style={styles.exportText}>保存日志到下载目录</Text>}
           </Pressable>
-          {error && <Text style={styles.error}>{error}</Text>}
+          {savedPath && <Text role="status" style={styles.success}>已保存：{savedPath}</Text>}
+          {error && <Text role="alert" style={styles.error}>{error}</Text>}
           <View style={styles.actions}>
             <Pressable accessibilityRole="button" onPress={() => { void refresh(); }}>
               <Text style={styles.action}>刷新列表</Text>
@@ -124,6 +129,7 @@ const styles = StyleSheet.create({
   exportButton: { borderRadius: 13, backgroundColor: '#b8d1f9', alignItems: 'center', padding: 15 },
   exportText: { color: '#13253b', fontWeight: '700', fontSize: 15 },
   disabled: { opacity: 0.5 },
+  success: { color: '#a8e3d2', fontSize: 13 },
   error: { color: '#ff9d9d', fontSize: 13 },
   actions: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
   action: { color: '#a8e3d2', fontSize: 14 },

@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSnapshot, applyNotice, reconcileObservedReasoning } from '../src/nativeProtocol.ts';
 import { compactionBusy, compactionOutcome } from '../src/compaction.ts';
-import { permissionFingerprint } from '../src/permissionPreference.ts';
+import {
+  permissionFingerprint, resolveResumedPermission,
+} from '../src/permissionPreference.ts';
 
 test('reasoning summary and explicit display text remain separate and foldable by item', () => {
   const notice = (method, params) => ({ method, params: { turnId: 't', itemId: 'r', ...params } });
@@ -68,4 +70,27 @@ test('permission preference compares native effective policy, not merely its lab
   assert.notEqual(hash, await permissionFingerprint(changed));
   assert.notEqual(hash, await permissionFingerprint({ ...first, approvalPolicy: 'never' }));
   assert.equal(await permissionFingerprint({}), null);
+});
+
+test('new custom threads require a matching native fingerprint after reload', () => {
+  const workspace = {
+    profile: ':workspace', reviewer: 'auto_review',
+  };
+  assert.deepEqual(resolveResumedPermission(workspace), {
+    mode: 'auto-review', changed: false,
+  });
+  assert.deepEqual(resolveResumedPermission({
+    ...workspace, savedFingerprint: 'a'.repeat(64), actualFingerprint: 'a'.repeat(64),
+  }), { mode: 'custom', changed: false });
+  assert.deepEqual(resolveResumedPermission({
+    ...workspace, savedFingerprint: 'a'.repeat(64), actualFingerprint: 'b'.repeat(64),
+  }), { mode: 'auto-review', changed: true });
+  assert.deepEqual(resolveResumedPermission({
+    ...workspace,
+    selected: { mode: 'custom', profile: ':workspace', reviewer: 'auto_review' },
+  }), { mode: 'custom', changed: false });
+  assert.deepEqual(resolveResumedPermission({
+    ...workspace,
+    selected: { mode: 'default', profile: ':workspace', reviewer: 'user' },
+  }), { mode: 'auto-review', changed: false });
 });

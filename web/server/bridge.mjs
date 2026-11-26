@@ -45,12 +45,19 @@ const { MAX_VISUALIZE_BYTES, validVisualizeSelection } =
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
   : { SidebarPinsStore: null };
+const { ThreadCompletionStore } = mode === 'coordinator'
+  ? await import(pathToFileURL(resolve('dist/gateway/threadCompletions.js')).href)
+  : { ThreadCompletionStore: null };
+const { handleThreadCompletionsHttp } = mode === 'coordinator'
+  ? await import(pathToFileURL(resolve('dist/gateway/threadCompletionsHttp.js')).href)
+  : { handleThreadCompletionsHttp: null };
 const titleService = new WebTitleService(resolve('.state'));
 const config = JSON.parse(readFileSync(resolve('.state/web-bridge.json'), 'utf8').replace(/^\uFEFF/, ''));
 const credential = readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
 if (!/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');
 const coordinator = mode === 'coordinator';
 const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state')) : null;
+const threadCompletions = coordinator ? new ThreadCompletionStore(resolve('.state')) : null;
 const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json')) : null;
 const pathOverlays = coordinator ? new PathOverlayStore(resolve('.state/file-path-overlays.json')) : null;
 const notificationFeed = coordinator
@@ -409,6 +416,10 @@ const server = http.createServer((req, res) => {
         throw Error('INVALID_REQUEST');
       return sidebarPins.set(body.pin, body.pinned);
     })().then((result) => reply(200, result)).catch(() => reply(400, { error: 'PINS_REQUEST_FAILED' }));
+    return;
+  }
+  if (name === '/api/thread-completions' && (req.method === 'GET' || req.method === 'POST')) {
+    void handleThreadCompletionsHttp(req, res, threadCompletions, config.origin);
     return;
   }
   if (name === '/api/file-path-hosts' && (req.method === 'GET' || req.method === 'POST')) {

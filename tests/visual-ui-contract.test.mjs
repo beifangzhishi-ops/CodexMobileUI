@@ -8,6 +8,7 @@ const app = read('App.tsx');
 const webApp = read('web/src/DesktopApp.tsx');
 const uiStyle = read('web/src/desktop.css');
 const client = read('web/src/useLiveCodex.ts');
+const newThreadPermission = read('web/src/newThreadPermission.ts');
 const bridge = read('web/server/bridge.mjs');
 const config = JSON.parse(read('app.json'));
 const packageFile = JSON.parse(read('package.json'));
@@ -200,4 +201,26 @@ test('shared frontend keeps real status, events, permissions, models and image u
   assert.match(webApp, /WebQuotaRing/);
   assert.match(webApp, /followUpMode/);
   assert.match(webApp, /className="composer-actions"/);
+});
+
+test('sidebar completion checkbox stays leftmost without replacing pin actions', () => {
+  assert.match(webApp, /className=\{'conversation-completion'/);
+  assert.match(webApp, /role="checkbox" aria-checked=\{completed\}/);
+  assert.match(webApp, /changeThreadCompletion\(\{ hostId: item\.hostId, threadId: item\.id \}, !completed\)/);
+  assert.match(webApp, /className=\{'row-pin'/);
+  assert.doesNotMatch(webApp, /\{pinned && <Pin size=\{12\} \/>\}/);
+  assert.match(uiStyle, /\.conversation-completion\s*\{[^}]*position:\s*absolute[^}]*left:\s*0[^}]*width:\s*38px[^}]*height:\s*100%/s);
+  assert.match(uiStyle, /\.conversation-completion-box\s*\{[^}]*width:\s*17px[^}]*height:\s*17px/s);
+  assert.match(uiStyle, /\.conversation-row-wrap \.conversation-row\s*\{[^}]*padding-left:\s*42px[^}]*padding-right:\s*58px/s);
+  assert.match(uiStyle, /\.conversation-completion\s*\{\s*width:\s*42px/);
+});
+
+test('new custom permissions are verified without per-turn or start overrides', () => {
+  assert.match(webApp, /useState<PermissionMode>\('custom'\)/);
+  assert.match(client, /if \(perm === 'custom'\)[\s\S]*?rememberNewThreadCustomPermission/);
+  assert.match(client, /remember: \(selection\)[\s\S]*?storeCustomPermission\(key, selection\.fingerprint\)/);
+  assert.match(client, /rememberNewThreadCustomPermission[\s\S]*?options\.onCreated\?\.\(id\)/);
+  assert.match(newThreadPermission, /permissionFingerprint\(input\.startResponse\)/);
+  assert.match(newThreadPermission, /void Promise\.resolve\(\)\.then\(\(\) => input\.readResume/);
+  assert.match(client, /const nativePerms = existingId \? \{\} : permissionParams\(perm\)/);
 });
