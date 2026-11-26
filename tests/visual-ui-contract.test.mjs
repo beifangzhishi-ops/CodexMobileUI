@@ -203,6 +203,7 @@ test('shared frontend keeps real status, events, permissions, models and image u
   assert.match(webApp, /className="composer-actions"/);
 });
 
+<<<<<<< HEAD
 test('sidebar completion checkbox stays leftmost without replacing pin actions', () => {
   assert.match(webApp, /className=\{'conversation-completion'/);
   assert.match(webApp, /role="checkbox" aria-checked=\{completed\}/);
@@ -223,4 +224,30 @@ test('new custom permissions are verified without per-turn or start overrides', 
   assert.match(newThreadPermission, /permissionFingerprint\(input\.startResponse\)/);
   assert.match(newThreadPermission, /void Promise\.resolve\(\)\.then\(\(\) => input\.readResume/);
   assert.match(client, /const nativePerms = existingId \? \{\} : permissionParams\(perm\)/);
+=======
+test('both quota popovers share one 6v-owned 3% guard control and status', () => {
+  assert.equal((webApp.match(/className="quota-guard"/g) ?? []).length, 1);
+  assert.equal((webApp.match(/className="quota-guard-toggle"/g) ?? []).length, 1);
+  assert.match(webApp, /任一电脑额度剩余 ≤3% 时自动保护/);
+  assert.match(webApp, /live\.setQuotaGuardEnabled\(!quotaGuardState\.enabled\)/);
+  assert.match(webApp, /quotaGuardState\?\.sync\.state === 'pending'/);
+  assert.match(webApp, /live\.status\['6v'\] !== 'online'/);
+  assert.match(client, /quotaGuard\/state/);
+  assert.match(client, /quotaGuard\/set/);
+  assert.match(client, /quotaGuard\/updated/);
+  assert.match(client, /expectedRevision: state\.revision/);
+  assert.match(bridge, /quotaGuardStore\.setEnabled/);
+  assert.match(bridge, /web\/quotaGuard/);
+  assert.match(bridge, /remoteQuotaGuardReachable/);
+  assert.match(bridge, /syncPeerQuotaGuard/);
+  assert.match(bridge, /const relayHostId = remotePeer \? null : coordinator \? '6v' : 'noha'/);
+  assert.match(bridge, /Direct relay bypasses the per-host Gateway/);
+  assert.match(bridge, /quotaGuardGuardedMethod\(msg\.method\)/);
+  assert.match(bridge, /quotaGuardFileAdmission\(quotaGuardStore, relayHostId/);
+  assert.match(bridge, /synchronizeQuotaGuardPeer/);
+  assert.match(bridge, /handleQuotaGuardPeerSync/);
+  assert.match(bridge, /parseQuotaGuardPeerSyncRequest/);
+  assert.match(uiStyle, /\.quota-guard-toggle/);
+  assert.match(uiStyle, /\.quota-guard-status/);
+>>>>>>> b97c6657b4b25931825bdbd3afb7647c966f37c3
 });

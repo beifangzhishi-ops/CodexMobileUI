@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path';
 import { WebSocket } from 'ws';
 import type { Task } from './scheduler.js';
 import { ensureTaskWorktree } from './schedulerWorktree.js';
+import type { QuotaGuardGate } from './quotaGuardState.js';
 
 type Json = Record<string, unknown>;
 type Pending = { resolve: (value: Json) => void; reject: (error: Error) => void;
@@ -123,10 +124,15 @@ function projectRoot(response: Json, projectId: string): string {
 }
 
 export async function executeScheduledTask(task: Task, upstream: string,
-  callbacks: SchedulerRunCallbacks, stateDirectory?: string): Promise<void> {
+  callbacks: SchedulerRunCallbacks, stateDirectory?: string,
+  quotaGuard?: QuotaGuardGate | null): Promise<void> {
   const native = new SchedulerNativeClient(upstream);
   try {
     await native.connect();
+    let admission = quotaGuard?.admission();
+    if (admission && !admission.allowed) {
+      throw new Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
+    }
     const info = await native.request('project/read', { projectId: task.projectId });
     const root = projectRoot(info, task.projectId);
     const cwd = task.workspaceMode === 'worktree'
@@ -164,6 +170,10 @@ export async function executeScheduledTask(task: Task, upstream: string,
     timer = setTimeout(() => settle?.(new Error('TURN_COMPLETION_TIMEOUT')), 30 * 60_000);
     try {
       // Subscribe before turn/start: completion can arrive before the RPC acknowledgement.
+      admission = quotaGuard?.admission();
+      if (admission && !admission.allowed) {
+        throw new Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
+      }
       const result = await native.request('turn/start', {
         threadId: selectedThread, input: [{ type: 'text', text: task.prompt }],
         ...(task.model ? { model: task.model } : {}),

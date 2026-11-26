@@ -16,6 +16,7 @@ import { PublicationStore } from './publications.js';
 import { redactNativeDiffFrame } from './redactDiff.js';
 import { HostFileError, readHostFile, writeHostFile } from './hostFiles.js';
 import { SchedulerService } from './schedulerService.js';
+import { QuotaGuardService } from './quotaGuardService.js';
 import { SidebarPinsStore } from './sidebarPins.js';
 import { readNativeToolImage, type VerifiedToolImage } from './toolImages.js';
 import { readVisualize } from './visualize.js';
@@ -23,6 +24,7 @@ import {
   classifyGatewayClient, classifyGatewayRoute, createGatewayJournal,
   type GatewayTrace,
 } from './diagnostics.js';
+import { quotaGuardGuardedMethod } from '../shared/quotaGuard.js';
 
 interface Config {
   publicOrigin: string;
@@ -64,7 +66,6 @@ export function createGateway(config: Config) {
   // The isolated legacy server is retained only for existing protocol tests.
   const oauth = config.privatePort === undefined
     ? new OAuthStore(config.secret, config.redirectUri, config.stateFile) : null;
-  const scheduler = new SchedulerService(config.stateFile, config.upstream);
   const publications = new PublicationStore(config.stateFile);
   const sidebarPins = new SidebarPinsStore(dirname(config.stateFile));
   const journal = createGatewayJournal(resolve(dirname(config.stateFile), 'mobile-gateway-requests.jsonl'));
@@ -104,6 +105,17 @@ export function createGateway(config: Config) {
     if (addresses.length !== 1) throw new Error('Expected one configured local Tailscale IPv4 adapter');
     return addresses[0];
   };
+  let quotaHostId: '6v' | 'noha' = '6v';
+  if (config.privatePort === 48889) {
+    try {
+      const localAddress = localTailnetAddress();
+      quotaHostId = loadPrivateMachines().find((entry) =>
+        new URL(entry.url).hostname === localAddress)?.name === 'noha' ? 'noha' : '6v';
+    } catch { /* The host manifest is already required by the private listener. */ }
+  }
+  const quotaGuard = config.privatePort === undefined ? null
+    : new QuotaGuardService(dirname(config.stateFile), config.upstream, quotaHostId);
+  const scheduler = new SchedulerService(config.stateFile, config.upstream, quotaGuard);
   // Never route this listener through Funnel: membership in the Tailnet is its
   // entire access boundary. It does not serve OAuth or public Gateway routes.
   const privateServer = http.createServer((req, res) => {
@@ -554,7 +566,10 @@ export function createGateway(config: Config) {
                 const allowed = new Set(['INVALID_PARAMS', 'INVALID_TASK', 'INVALID_SCHEDULE',
                   'INVALID_TIME_ZONE', 'SCHEDULE_IN_PAST', 'TASK_LIMIT', 'TASK_NOT_FOUND',
                   'TASK_BUSY', 'RUN_NOT_FOUND', 'PROJECT_NOT_FOUND', 'MODEL_NOT_FOUND',
-                  'EFFORT_NOT_SUPPORTED', 'THREAD_PROJECT_MISMATCH']);
+                  'EFFORT_NOT_SUPPORTED', 'THREAD_PROJECT_MISMATCH',
+                  'QUOTA_GUARD_BLOCKED', 'QUOTA_GUARD_SYNC_PENDING',
+                  'QUOTA_GUARD_MONITOR_UNAVAILABLE', 'QUOTA_GUARD_STATE_INVALID',
+                  'QUOTA_GUARD_PEER_BLOCKED', 'QUOTA_GUARD_PEER_PENDING']);
                 const name = error instanceof Error && allowed.has(error.message)
                   ? error.message : 'AUTOMATION_UNAVAILABLE';
                 reply({ error: { code: -32602, message: name } });
@@ -733,6 +748,22 @@ export function createGateway(config: Config) {
           }
           return;
         }
+        if (!binary && quotaGuard) {
+          try {
+            const request = JSON.parse(bytes.toString()) as {
+              id?: unknown; method?: unknown;
+            };
+            const guardedMethod = quotaGuardGuardedMethod(String(request.method));
+            if (guardedMethod) {
+              const admission = quotaGuard.admission();
+              if (!admission.allowed && Number.isSafeInteger(request.id)) {
+                client.send(JSON.stringify({ id: request.id, error: { code: -32000,
+                  message: admission.reason ?? 'QUOTA_GUARD_BLOCKED' } }));
+                return;
+              }
+            }
+          } catch { /* The policy gate already accepted a valid JSON frame. */ }
+        }
         const traceId = traceRequest(bytes, binary);
         if (upstream?.readyState === WebSocket.OPEN) {
           upstream.send(bytes, { binary }, (error) => {
@@ -849,10 +880,12 @@ export function createGateway(config: Config) {
         }
       }
       journal.append({ event: 'gateway.started' });
+      quotaGuard?.start();
       scheduler.start();
     },
     close: () => new Promise<void>((done) => {
       journal.append({ event: 'gateway.stopped' });
+      quotaGuard?.close();
       scheduler.close();
       for (const socket of wss.clients) socket.terminate();
       wss.close(() => {

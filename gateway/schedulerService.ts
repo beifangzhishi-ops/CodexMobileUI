@@ -2,6 +2,7 @@ import { resolve, dirname } from 'node:path';
 import { SchedulerStore, type Task } from './scheduler.js';
 import { executeScheduledTask, SchedulerNativeClient } from './schedulerRunner.js';
 import { inspectGitProject } from './schedulerWorktree.js';
+import type { QuotaGuardGate } from './quotaGuardState.js';
 
 type Params = Record<string, unknown>;
 const object = (value: unknown): value is Params =>
@@ -15,7 +16,8 @@ export class SchedulerService {
   private readonly busy = new Set<string>();
   private closed = false;
 
-  constructor(private readonly stateFile: string, private readonly upstream: string) {
+  constructor(private readonly stateFile: string, private readonly upstream: string,
+    private readonly quotaGuard: QuotaGuardGate | null = null) {
     this.store = new SchedulerStore(resolve(dirname(stateFile), 'scheduler.sqlite'));
   }
 
@@ -36,9 +38,12 @@ export class SchedulerService {
   private tick(): void {
     if (this.closed) return;
     const now = new Date();
+    const admission = this.quotaGuard?.admission(now.getTime());
     for (const task of this.store.list()) {
       if (task.enabled && task.nextRunAt && Date.parse(task.nextRunAt) <= now.getTime()) {
-        if (!this.busy.has(task.id)) this.launch(task.id, 'scheduled');
+        if (admission && !admission.allowed) {
+          this.store.skipGuardedOccurrence(task.id, admission.reason ?? 'QUOTA_GUARD_BLOCKED', now);
+        } else if (!this.busy.has(task.id)) this.launch(task.id, 'scheduled');
         else this.store.skipBusyOccurrence(task.id, now);
       }
     }
@@ -46,6 +51,10 @@ export class SchedulerService {
 
   private launch(id: string, trigger: 'manual' | 'scheduled'): ReturnType<SchedulerStore['beginRun']> {
     if (this.closed || this.busy.has(id)) throw new Error('TASK_BUSY');
+    const admission = this.quotaGuard?.admission();
+    if (admission && !admission.allowed) {
+      throw new Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
+    }
     const run = this.store.beginRun(id, trigger);
     const task = this.store.get(id)!;
     this.busy.add(id);
@@ -58,7 +67,7 @@ export class SchedulerService {
       onTurn: (threadId, turnId) => {
         if (!this.closed) this.store.assignThread(run.id, threadId, turnId);
       },
-    }, dirname(this.stateFile)).then(() => {
+    }, dirname(this.stateFile), this.quotaGuard).then(() => {
       if (!this.closed) this.store.finishRun(run.id, 'completed', null);
     }).catch((error: unknown) => {
       if (this.closed) return;

@@ -625,6 +625,22 @@ Gateway OAuth is independent of native Codex model login. For model requests, au
 
 ## Features implemented in source
 
+- **3% shared quota guard (source):** Both quota popovers expose the same
+  default-off setting, persisted by 6v and mirrored to noha through the existing
+  authenticated private peer. Either host can latch a guard when any valid
+  native rate-limit window, including non-Codex limit IDs, has raw remaining
+  quota at or below 3%. The host services block new turns, steering, native
+  queue additions/starts, goal execution, compaction, titles and manual
+  scheduler runs while latched; due scheduled occurrences are skipped.
+  Confirmed active turns are interrupted with their exact native thread/turn
+  IDs. Each host's latch is exchanged over the bearer-authenticated private peer
+  connection and remains effective while the peer is offline until that host
+  confirms a strictly newer above-threshold snapshot. Reads and manual stops
+  remain available. There is no native queue-pause RPC, so queued model work
+  cannot be frozen in place: existing queue items are preserved and newly active
+  work is rediscovered from native status/queue notices, but an interrupted
+  active turn's preserved queue still needs the documented manual recovery.
+
 - **2026-11-16 attachment upload cancellation:** The Android composer exposes
   a cancel action while reading or uploading an image/document. A cancelled
   task cannot enqueue further chunks or add a late attachment to the composer;

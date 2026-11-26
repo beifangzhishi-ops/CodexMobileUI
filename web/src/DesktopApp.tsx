@@ -145,6 +145,20 @@ function dateLabel(ts: number) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return ts >= today.getTime() ? '今天' : ts >= today.getTime() - 86400000 ? '昨天' : '更早';
 }
+
+function quotaGuardStatusLabel(status: string | undefined): string {
+  switch (status) {
+    case 'off': return '保护未启用';
+    case 'ready': return '保护就绪';
+    case 'guarded': return '已阻止新工作';
+    case 'interrupting': return '正在中断已运行回合';
+    case 'confirmed': return '已中断，等待额度恢复';
+    case 'failed': return '中断尚未确认';
+    case 'degraded': return '额度监控异常';
+    case 'pending': return '等待两台电脑同步';
+    default: return '正在读取共享状态';
+  }
+}
 function StatusMark({ status }: { status: Conversation['status'] }) {
   if (status === 'idle') return null;
   return <span className={'status-dot ' + status} title={status === 'running' ? '正在执行' : '未读消息'} />;
@@ -228,6 +242,7 @@ export default function DesktopApp() {
     };
   }, [popup]);
   const [quotaDetail, setQuotaDetail] = useState<'fiveHour' | 'weekly' | null>(null);
+  const [quotaGuardWorking, setQuotaGuardWorking] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -333,6 +348,29 @@ export default function DesktopApp() {
     ? { hostId: active.hostId, threadId: active.id } : null);
   const currentHost = active?.hostId ?? newHost;
   const currentQuota = live.rateQuota[currentHost] ?? null;
+  const quotaGuardState = live.quotaGuard;
+  useEffect(() => {
+    if (!quotaDetail) return;
+    void live.refreshQuotaGuard().catch(() => undefined);
+    void live.refreshRateQuota(currentHost).catch(() => undefined);
+  }, [quotaDetail, currentHost, live.refreshQuotaGuard, live.refreshRateQuota]);
+  async function toggleQuotaGuard() {
+    if (!quotaGuardState || quotaGuardWorking || live.status['6v'] !== 'online') return;
+    setQuotaGuardWorking(true);
+    try {
+      await live.setQuotaGuardEnabled(!quotaGuardState.enabled);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (message === 'QUOTA_GUARD_CONFLICT') {
+        await live.refreshQuotaGuard().catch(() => undefined);
+        setNotice('共享保护设置已由另一客户端更新，请核对后重试');
+      } else {
+        setNotice('无法保存共享额度保护设置，请检查 6v 连接');
+      }
+    } finally {
+      setQuotaGuardWorking(false);
+    }
+  }
   useEffect(() => {
     // The Android shell mirrors only a bounded rate-limit snapshot to its home widget.
     // No chat text, account credentials, or host network addresses cross this bridge.
@@ -1682,9 +1720,17 @@ export default function DesktopApp() {
           <button className="new-chat-button" aria-label="新建聊天" title="新建聊天" onClick={() => createNewChat()}><ComposeIcon size={20}/></button>
           <div className="quota-ring-group">
             <WebQuotaRing kind="fiveHour" label="5小时" quota={currentQuota}
-              onClick={() => { setPopup(null); setQuotaDetail('fiveHour'); }} />
+              onClick={() => {
+                setPopup(null); setQuotaDetail('fiveHour');
+                void live.refreshQuotaGuard().catch(() => undefined);
+                void live.refreshRateQuota(currentHost).catch(() => undefined);
+              }} />
             <WebQuotaRing kind="weekly" label="每周" quota={currentQuota}
-              onClick={() => { setPopup(null); setQuotaDetail('weekly'); }} />
+              onClick={() => {
+                setPopup(null); setQuotaDetail('weekly');
+                void live.refreshQuotaGuard().catch(() => undefined);
+                void live.refreshRateQuota(currentHost).catch(() => undefined);
+              }} />
           </div>
           <button data-popup-trigger className="profile-button" aria-label="设置" title="设置" onClick={() => setPopup(popup === 'account' ? null : 'account')}><span className="profile-mark">C</span></button>
           {popup === 'account' && <div className="popover account-popover"><span className="popover-heading">Codex 工作台</span>
@@ -2313,6 +2359,37 @@ export default function DesktopApp() {
         {currentQuota && <div className="quota-dialog-note">
           更新于 {new Date(currentQuota.updatedAt).toLocaleTimeString()}
         </div>}
+        <div className="quota-guard" data-state={quotaGuardState?.status ?? 'loading'}>
+          <div className="quota-guard-heading">
+            <ShieldCheck size={16}/>
+            <span>3% 额度保护</span>
+          </div>
+          <label className="quota-guard-toggle">
+            <input type="checkbox" checked={quotaGuardState?.enabled === true}
+              disabled={quotaGuardWorking || !quotaGuardState || live.status['6v'] !== 'online'}
+              onChange={() => void toggleQuotaGuard()}
+              aria-label="任一额度窗口剩余不超过 3% 时启用自动保护" />
+            <span className="quota-guard-switch" aria-hidden="true"/>
+            <span>{quotaGuardWorking ? '正在保存…' : '任一电脑额度剩余 ≤3% 时自动保护'}</span>
+          </label>
+          <div className="quota-guard-note">
+            按原生原始比例判断。触发后阻止新回合、引导、队列、目标和定时任务；读取与手动停止不受影响。
+          </div>
+          <div className="quota-guard-status" role="status">
+            <strong>{quotaGuardStatusLabel(quotaGuardState?.status)}</strong>
+            {quotaGuardState?.triggerReason && <span>{quotaGuardState.triggerReason}</span>}
+            {quotaGuardState?.sync.state === 'pending' &&
+              <span>{quotaGuardState.sync.reason ?? '另一台电脑尚未确认共享设置，新工作会等待同步。'}</span>}
+          </div>
+          {quotaGuardState && <div className="quota-guard-hosts">
+            {(['6v', 'noha'] as const).map((hostId) => {
+              const host = quotaGuardState.hosts[hostId];
+              return <span key={hostId} data-status={host?.status ?? 'pending'}>
+                {hostId} · {quotaGuardStatusLabel(host?.status)}
+              </span>;
+            })}
+          </div>}
+        </div>
       </div>
     </div>}
     <button className="mobile-menu" aria-label="展开侧边栏" onClick={() => setSidebarOpen(true)}><Menu size={21}/></button>

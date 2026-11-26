@@ -178,6 +178,13 @@ export class SchedulerStore {
       this.skipOccurrence(task, 'MISSED_WHILE_RUNNING', now);
     }
   }
+  /** A protected quota period is a missed occurrence, never backlogged work. */
+  skipGuardedOccurrence(id: string, reason: string, now = new Date()): void {
+    const task = this.get(id);
+    if (task && task.enabled && task.nextRunAt && Date.parse(task.nextRunAt) <= now.getTime()) {
+      this.skipOccurrence(task, reason, now);
+    }
+  }
   private skipOccurrence(task: Task, reason: string, now: Date): void {
     const run: TaskRun = { id: randomUUID(), taskId: task.id, state: 'interrupted',
       startedAt: now.toISOString(), finishedAt: now.toISOString(), threadId: null,

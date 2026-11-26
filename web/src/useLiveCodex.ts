@@ -12,6 +12,9 @@ import { localMessageId } from './browserHelpers';
 import type { NativeMention } from '../../shared/mentions';
 import { parseContextWindowUsage, type ContextWindowUsage } from '../../shared/contextUsage';
 import { parseRateQuota, type RateQuota } from '../../shared/rateLimits';
+import {
+  parseQuotaGuardSharedState, type QuotaGuardSharedState,
+} from '../../shared/quotaGuard';
 import { desktopFileMessage } from '../../shared/desktopFileReferences';
 import { uploadDocument } from './documentUpload';
 import { hasAbsolutePaths, type PathHosts } from './pathHosts';
@@ -64,6 +67,7 @@ export function useLiveCodex() {
   const [status, setStatus] = useState<Record<HostId, HostStatus>>({ '6v': 'connecting', noha: 'connecting' });
   const [errors, setErrors] = useState<Record<HostId, string | null>>({ '6v': null, noha: null });
   const [rateQuota, setRateQuota] = useState<Partial<Record<HostId, RateQuota>>>({});
+  const [quotaGuard, setQuotaGuard] = useState<QuotaGuardSharedState | null>(null);
   const [projects, setProjects] = useState<NativeProject[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [models, setModels] = useState<Record<HostId, NativeModel[]>>({ '6v': [], noha: [] });
@@ -126,6 +130,25 @@ export function useLiveCodex() {
     const snapshot = parseRateQuota(await request(hostId, 'account/rateLimits/read', {}));
     if (snapshot) setRateQuota((previous) => ({ ...previous, [hostId]: snapshot }));
   }, [request]);
+
+  const refreshQuotaGuard = useCallback(async () => {
+    const response = obj(await request('6v', 'quotaGuard/state', {}));
+    const state = parseQuotaGuardSharedState(response.state);
+    if (!state) throw Error('QUOTA_GUARD_STATE_INVALID');
+    setQuotaGuard(state);
+    return state;
+  }, [request]);
+
+  const setQuotaGuardEnabled = useCallback(async (enabled: boolean) => {
+    const state = quotaGuard ?? await refreshQuotaGuard();
+    const response = obj(await request('6v', 'quotaGuard/set', {
+      enabled, expectedRevision: state.revision,
+    }, 20_000));
+    const updated = parseQuotaGuardSharedState(response.state);
+    if (!updated) throw Error('QUOTA_GUARD_STATE_INVALID');
+    setQuotaGuard(updated);
+    return updated;
+  }, [quotaGuard, refreshQuotaGuard, request]);
 
   const pageList = useCallback(async (hostId: HostId, method: 'project/list' | 'thread/list' | 'thread/queue/list', extra: Params = {}) => {
     const rows: unknown[] = [], cursors = new Set<string>();
@@ -446,6 +469,7 @@ export function useLiveCodex() {
             socket.send(JSON.stringify({ method: 'initialized', params: {} }));
             setStatus((s) => ({ ...s, [hostId]: 'online' }));
             void refreshRateQuota(hostId).catch(() => undefined);
+            if (hostId === '6v') void refreshQuotaGuard().catch(() => undefined);
             void refresh(hostId).catch(() =>
               setErrors((s) => ({ ...s, [hostId]: '同步列表失败，请手动刷新' })));
             if (active.current?.hostId === hostId) void select(hostId, active.current.threadId).catch(() => undefined);
@@ -465,6 +489,10 @@ export function useLiveCodex() {
         if (frame.method === 'account/rateLimits/updated') {
           // Native rolling notifications may omit fields. Re-read instead of replacing the snapshot.
           void refreshRateQuota(hostId).catch(() => undefined);
+        }
+        if (frame.method === 'quotaGuard/updated') {
+          const state = parseQuotaGuardSharedState(obj(params.state));
+          if (state) setQuotaGuard(state);
         }
         if (typeof frame.id === 'number') {
           // Only allow responding to an actual pending approval request.
@@ -588,6 +616,7 @@ export function useLiveCodex() {
       for (const hostId of HOSTS) {
         if (clients.current.get(hostId)?.ready) void refreshRateQuota(hostId).catch(() => undefined);
       }
+      if (clients.current.get('6v')?.ready) void refreshQuotaGuard().catch(() => undefined);
     }, 5 * 60_000);
     return () => {
       alive.current = false;
@@ -603,7 +632,8 @@ export function useLiveCodex() {
       refreshTimer.current.clear();
       pollQueued.current.clear();
     };
-  }, [refresh, refreshGoal, readThread, refreshQueue, request, select, refreshRateQuota, setCompactionPhase]);
+  }, [refresh, refreshGoal, readThread, refreshQueue, request, select, refreshRateQuota,
+    refreshQuotaGuard, setCompactionPhase]);
 
   const recheckCompaction = useCallback(async (hostId: HostId, threadId: string) => {
     const key = threadKey(hostId, threadId), job = compactionJobs.current.get(key);
@@ -1010,7 +1040,7 @@ export function useLiveCodex() {
 
   return {
     prepareAttachments,
-    status, errors, rateQuota, refreshRateQuota,
+    status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
     projects, conversations, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
     contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
     listSideChats, createSideChat, loadSideChat, readSubAgent,
