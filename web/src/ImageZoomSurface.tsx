@@ -30,6 +30,7 @@ type SingleGesture = {
   pointerId: number;
   start: Point;
   startTransform: ImageTransform;
+  geometry: ImageGeometry | null;
   moved: boolean;
 };
 
@@ -119,6 +120,7 @@ export function ImageZoomSurface({
       pointerId,
       start: point,
       startTransform: transformRef.current,
+      geometry: imageRef.current ? geometryFor(imageRef.current, transformRef.current) : null,
       moved: false,
     };
   };
@@ -193,7 +195,7 @@ export function ImageZoomSurface({
       active.moved = true;
       event.preventDefault();
       const image = imageRef.current;
-      const geometry = image ? geometryFor(image, active.startTransform) : null;
+      const geometry = active.geometry;
       if (!image || !geometry) return;
       applyTransform(clampTransform(image, geometry, {
         scale: active.startTransform.scale,
