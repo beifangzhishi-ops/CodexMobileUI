@@ -1889,8 +1889,16 @@ export default function DesktopApp() {
                   {message.detail && <details><summary>错误详情</summary><pre>{message.detail}</pre></details>}
                 </div> :
                 message.kind === 'reasoning' ? <ReasoningActivity message={message}/> :
-                message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') + (message.failed ? ' activity-failed' : '')}>
-                  <summary>{message.complete ? <Check size={16}/> : <span className="activity-spinner"/>}
+                message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') +
+                  (message.failed || message.activityType === 'subAgentActivity' &&
+                    (message.agentStatus === 'failed' || live.agentStatuses[`${active.hostId}:${active.id}:${message.agentThreadId}`] === 'failed')
+                    ? ' activity-failed' : '')}>
+                  <summary>{(message.activityType === 'subAgentActivity'
+                    ? ['completed', 'interrupted', 'failed'].includes(message.agentStatus ?? '') ||
+                      live.status[active.hostId] === 'online' && ['completed', 'interrupted', 'failed'].includes(
+                        live.agentStatuses[`${active.hostId}:${active.id}:${message.agentThreadId}`] ?? '')
+                    : message.complete)
+                    ? <Check size={16}/> : <span className="activity-spinner"/>}
                     {isTool ? <>
                       {message.activityType === 'imageView' ? <Image size={15}/> :
                         ['mcpToolCall', 'dynamicToolCall'].includes(message.activityType ?? '')
@@ -1901,14 +1909,18 @@ export default function DesktopApp() {
                       </span>
                     </>
                       : <span className="activity-label">{message.title ?? '工具调用'}</span>}
-                    {message.failed && <span className="activity-error">失败</span>}<ChevronDown size={15}/></summary>
+                    {(message.failed || message.activityType === 'subAgentActivity' &&
+                      (message.agentStatus === 'failed' || live.agentStatuses[`${active.hostId}:${active.id}:${message.agentThreadId}`] === 'failed')) &&
+                      <span className="activity-error">失败</span>}<ChevronDown size={15}/></summary>
                   {(message.content || message.detail || message.agentThreadId) && <div className="activity-native-body">
                     {message.content && (!isTool || !message.detail &&
                       message.activityType !== 'imageView') && (message.kind === 'plan'
                       ? <MessageMarkdown text={message.content}/> : <p>{message.content}</p>)}
                     {message.detail && <pre>{message.detail}</pre>}
                     {message.agentThreadId && <SubAgentDetails hostId={active.hostId} parentId={active.id}
-                      agentThreadId={message.agentThreadId} read={live.readSubAgent}/>}
+                      agentThreadId={message.agentThreadId} agentName={message.agentPath}
+                      parentRunning={active.running === true} syncPending={active.syncPending || live.status[active.hostId] !== 'online'}
+                      online={live.status[active.hostId] === 'online'} onStatus={live.setAgentStatus} read={live.readSubAgent}/>}
                     {message.activityType === 'imageView' && message.turnId &&
                       <ToolImage hostId={active.hostId} threadId={active.id} turnId={message.turnId}
                         itemId={message.id.slice(message.id.indexOf(':') + 1)}

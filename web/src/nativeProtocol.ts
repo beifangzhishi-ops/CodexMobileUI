@@ -13,7 +13,8 @@ export type NativeModel = { id: string; model?: string; name: string; isDefault:
 export type NativePermission = { id: string; allowed: boolean; description: string };
 export type NativeGoal = { objective: string; status: string; tokenBudget: number | null; tokensUsed: number; timeUsedSeconds: number };
 export type NativeQueueEntry = { id: string; text: string };
-export type Snapshot = { messages: Message[]; running: boolean; activeTurnId: string | null; runningSinceMs: number | null };
+export type Snapshot = { messages: Message[]; running: boolean; activeTurnId: string | null; runningSinceMs: number | null;
+  threadName?: string; terminalStatus?: string };
 export type NativeNotice = { method: string; params: Obj };
 
 /** Parameters for native `thread/fork`; source: ThreadForkParams schema. */
@@ -239,7 +240,7 @@ function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: 
   else if (kind === 'imageView') { title = '查看图片'; content = text(item.path); }
   else if (kind === 'collabToolCall' || kind === 'collabAgentToolCall') { title = '协作代理'; content = text(item.tool); detail = text(item.prompt); }
   else if (kind === 'subAgentActivity') {
-    const label = ({ started: '启动', interacted: '交互', interrupted: '中断', completed: '完成' } as Record<string, string>)[text(item.kind)] || '活动';
+    const label = ({ started: '启动', interacted: '交互', interrupted: '中断', completed: '完成', failed: '失败' } as Record<string, string>)[text(item.kind)] || '活动';
     title = '子 Agent · ' + label;
     content = [title, text(item.agentPath)].filter(Boolean).join(' · ');
     detail = [text(item.model), text(item.reasoningEffort)].filter(Boolean).join(' · ');
@@ -254,7 +255,8 @@ function activityFromItem(item: Obj, turnId: string, ordinal: number, complete: 
     ...(pluginId ? { pluginId } : {}), ...(appId ? { appId } : {}),
     ...(text(item.server) ? { toolServer: text(item.server) } : {}),
     ...(text(item.tool) ? { toolName: text(item.tool) } : {}),
-    ...(kind === 'subAgentActivity' && text(item.agentThreadId) ? { agentThreadId: text(item.agentThreadId), agentPath: text(item.agentPath) } : {}) };
+    ...(kind === 'subAgentActivity' && text(item.agentThreadId) ? { agentThreadId: text(item.agentThreadId), agentPath: text(item.agentPath),
+      agentStatus: text(item.kind), failed: text(item.kind) === 'failed' } : {}) };
 }
 
 function merge(list: readonly Message[], message: Message): Message[] {
@@ -296,10 +298,12 @@ export function parseSnapshot(raw: unknown, expectedThreadId: string): Snapshot 
   const last = obj(thread.turns.at(-1));
   const running = ['inProgress','in_progress','running'].includes(text(last.status));
   const activeTurnId = running ? text(last.id) || null : null;
+  const terminalStatus = text(last.status);
   return { messages: messages.map((message) =>
     running && message.turnId === activeTurnId && message.role === 'assistant' && !message.kind
       ? { ...message, complete: false } : message),
-    running, activeTurnId, runningSinceMs: running ? unixMs(last.startedAt) ?? null : null };
+    running, activeTurnId, runningSinceMs: running ? unixMs(last.startedAt) ?? null : null,
+    threadName: text(thread.name) || undefined, terminalStatus: terminalStatus || undefined };
 }
 
 /** A paginated snapshot may deliberately omit text from a known native

@@ -27,6 +27,7 @@ export type Message = {
   reasoningText?: string;
   agentThreadId?: string;
   agentPath?: string;
+  agentStatus?: string;
   /** Image references are matched to native user item IDs, never host paths. */
   images?: { itemId: string; imageIndex: number }[];
   /** Host-managed documents are identified through the native user item, not a browser path. */

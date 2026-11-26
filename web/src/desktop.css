@@ -404,11 +404,19 @@ button:hover { transition: background-color 100ms; }
 .reasoning-toggle svg.expanded { transform: rotate(0); }
 .reasoning-process { font-size: 13px; }
 .subagent-details { display: grid; gap: 9px; min-width: 0; }
+.subagent-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--muted); font-size: 11px; }
+.subagent-heading strong { color: var(--soft); font-size: 12px; }
+.subagent-heading .activity-spinner { width: 13px; height: 13px; }
+.subagent-sync { color: var(--warning, #e5ae65); }
+.subagent-empty { margin: 0; color: var(--muted); font-size: 12px; }
 .subagent-read { display: flex; align-items: center; gap: 6px; width: fit-content; padding: 6px 9px; border-radius: 7px; color: var(--soft); font-size: 12px; }
 .subagent-read:hover { background: var(--surface); }
-.subagent-history { display: grid; gap: 10px; max-height: 440px; overflow: auto; overscroll-behavior: contain; font-size: 13px; padding: 8px; border: 1px solid var(--stroke); border-radius: 8px; }
-.subagent-entry { min-width: 0; overflow-wrap: anywhere; }
-.subagent-entry > strong { color: var(--muted); font-size: 11px; }
+.subagent-history { display: grid; gap: 7px; max-height: 440px; overflow: auto; overscroll-behavior: contain; font-size: 12px; padding: 8px; border: 1px solid var(--stroke); border-radius: 8px; }
+.subagent-entry { min-width: 0; overflow-wrap: anywhere; display: flex; gap: 8px; align-items: flex-start; }
+.subagent-entry-icon { flex: none; display: grid; place-items: center; width: 16px; height: 17px; color: var(--muted); }
+.subagent-entry-icon .activity-spinner { width: 13px; height: 13px; }
+.subagent-entry strong { color: var(--soft); font-size: 11px; }
+.subagent-entry p { margin: 2px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .side-chat-is-open { position: relative; }
 .side-chat-trigger[aria-expanded="true"] { background: var(--surface); color: var(--text); }
 .side-chat-panel { flex: 0 1 410px; width: min(37vw,410px); min-width: 290px; max-width: 45%; display: flex; flex-direction: column; border-left: 1px solid var(--stroke); background: var(--canvas); min-height: 0; color: var(--text); }

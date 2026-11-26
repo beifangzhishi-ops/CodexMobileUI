@@ -43,9 +43,20 @@ test('real sub-agent activity identity survives snapshots and live notices', () 
   for (const message of [snapshot.messages[0], live[0]]) {
     assert.equal(message.agentThreadId, 'child');
     assert.equal(message.agentPath, 'root/worker');
+    assert.equal(message.agentStatus, 'started');
     assert.match(message.title, /启动/);
     assert.equal(message.detail, 'model-id · high');
   }
+  const done = parseSnapshot({ thread: { id: 'child', name: 'worker', turns: [
+    { id: 'ct', status: 'completed', items: [] },
+  ] } }, 'child');
+  assert.equal(done.threadName, 'worker');
+  assert.equal(done.terminalStatus, 'completed');
+  assert.equal(done.running, false);
+  const failed = parseSnapshot({ thread: { id: 'child', turns: [
+    { id: 'ct', status: 'failed', items: [] },
+  ] } }, 'child');
+  assert.equal(failed.terminalStatus, 'failed');
 });
 
 test('compaction waits for a new native activity and its own terminal turn', () => {

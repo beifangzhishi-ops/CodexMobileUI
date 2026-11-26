@@ -70,6 +70,7 @@ export function useLiveCodex() {
   const [quotaGuard, setQuotaGuard] = useState<QuotaGuardSharedState | null>(null);
   const [projects, setProjects] = useState<NativeProject[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [agentStatuses, setAgentStatuses] = useState<Record<string, string>>({});
   const [models, setModels] = useState<Record<HostId, NativeModel[]>>({ '6v': [], noha: [] });
   const [permissions, setPermissions] = useState<Record<HostId, NativePermission[]>>({ '6v': [], noha: [] });
   const [threadPermissions, setThreadPermissions] = useState<Record<string, PermissionMode>>({});
@@ -319,6 +320,16 @@ export function useLiveCodex() {
     const result = await request(hostId, 'web/subAgent/read', { threadId, agentThreadId });
     return parseSnapshot(result, agentThreadId);
   }, [request]);
+  const setAgentStatus = useCallback((hostId: HostId, threadId: string, agentThreadId: string, status: string | null) => {
+    const key = `${hostId}:${threadId}:${agentThreadId}`;
+    setAgentStatuses((current) => {
+      if (status == null && !(key in current) || status === current[key]) return current;
+      const next = { ...current };
+      if (status == null) delete next[key]; else next[key] = status;
+      for (const stale of Object.keys(next).slice(0, Math.max(0, Object.keys(next).length - 128))) delete next[stale];
+      return next;
+    });
+  }, []);
 
   const refreshQueue = useCallback(async (hostId: HostId, threadId: string) => {
     const result = await pageList(hostId, 'thread/queue/list', { threadId });
@@ -1041,7 +1052,7 @@ export function useLiveCodex() {
   return {
     prepareAttachments,
     status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
-    projects, conversations, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
+    projects, conversations, agentStatuses, setAgentStatus, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
     contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
     listSideChats, createSideChat, loadSideChat, readSubAgent,
     request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,

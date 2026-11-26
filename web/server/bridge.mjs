@@ -808,6 +808,10 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   let upstreamReady = false;
   const pendingApprovals = new Set();
   const pendingInternal = new Map();
+  // Once a parent snapshot proves this native child attachment, retain that
+  // bounded proof for this browser connection so live child polling does not
+  // reread the parent's complete history for every child refresh.
+  const subAgentReadProofs = new Map();
   const createdHere = new Map();
   const firstTurnRequests = new Map();
   let internalId = 1_000_000_000;
@@ -1100,13 +1104,20 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     } else if (msg.method === 'web/subAgent/read' && !remotePeer) {
       void (async () => {
         const { threadId, agentThreadId } = msg.params;
-        const parent = (await internalRequest('thread/read', { threadId, includeTurns: true }))?.thread;
-        if (parent?.id !== threadId || !parent.turns?.some((turn) => Array.isArray(turn.items) &&
-          turn.items.some((item) => item.type === 'subAgentActivity' && item.agentThreadId === agentThreadId))) {
-          throw Error('AGENT_NOT_ATTACHED');
+        const proofKey = threadId + ':' + agentThreadId;
+        if (!subAgentReadProofs.has(proofKey)) {
+          const parent = (await internalRequest('thread/read', { threadId, includeTurns: true }))?.thread;
+          if (parent?.id !== threadId || !parent.turns?.some((turn) => Array.isArray(turn.items) &&
+            turn.items.some((item) => item.type === 'subAgentActivity' && item.agentThreadId === agentThreadId))) {
+            throw Error('AGENT_NOT_ATTACHED');
+          }
         }
         const child = await internalRequest('thread/read', { threadId: agentThreadId, includeTurns: true });
         if (child?.thread?.id !== agentThreadId) throw Error('AGENT_NOT_FOUND');
+        if (!subAgentReadProofs.has(proofKey)) {
+          subAgentReadProofs.set(proofKey, true);
+          while (subAgentReadProofs.size > 64) subAgentReadProofs.delete(subAgentReadProofs.keys().next().value);
+        }
         return child;
       })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'AGENT_NOT_AVAILABLE' } })));

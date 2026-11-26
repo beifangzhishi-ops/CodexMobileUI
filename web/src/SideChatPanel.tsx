@@ -124,12 +124,16 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
       {messages.map((message) => <article key={message.id} className={'side-message side-' + message.role}>
         {message.kind === 'reasoning' ? <ReasoningActivity message={message}/> :
           message.kind ? <details className="activity-card native-activity">
-            <summary>{message.title || '活动'}<ChevronDown size={15}/></summary>
+            <summary>{message.activityType === 'subAgentActivity' && !(['completed', 'interrupted', 'failed'].includes(message.agentStatus ?? '') ||
+              online && ['completed', 'interrupted', 'failed'].includes(live.agentStatuses[`${hostId}:${side?.id}:${message.agentThreadId}`] ?? ''))
+              ? <span className="activity-spinner"/> : null}{message.title || '活动'}<ChevronDown size={15}/></summary>
             <div className="activity-native-body">
               {message.content && <MessageMarkdown text={message.content}/>}
               {message.detail && <pre>{message.detail}</pre>}
               {message.agentThreadId && side && <SubAgentDetails hostId={hostId} parentId={side.id}
-                agentThreadId={message.agentThreadId} read={live.readSubAgent}/>}
+                agentThreadId={message.agentThreadId} agentName={message.agentPath}
+                parentRunning={side.running === true} syncPending={side.syncPending || !online}
+                online={online} onStatus={live.setAgentStatus} read={live.readSubAgent}/>}
             </div>
           </details> : message.role === 'user' ? <div className="user-bubble">{message.content}</div> :
             <MessageMarkdown text={message.content} hostId={hostId} threadId={side?.id}
