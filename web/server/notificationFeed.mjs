@@ -8,6 +8,9 @@ const MAX_TITLE = 80;
 const MAX_PREVIEW = 360;
 const validId = (value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{8,256}$/.test(value);
 const plain = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+const subAgentThreadSources = new Set([
+  'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther',
+]);
 const statusOf = (value) => {
   const status = plain(value).status;
   return ['completed', 'failed', 'interrupted'].includes(status) ? status : 'completed';
@@ -34,6 +37,17 @@ function itemText(item) {
   if (!Array.isArray(item.content)) return '';
   return item.content.filter((part) => plain(part).type === 'text')
     .map((part) => plain(part).text).filter((text) => typeof text === 'string').join('\n');
+}
+
+// ThreadSource notifications contain only the thread/turn IDs. A matching
+// thread/read snapshot is the available authority for native child metadata.
+// Missing or mismatched snapshots remain unknown, so ordinary alerts proceed.
+function isSubAgentThread(snapshot, threadId) {
+  const thread = plain(plain(snapshot).thread);
+  if (thread.id !== threadId) return false;
+  if (typeof thread.parentThreadId === 'string' && thread.parentThreadId) return true;
+  if (Object.hasOwn(plain(thread.source), 'subAgent')) return true;
+  return typeof thread.threadSource === 'string' && subAgentThreadSources.has(thread.threadSource);
 }
 
 export function notificationContentFromRead(snapshot, turnId, completedTurn) {
@@ -121,6 +135,7 @@ export class NotificationFeed {
       try { snapshot = await resolveThread(hostId, threadId, turnId); }
       catch { /* A read failure must not suppress the completion notification. */ }
       if (this.seen.has(key)) return;
+      if (isSubAgentThread(snapshot, threadId)) return;
       const { title, preview } = notificationContentFromRead(snapshot, turnId, turn);
       const event = { seq: ++this.sequence, hostId, threadId, turnId,
         status: statusOf(turn), title, preview, at: Date.now() };
