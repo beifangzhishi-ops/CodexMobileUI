@@ -119,6 +119,28 @@ noha：`scripts/web-bridge.mjs agent`，监听 `127.0.0.1:4191`。
 
 两机使用用户级 Windows 计划任务自动启动，分别命名为 `CodexMobileUI-WebCoordinator`、`CodexMobileUI-WebAgent`。任务当前改为 `wscript.exe //B //NoLogo` 启动 `web/server/start-hidden.vbs` 或 `scripts/start-web-agent-hidden.vbs`，使用隐藏控制台的 `WScript.Shell.Run(command, 0, True)`。已经验证两个任务的新 Node 进程没有可见主窗口、端口健康且经统一 IP 的双主机项目读取正常。任务仅在对应 Windows 用户登录后启动，整机冷启动和登录后的自动恢复尚未实测。
 
+### 会话完成状态的发布检查
+
+`/api/thread-completions` 由正在运行的 6v Coordinator Web Bridge 提供。若
+`/healthz` 和 `/api/sidebar-pins` 返回 200，但该路径返回 404，说明当前监听
+进程仍在运行发布前的 `bridge.mjs`；只更新工作区文件或编译产物不会让旧进程
+获得新路由。发布时必须同时满足以下依赖，再由现有所有者流程重启并确认
+`CodexMobileUI-WebCoordinator` 任务：
+
+1. 运行 `npm.cmd run build:gateway`，确保 Coordinator 要导入的
+   `dist/gateway/threadCompletions.js` 和 `threadCompletionsHttp.js` 已同步。
+2. 部署当前的 `web/server/bridge.mjs`；它保留配置的 Tailnet HTTPS Host
+   和同源 Origin 检查，不新增公开监听。
+3. Web 界面更新时运行 `npm.cmd --prefix web run build` 并发布 `web/dist`，
+   让客户端加载同一版本的完成状态请求和控件。
+4. 重启后从配置的私有 HTTPS 页面请求一次
+   `fetch('/api/thread-completions', { cache: 'no-store' })`，确认返回
+   `{ revision, items }` 而不是 404。GET 即可验证路由；写操作和跨主机隔离
+   使用测试中的临时线程 ID 验证，不要把测试线程写入生产状态。
+
+`.state/sidebar-pins-primary` 和 `.state/thread-completions.json` 只属于 6v，
+不得复制到 noha。该完成状态路由不要求更新 noha Web Agent。
+
 开发网页时在 6v 项目根目录运行：
 
 ```powershell
