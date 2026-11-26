@@ -32,6 +32,11 @@ import { AutomationView } from './AutomationView';
 import { useBrowserNotifications } from './useBrowserNotifications';
 import { SettingsView } from './SettingsView';
 import { PublicationPreview, type PublicationTarget } from './PublicationPreview';
+import { ImageViewerSaveActions } from './ImageViewerSaveActions';
+import {
+  viewerSourceFromBlob, viewerSourceFromBlobUrl, type ImageViewerSource,
+} from './imageViewer';
+import { useImageLongPress, type MenuPoint } from './useImageLongPress';
 import { documentFileAllowed } from './documentUpload';
 import { useFollowLatest } from './useFollowLatest';
 import { ThinkingIndicator } from './ThinkingIndicator';
@@ -289,7 +294,10 @@ export default function DesktopApp() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadPhase, setUploadPhase] = useState<'uploading' | 'sending' | null>(null);
   const uploadController = useRef<AbortController | null>(null);
-  const [imageViewer, setImageViewer] = useState<string | null>(null);
+  const [imageViewer, setImageViewer] = useState<ImageViewerSource | null>(null);
+  const [imageSaveMenu, setImageSaveMenu] = useState<MenuPoint | null>(null);
+  const imageLongPress = useImageLongPress(Boolean(imageViewer), setImageSaveMenu);
+  useEffect(() => { setImageSaveMenu(null); }, [imageViewer]);
   const [toolLogos, setToolLogos] = useState<Record<HostId, ToolLogo[]>>({ '6v': [], noha: [] });
   const [submitting, setSubmitting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -1087,6 +1095,21 @@ export default function DesktopApp() {
       }
     }
     copyContextText(url, '内网会话链接');
+  }
+  function openPastedImageViewer(image: PastedImage) {
+    try {
+      setImageViewer(viewerSourceFromBlob(image.file, image.url,
+        'pasted-image:' + image.id, image.file.name));
+    } catch {
+      setNotice('图片格式或大小不受支持');
+    }
+  }
+  async function openContextImageViewer(url: string) {
+    try {
+      setImageViewer(await viewerSourceFromBlobUrl(url));
+    } catch {
+      setNotice('图片已不可用，请刷新对话后重试');
+    }
   }
   async function copyContextImage(url: string) {
     try {
@@ -1967,7 +1990,7 @@ export default function DesktopApp() {
               {(plan || pastedImages.length > 0 || pastedDocuments.length > 0) && <div className="attachment-list">
                 {plan && <button className="attachment-chip" onClick={() => setPlan(false)}><ListTodo size={14}/>计划模式 <X size={13}/></button>}
                 {pastedImages.map((entry) => <div key={entry.id} className="pasted-image">
-                  <button type="button" onClick={() => setImageViewer(entry.url)} title="查看待发送图片">
+                  <button type="button" onClick={() => openPastedImageViewer(entry)} title="查看待发送图片">
                     <img src={entry.url} alt="待发送图片"/>
                   </button>
                   <button type="button" className="pasted-image-remove" aria-label="移除图片" disabled={submitting}
@@ -2159,10 +2182,21 @@ export default function DesktopApp() {
       </div>
     </div>}
 
-    {imageViewer && <div className="image-viewer" role="dialog" aria-modal="true" aria-label="查看图片原图"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) setImageViewer(null); }}>
-      <button className="image-viewer-close" onClick={() => setImageViewer(null)} aria-label="关闭图片查看"><X size={22}/></button>
-      <img src={imageViewer} alt="原图"/>
+    {imageViewer && <div className="image-viewer image-viewer-preview" role="dialog" aria-modal="true"
+      aria-label="查看图片原图" {...imageLongPress}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) {
+          setImageSaveMenu(null);
+          setImageViewer(null);
+        }
+      }}>
+      <button className="image-viewer-close" onClick={() => {
+        setImageSaveMenu(null);
+        setImageViewer(null);
+      }} aria-label="关闭图片查看"><X size={22}/></button>
+      <ImageViewerSaveActions source={imageViewer} menuPoint={imageSaveMenu}
+        onCloseMenu={() => setImageSaveMenu(null)}/>
+      <img src={imageViewer.url} alt="原图"/>
     </div>}
     {contextMenu && <div className="context-menu-layer" onPointerDown={(e) => e.stopPropagation()}>
       <button className="context-menu-dismiss" aria-label="关闭操作菜单"
@@ -2259,7 +2293,7 @@ export default function DesktopApp() {
               contextMenu.linkIndex === undefined || !contextMenu.itemId)}
         </> : contextMenu.kind === 'image' ? <>
           <div className="context-menu-caption">图片操作</div>
-          {contextOption('查看原图', Image, () => setImageViewer(contextMenu.id))}
+          {contextOption('查看原图', Image, () => void openContextImageViewer(contextMenu.id))}
           {contextOption('复制图片', Copy, () => void copyContextImage(contextMenu.id))}
         </> : contextMessage ? <>
           <div className="context-menu-caption">消息操作</div>
