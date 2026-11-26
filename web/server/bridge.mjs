@@ -27,6 +27,10 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 process.chdir(mode === 'coordinator' ? resolve(scriptDir, '../..') : resolve(scriptDir, '..'));
 const { WebTitleService } =
   await import(pathToFileURL(resolve('dist/gateway/webTitleService.js')).href);
+const { QuotaGuardSettingStore } =
+  await import(pathToFileURL(resolve('dist/gateway/quotaGuardState.js')).href);
+const { buildQuotaGuardState, parseQuotaGuardRuntime } =
+  await import(pathToFileURL(resolve('dist/shared/quotaGuard.js')).href);
 // The browser uses the same native config resolution and strict read-back
 // verification as the mobile Gateway; no client-supplied policy or cwd.
 const { settingsFromNativeDefault, verifyNativePermissionApplied } =
@@ -45,16 +49,25 @@ const { MAX_VISUALIZE_BYTES, validVisualizeSelection } =
 const { SidebarPinsStore } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/sidebarPins.js')).href)
   : { SidebarPinsStore: null };
-const titleService = new WebTitleService(resolve('.state'));
 const config = JSON.parse(readFileSync(resolve('.state/web-bridge.json'), 'utf8').replace(/^\uFEFF/, ''));
 const credential = readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
 if (!/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');
 const coordinator = mode === 'coordinator';
+const quotaGuardStore = new QuotaGuardSettingStore(resolve('.state'));
+const titleService = new WebTitleService(resolve('.state'), coordinator ? '6v' : 'noha');
 const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state')) : null;
 const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json')) : null;
 const pathOverlays = coordinator ? new PathOverlayStore(resolve('.state/file-path-overlays.json')) : null;
 const notificationFeed = coordinator
   ? new NotificationFeed(resolve('.state/mobile-notification-events.json')) : null;
+const quotaGuardSubscribers = new Set();
+let remoteQuotaGuardRuntime = null;
+let remoteQuotaGuardReachable = false;
+let remoteQuotaGuardSyncedAt = null;
+let quotaGuardSyncPromise = null;
+let quotaGuardSyncRequested = false;
+let quotaGuardSyncTimer = null;
+let lastQuotaGuardStateJson = '';
 if (coordinator && (!/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net:4190$/.test(config.origin) ||
   config.peerUrl !== 'ws://100.96.30.32:4191/peer')) throw Error('Invalid private IP configuration');
 const port = coordinator ? 4190 : 4191;
@@ -175,7 +188,7 @@ function openGatewaySession(hostId) {
         resolved = true;
         clearTimeout(timer);
         resolvePromise({
-          request(method, params, timeoutMs = 45000) {
+          request(method, params, timeoutMs = 45000, envelope = 'web/publication') {
             return new Promise((resolveRequest, rejectRequest) => {
               const id = sequence++;
               const requestTimeout = setTimeout(() => {
@@ -184,7 +197,9 @@ function openGatewaySession(hostId) {
               }, timeoutMs);
               pending.set(id, { resolve: resolveRequest, reject: rejectRequest, timer: requestTimeout });
               ws.send(JSON.stringify(remote
-                ? { id, method: 'web/publication', params: { method, params } }
+                ? envelope === 'web/quotaGuard'
+                  ? { id, method: 'web/quotaGuard', params }
+                  : { id, method: 'web/publication', params: { method, params } }
                 : { id, method, params }));
             });
           },
@@ -207,6 +222,66 @@ function openGatewaySession(hostId) {
     ws.on('error', () => fail(Error('GATEWAY_UNAVAILABLE')));
     ws.on('close', () => fail(Error('GATEWAY_DISCONNECTED')));
   });
+}
+
+function currentQuotaGuardState() {
+  if (!coordinator) throw Error('QUOTA_GUARD_PRIMARY_UNAVAILABLE');
+  const setting = quotaGuardStore.readAuthoritativeSync();
+  const localValue = quotaGuardStore.readRuntimeSync('6v');
+  const remoteValue = remoteQuotaGuardReachable
+    ? parseQuotaGuardRuntime(remoteQuotaGuardRuntime, 'noha') : remoteQuotaGuardRuntime;
+  const local = localValue ? { ...localValue, enabled: setting.enabled,
+    settingRevision: setting.revision } : null;
+  const remote = remoteValue ? { ...remoteValue, enabled: setting.enabled,
+    settingRevision: setting.revision } : null;
+  return buildQuotaGuardState(setting, !remoteQuotaGuardReachable,
+    remoteQuotaGuardReachable ? null : 'noha 离线或尚未确认共享设置',
+    remoteQuotaGuardSyncedAt, { '6v': local, noha: remote });
+}
+
+function publishQuotaGuardState(state) {
+  const serialized = JSON.stringify(state);
+  if (serialized === lastQuotaGuardStateJson) return;
+  lastQuotaGuardStateJson = serialized;
+  const frame = JSON.stringify({ method: 'quotaGuard/updated', params: { state } });
+  for (const send of quotaGuardSubscribers) {
+    try { send(frame); } catch { /* A disconnected browser is removed by its close handler. */ }
+  }
+}
+
+async function syncPeerQuotaGuard() {
+  if (!coordinator) return;
+  quotaGuardSyncRequested = true;
+  if (quotaGuardSyncPromise) return quotaGuardSyncPromise;
+  quotaGuardSyncPromise = (async () => {
+    do {
+      quotaGuardSyncRequested = false;
+      try {
+        const setting = quotaGuardStore.readAuthoritativeSync();
+        const peer = await openGatewaySession('noha');
+        try {
+          const result = await peer.request('', {
+            action: 'sync', enabled: setting.enabled, revision: setting.revision,
+            updatedAt: setting.updatedAt,
+          }, 15_000, 'web/quotaGuard');
+          remoteQuotaGuardRuntime = parseQuotaGuardRuntime(result?.runtime, 'noha');
+          remoteQuotaGuardReachable = true;
+          remoteQuotaGuardSyncedAt = Date.now();
+        } finally { peer.close(); }
+      } catch {
+        remoteQuotaGuardReachable = false;
+      }
+    } while (quotaGuardSyncRequested);
+  })().finally(() => {
+    quotaGuardSyncPromise = null;
+    try { publishQuotaGuardState(currentQuotaGuardState()); } catch { /* Invalid primary state is reported by the RPC. */ }
+    if (quotaGuardSyncTimer) clearTimeout(quotaGuardSyncTimer);
+    quotaGuardSyncTimer = setTimeout(() => {
+      quotaGuardSyncTimer = null;
+      void syncPeerQuotaGuard();
+    }, 10_000);
+  });
+  return quotaGuardSyncPromise;
 }
 
 async function requestHostPublication(hostId, method, params, session) {
@@ -532,6 +607,16 @@ function allowedFrame(msg) {
       typeof msg.method !== 'string' || !msg.params || typeof msg.params !== 'object' ||
       Array.isArray(msg.params) || !subset(msg, ['id', 'method', 'params'])) return false;
   const p = msg.params;
+  if (msg.method === 'quotaGuard/state') return coordinator && Object.keys(p).length === 0;
+  if (msg.method === 'quotaGuard/set') return coordinator &&
+    subset(p, ['enabled', 'expectedRevision']) && Object.keys(p).length === 2 &&
+    typeof p.enabled === 'boolean' && Number.isSafeInteger(p.expectedRevision) &&
+    p.expectedRevision >= 0;
+  if (msg.method === 'web/quotaGuard') return !coordinator &&
+    subset(p, ['action', 'enabled', 'revision', 'updatedAt']) &&
+    Object.keys(p).length === 4 && p.action === 'sync' &&
+    typeof p.enabled === 'boolean' && Number.isSafeInteger(p.revision) && p.revision >= 0 &&
+    typeof p.updatedAt === 'number' && Number.isFinite(p.updatedAt);
   if (msg.method.startsWith('web/image/')) return isValidImageRpc(msg.method, p);
   if (msg.method.startsWith('web/attachment/')) return validDocumentUploadRpc(msg.method, p);
   if (msg.method === 'web/pathResolve') return subset(p, ['text', 'hosts']) &&
@@ -729,6 +814,13 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   const safeSend = (frame) => {
     if (browser.readyState === WebSocket.OPEN) browser.send(String(frame), { binary: false });
   };
+  if (coordinator && !remotePeer) {
+    const sendQuotaGuardState = (frame) => {
+      if (browser.readyState === WebSocket.OPEN) browser.send(frame, { binary: false });
+    };
+    quotaGuardSubscribers.add(sendQuotaGuardState);
+    browser.once('close', () => quotaGuardSubscribers.delete(sendQuotaGuardState));
+  }
   function titleInput(input) {
     const raw = Array.isArray(input) && typeof input[0]?.text === 'string' ? input[0].text : '';
     const delimiter = '\n\n## My request for Codex:\n\n';
@@ -863,6 +955,47 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     if (!allowedFrame(msg)) {
       if (Number.isSafeInteger(msg?.id)) safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'RPC_NOT_ALLOWED' } }));
       else browser.close(1008);
+      return;
+    }
+    if (msg.method === 'quotaGuard/state' || msg.method === 'quotaGuard/set') {
+      if (!coordinator || remotePeer) {
+        safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
+          message: 'QUOTA_GUARD_PRIMARY_UNAVAILABLE' } }));
+        return;
+      }
+      void (async () => {
+        let state;
+        if (msg.method === 'quotaGuard/set') {
+          await quotaGuardStore.setEnabled(msg.params.enabled, msg.params.expectedRevision);
+          await syncPeerQuotaGuard();
+        }
+        state = currentQuotaGuardState();
+        publishQuotaGuardState(state);
+        safeSend(JSON.stringify({ id: msg.id, result: { state } }));
+      })().catch((error) => {
+        const known = new Set(['QUOTA_GUARD_CONFLICT', 'QUOTA_GUARD_BUSY',
+          'QUOTA_GUARD_STATE_INVALID', 'QUOTA_GUARD_INVALID_PARAMS']);
+        safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
+          message: known.has(error?.message) ? error.message : 'QUOTA_GUARD_UNAVAILABLE' } }));
+      });
+      return;
+    }
+    if (msg.method === 'web/quotaGuard') {
+      if (coordinator) {
+        safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
+          message: 'QUOTA_GUARD_PEER_ONLY' } }));
+        return;
+      }
+      try {
+        quotaGuardStore.writeMirrorSync(msg.params.enabled, msg.params.revision,
+          msg.params.updatedAt);
+        safeSend(JSON.stringify({ id: msg.id, result: {
+          runtime: quotaGuardStore.readRuntimeSync('noha'),
+        } }));
+      } catch {
+        safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
+          message: 'QUOTA_GUARD_SYNC_FAILED' } }));
+      }
       return;
     }
     if (!upstreamReady) { safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'HOST_OFFLINE' } })); return; }
@@ -1055,3 +1188,4 @@ if (notificationFeed) {
     Authorization: 'Bearer ' + credential,
   });
 }
+if (coordinator) void syncPeerQuotaGuard();

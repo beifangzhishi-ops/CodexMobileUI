@@ -12,6 +12,7 @@ import './project-directories.test';
 import './host-files.test';
 import './rpc-policy.test';
 import './rate-limits.test';
+import './quota-guard.test';
 import './profile.test';
 import './oauth.test';
 import './gateway-diagnostics.test';

@@ -201,3 +201,22 @@ test('shared frontend keeps real status, events, permissions, models and image u
   assert.match(webApp, /followUpMode/);
   assert.match(webApp, /className="composer-actions"/);
 });
+
+test('both quota popovers share one 6v-owned 3% guard control and status', () => {
+  assert.equal((webApp.match(/className="quota-guard"/g) ?? []).length, 1);
+  assert.equal((webApp.match(/className="quota-guard-toggle"/g) ?? []).length, 1);
+  assert.match(webApp, /任一电脑额度剩余 ≤3% 时自动保护/);
+  assert.match(webApp, /live\.setQuotaGuardEnabled\(!quotaGuardState\.enabled\)/);
+  assert.match(webApp, /quotaGuardState\?\.sync\.state === 'pending'/);
+  assert.match(webApp, /live\.status\['6v'\] !== 'online'/);
+  assert.match(client, /quotaGuard\/state/);
+  assert.match(client, /quotaGuard\/set/);
+  assert.match(client, /quotaGuard\/updated/);
+  assert.match(client, /expectedRevision: state\.revision/);
+  assert.match(bridge, /quotaGuardStore\.setEnabled/);
+  assert.match(bridge, /web\/quotaGuard/);
+  assert.match(bridge, /remoteQuotaGuardReachable/);
+  assert.match(bridge, /syncPeerQuotaGuard/);
+  assert.match(uiStyle, /\.quota-guard-toggle/);
+  assert.match(uiStyle, /\.quota-guard-status/);
+});

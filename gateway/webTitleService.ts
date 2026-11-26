@@ -1,6 +1,9 @@
 import { readFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import WebSocket from 'ws';
+import {
+  QuotaGuardSettingStore, quotaGuardFileAdmission,
+} from './quotaGuardState.js';
 
 type TitleJob = { threadId: string; cwd: string; firstMessage: string; attempts: number };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -102,13 +105,15 @@ class TitleConnection {
 /** Host-local durable queue: only Web-created, acknowledged first turns are eligible. */
 export class WebTitleService {
   private readonly file: string;
+  private readonly quotaGuard: QuotaGuardSettingStore;
   private readonly jobs = new Map<string, TitleJob>();
   private readonly cancelled = new Set<string>();
   private running = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(stateDir: string) {
+  constructor(stateDir: string, private readonly hostId: '6v' | 'noha' = '6v') {
     this.file = join(stateDir, 'web-title-jobs.json');
+    this.quotaGuard = new QuotaGuardSettingStore(stateDir);
     try {
       const raw = JSON.parse(readFileSync(this.file, 'utf8'));
       if (Array.isArray(raw)) for (const candidate of raw.slice(0, 50)) {
@@ -162,12 +167,20 @@ export class WebTitleService {
     try {
       for (const job of [...this.jobs.values()]) {
         if (!this.jobs.has(job.threadId)) continue;
+        const admission = quotaGuardFileAdmission(this.quotaGuard, this.hostId, 135_000);
+        if (!admission.allowed) break;
         let retry = false;
+        let guarded = false;
         try {
           await this.generate(job);
-        } catch {
-          retry = job.attempts < 2;
+        } catch (error) {
+          guarded = error instanceof Error && [
+            'QUOTA_GUARD_BLOCKED', 'QUOTA_GUARD_SYNC_PENDING',
+            'QUOTA_GUARD_MONITOR_UNAVAILABLE', 'QUOTA_GUARD_STATE_INVALID',
+          ].includes(error.message);
+          retry = !guarded && job.attempts < 2;
         }
+        if (guarded) break;
         if (this.jobs.get(job.threadId) !== job) continue;
         if (retry) this.jobs.set(job.threadId, { ...job, attempts: job.attempts + 1 });
         else this.jobs.delete(job.threadId);
@@ -184,12 +197,16 @@ export class WebTitleService {
   private async generate(job: TitleJob) {
     const connection = new TitleConnection();
     try {
+      let admission = quotaGuardFileAdmission(this.quotaGuard, this.hostId, 135_000);
+      if (!admission.allowed) throw Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
       await connection.connect();
       if (this.cancelled.has(job.threadId)) return;
       const initial = await connection.request('thread/read', { threadId: job.threadId, includeTurns: false });
       if (initial?.thread?.name) return;
       // Read cwd from the native thread, not from browser-supplied data.
       const cwd = initial?.thread?.cwd || job.cwd;
+      admission = quotaGuardFileAdmission(this.quotaGuard, this.hostId, 135_000);
+      if (!admission.allowed) throw Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
       const tmp = await connection.request('thread/start', {
         cwd, ephemeral: true, sandbox: 'read-only', approvalPolicy: 'never',
         serviceName: 'codex-mobile-ui-title',
@@ -229,6 +246,8 @@ export class WebTitleService {
       });
       const timeout = setTimeout(() => rejectDone(Error('TITLE_TURN_TIMEOUT')), 60_000);
       try {
+        admission = quotaGuardFileAdmission(this.quotaGuard, this.hostId, 135_000);
+        if (!admission.allowed) throw Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
         await connection.request('turn/start', {
           threadId: tempId,
           input: [{ type: 'text', text: JSON.stringify({ message: job.firstMessage }) }],
