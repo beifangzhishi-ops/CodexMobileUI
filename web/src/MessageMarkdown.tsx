@@ -8,6 +8,7 @@ import type { HostId } from './types';
 import { MessageImage } from './MessageImage';
 import { localFileName, renderableLocalFileLinks } from '../../shared/localFileLinks';
 import { hasNativePublicationDownload } from './publicationDownload';
+import type { ImageViewerSource } from './imageViewer';
 import { renderAssistantImageReferences } from '../server/assistantImageRefs.mjs';
 import { visualizeReferences } from '../../shared/visualizeReferences';
 import { VisualizeFrame } from './VisualizeFrame';
@@ -30,7 +31,7 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
   threadId?: string;
   itemId?: string;
   readAssistantImage?: (hostId: HostId, threadId: string, itemId: string, index: number) => Promise<Blob>;
-  onOpenImage?: (url: string) => void;
+  onOpenImage?: (source: ImageViewerSource) => void;
   imageReady?: boolean;
 }) {
   const references = hostId && threadId && itemId ? visualizeReferences(text) : [];
@@ -57,7 +58,8 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
       {!imageReady ? <span className="history-image-loading">正在生成图片</span> :
         hostId && threadId && itemId && readAssistantImage && onOpenImage
         ? <MessageImage hostId={hostId} threadId={threadId} itemId={itemId}
-            imageIndex={index} readImage={readAssistantImage} onOpen={onOpenImage}/>
+            imageIndex={index} readImage={readAssistantImage} onOpen={onOpenImage}
+            nameHint={localFileName(ref.path)}/>
         : <span className="unresolved-file-link">图片预览不可用</span>}
       {!mobile && <button className="assistant-image-path" type="button" title={displayPath?.(ref.path) ?? ref.path}
         onClick={() => activatePath(ref.path)}>{localFileName(ref.path)}</button>}

@@ -60,7 +60,6 @@ const { ThreadCompletionStore } = mode === 'coordinator'
 const { handleThreadCompletionsHttp } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/threadCompletionsHttp.js')).href)
   : { handleThreadCompletionsHttp: null };
-const titleService = new WebTitleService(resolve('.state'), coordinator ? '6v' : 'noha');
 const config = JSON.parse(readFileSync(resolve('.state/web-bridge.json'), 'utf8').replace(/^\uFEFF/, ''));
 const credential = readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
 if (!/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');

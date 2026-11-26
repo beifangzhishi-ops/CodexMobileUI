@@ -13,6 +13,7 @@ import {
   downloadPublication, hasNativePublicationDownload, publicationUrl, publishAssistantFile,
   type HostRequest, type PublishedFile,
 } from './publicationDownload';
+import { useImageLongPress } from './useImageLongPress';
 import { localFileName } from '../../shared/localFileLinks';
 import { ImageZoomSurface } from './ImageZoomSurface';
 import {
@@ -145,10 +146,44 @@ function PdfPreview({ url, name }: { url: string; name: string }) {
   </div>;
 }
 
-function PreviewContent({ file, hostId }: { file: PublishedFile; hostId: HostId }) {
+function PublicationImagePreview({ file, hostId, onSave, busy, progress }: {
+  file: PublishedFile;
+  hostId: HostId;
+  onSave: () => void;
+  busy: boolean;
+  progress: number | null;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  const gesture = useImageLongPress(true, () => setRevealed(true));
+  const url = publicationUrl(hostId, file.id, 'preview');
+  return <div className={'publication-image-stage' + (revealed ? ' is-revealed' : '')}
+    role="group" aria-label={`图片预览：${file.name}`} tabIndex={0} {...gesture}
+    onKeyDown={(event) => {
+      gesture.onKeyDown(event);
+      if (!event.defaultPrevented && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        setRevealed(true);
+      }
+    }}>
+    <ImageZoomSurface className="publication-preview-image" src={url} alt={file.name}/>
+    <button type="button" className="publication-image-save" autoFocus={revealed}
+      disabled={busy} onClick={onSave}>
+      <Download size={17}/>{busy && progress !== null ? `保存中 ${progress}%` : '保存图片'}
+    </button>
+  </div>;
+}
+
+function PreviewContent({ file, hostId, onSaveImage, imageBusy, imageProgress }: {
+  file: PublishedFile;
+  hostId: HostId;
+  onSaveImage: () => void;
+  imageBusy: boolean;
+  imageProgress: number | null;
+}) {
   const url = publicationUrl(hostId, file.id, 'preview');
   if (file.previewKind === 'image') {
-    return <ImageZoomSurface className="publication-preview-image" src={url} alt={file.name}/>;
+    return <PublicationImagePreview file={file} hostId={hostId} onSave={onSaveImage}
+      busy={imageBusy} progress={imageProgress}/>;
   }
   if (file.previewKind === 'audio') {
     return <audio className="publication-preview-audio" controls preload="metadata" src={url}/>;
@@ -188,6 +223,9 @@ export function PublicationPreview({
   const [progress, setProgress] = useState<number | null>(null);
   const [localStatus, setLocalStatus] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageProgress, setImageProgress] = useState<number | null>(null);
+  const imageAbortRef = useRef<AbortController | null>(null);
   const android = hasNativePublicationDownload();
 
   const localAction = useCallback(async (file: PublishedFile) => {
@@ -226,6 +264,31 @@ export function PublicationPreview({
   }, [android, onCopyLink, onRevealFile, request, target.hostId]);
   const latestAction = useRef(localAction);
   useEffect(() => { latestAction.current = localAction; }, [localAction]);
+  const saveImage = useCallback(async (published: PublishedFile) => {
+    if (imageAbortRef.current) return;
+    const controller = new AbortController();
+    imageAbortRef.current = controller;
+    setImageBusy(true);
+    setImageProgress(null);
+    setError(null);
+    try {
+      await downloadPublication(target.hostId, published, request, (received, total) => {
+        setImageProgress(Math.round(received / total * 100));
+      }, controller.signal);
+      if (!controller.signal.aborted) setLocalStatus('图片已保存');
+    } catch (reason) {
+      if (!controller.signal.aborted) {
+        setError(reason instanceof Error && reason.message.includes('CANCEL')
+          ? '已取消保存图片' : '图片保存失败，请重试');
+      }
+    } finally {
+      if (imageAbortRef.current === controller) {
+        imageAbortRef.current = null;
+        setImageProgress(null);
+        setImageBusy(false);
+      }
+    }
+  }, [request, target.hostId]);
   useEffect(() => {
     let active = true;
     setFile(null);
@@ -248,6 +311,7 @@ export function PublicationPreview({
     return () => {
       active = false;
       abortRef.current?.abort();
+      imageAbortRef.current?.abort();
     };
   }, [attempt, request, target.hostId, target.itemId, target.linkIndex, target.threadId, android, Boolean(onRevealFile)]);
 
@@ -279,7 +343,9 @@ export function PublicationPreview({
     <div className="publication-preview-content">
       {!file && !error ? <div className="publication-preview-state" role="status">
         <span className="activity-spinner"/>正在核实消息引用并准备单文件快照
-      </div> : file ? <PreviewContent file={file} hostId={target.hostId}/> : null}
+      </div> : file ? <PreviewContent file={file} hostId={target.hostId}
+        onSaveImage={() => void saveImage(file)} imageBusy={imageBusy}
+        imageProgress={imageProgress}/> : null}
     </div>
   </section>;
 }

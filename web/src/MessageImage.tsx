@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Image as ImageIcon } from 'lucide-react';
 import type { HostId } from './types';
+import { viewerSourceFromBlob, type ImageViewerSource } from './imageViewer';
 
 type Props = {
   hostId: HostId;
@@ -8,23 +9,26 @@ type Props = {
   itemId: string;
   imageIndex: number;
   readImage: (hostId: HostId, threadId: string, itemId: string, index: number) => Promise<Blob>;
-  onOpen: (url: string) => void;
+  onOpen: (source: ImageViewerSource) => void;
+  nameHint?: string;
 };
 
 /** Resolve server-confirmed item references, never Windows filesystem paths. */
-export function MessageImage({ hostId, threadId, itemId, imageIndex, readImage, onOpen }: Props) {
-  const [url, setUrl] = useState<string | null>(null);
+export function MessageImage({ hostId, threadId, itemId, imageIndex, readImage, onOpen,
+  nameHint }: Props) {
+  const [image, setImage] = useState<ImageViewerSource | null>(null);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let disposed = false;
     let blobUrl: string | null = null;
-    setUrl(null);
+    setImage(null);
     setError(false);
     void readImage(hostId, threadId, itemId, imageIndex).then((blob) => {
       if (disposed) return;
       blobUrl = URL.createObjectURL(blob);
-      setUrl(blobUrl);
+      setImage(viewerSourceFromBlob(blob, blobUrl,
+        `${hostId}:${threadId}:${itemId}:${imageIndex}`, nameHint));
     }).catch(() => { if (!disposed) setError(true); });
     return () => {
       disposed = true;
@@ -36,12 +40,12 @@ export function MessageImage({ hostId, threadId, itemId, imageIndex, readImage, 
     title="重试读取图片" onClick={() => setRetry((value) => value + 1)}>
     <ImageIcon size={16}/>图片暂不可用 · 点击重试
   </button>;
-  if (!url) return <div className="history-image-loading">
+  if (!image) return <div className="history-image-loading">
     <span className="activity-spinner"/>正在读取图片
   </div>;
-  return <button className="history-image context-press-target" type="button" onClick={() => onOpen(url)}
-    data-context-kind="image" data-context-host={hostId} data-context-id={url}
+  return <button className="history-image context-press-target" type="button" onClick={() => onOpen(image)}
+    data-context-kind="image" data-context-host={hostId} data-context-id={image.url}
     aria-label="查看历史图片原图" title="点击查看原图">
-    <img src={url} alt="对话中上传的图片" loading="lazy"/>
+    <img src={image.url} alt="对话中上传的图片" loading="lazy"/>
   </button>;
 }
