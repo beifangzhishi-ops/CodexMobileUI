@@ -14,6 +14,7 @@ import { PathOverlayStore } from './pathOverlays.mjs';
 import { respondLocalIdentity } from './localIdentity.mjs';
 import { NotificationFeed, watchNativeCompletions } from './notificationFeed.mjs';
 import { validModelIdentifier } from './modelIdentifier.mjs';
+import { projectSubAgentActivitySnapshot, SubAgentProofCache } from './subAgentActivity.mjs';
 import {
   ISOLATED_MARKUP_CSP, parsePublicationRange, streamPublicationRange,
 } from './publicationPreview.mjs';
@@ -741,6 +742,8 @@ function allowedFrame(msg) {
     typeof p.threadId === 'string' && /^[0-9a-f-]{36}$/i.test(p.threadId);
   if (msg.method === 'web/subAgent/read') return subset(p, ['threadId', 'agentThreadId']) &&
     validId(p.threadId) && validId(p.agentThreadId) && p.threadId !== p.agentThreadId;
+  if (msg.method === 'web/subAgent/activity') return subset(p, ['threadId', 'agentThreadId']) &&
+    validId(p.threadId) && validId(p.agentThreadId) && p.threadId !== p.agentThreadId;
   if (msg.method === 'thread/compact/start') return subset(p, ['threadId']) && validId(p.threadId);
   if (msg.method === 'thread/fork' && p.attachToSource === true)
     return subset(p, ['threadId', 'attachToSource', 'excludeTurns']) &&
@@ -811,7 +814,7 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
   // Once a parent snapshot proves this native child attachment, retain that
   // bounded proof for this browser connection so live child polling does not
   // reread the parent's complete history for every child refresh.
-  const subAgentReadProofs = new Map();
+  const subAgentReadProofs = new SubAgentProofCache();
   const createdHere = new Map();
   const firstTurnRequests = new Map();
   let internalId = 1_000_000_000;
@@ -900,6 +903,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     if (binary) return;
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
+    if (!remotePeer && msg?.method === 'thread/deleted' && typeof msg.params?.threadId === 'string') {
+      subAgentReadProofs.invalidateParent(msg.params.threadId);
+    }
     if (scheduleCalls && msg?.method === 'item/tool/call' &&
         (Number.isSafeInteger(msg.id) || typeof msg.id === 'string') &&
         msg.params?.namespace == null &&
@@ -1101,11 +1107,11 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
     } else if ((msg.method === 'turn/start' || msg.method === 'turn/steer') && !remotePeer &&
       msg.params.input.some((item) => item.type === 'localImage' && !images.owns(item.path))) {
       safeSend(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'IMAGE_NOT_UPLOADED_ON_THIS_CONNECTION' } }));
-    } else if (msg.method === 'web/subAgent/read' && !remotePeer) {
+    } else if (['web/subAgent/read', 'web/subAgent/activity'].includes(msg.method) && !remotePeer) {
       void (async () => {
         const { threadId, agentThreadId } = msg.params;
-        const proofKey = threadId + ':' + agentThreadId;
-        if (!subAgentReadProofs.has(proofKey)) {
+        const proven = subAgentReadProofs.has(threadId, agentThreadId);
+        if (!proven) {
           const parent = (await internalRequest('thread/read', { threadId, includeTurns: true }))?.thread;
           if (parent?.id !== threadId || !parent.turns?.some((turn) => Array.isArray(turn.items) &&
             turn.items.some((item) => item.type === 'subAgentActivity' && item.agentThreadId === agentThreadId))) {
@@ -1114,11 +1120,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         }
         const child = await internalRequest('thread/read', { threadId: agentThreadId, includeTurns: true });
         if (child?.thread?.id !== agentThreadId) throw Error('AGENT_NOT_FOUND');
-        if (!subAgentReadProofs.has(proofKey)) {
-          subAgentReadProofs.set(proofKey, true);
-          while (subAgentReadProofs.size > 64) subAgentReadProofs.delete(subAgentReadProofs.keys().next().value);
-        }
-        return child;
+        if (!proven) subAgentReadProofs.remember(threadId, agentThreadId);
+        return msg.method === 'web/subAgent/activity'
+          ? projectSubAgentActivitySnapshot(child, agentThreadId) : child;
       })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'AGENT_NOT_AVAILABLE' } })));
     } else if (msg.method === 'thread/fork' && msg.params.attachToSource === true && !remotePeer) {

@@ -70,7 +70,8 @@ export function useLiveCodex() {
   const [quotaGuard, setQuotaGuard] = useState<QuotaGuardSharedState | null>(null);
   const [projects, setProjects] = useState<NativeProject[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [agentStatuses, setAgentStatuses] = useState<Record<string, string>>({});
+  const [agentActivityRevision, setAgentActivityRevision] = useState(0);
+  const agentActivitySignatures = useRef(new Map<string, string>());
   const [models, setModels] = useState<Record<HostId, NativeModel[]>>({ '6v': [], noha: [] });
   const [permissions, setPermissions] = useState<Record<HostId, NativePermission[]>>({ '6v': [], noha: [] });
   const [threadPermissions, setThreadPermissions] = useState<Record<string, PermissionMode>>({});
@@ -320,15 +321,18 @@ export function useLiveCodex() {
     const result = await request(hostId, 'web/subAgent/read', { threadId, agentThreadId });
     return parseSnapshot(result, agentThreadId);
   }, [request]);
-  const setAgentStatus = useCallback((hostId: HostId, threadId: string, agentThreadId: string, status: string | null) => {
-    const key = `${hostId}:${threadId}:${agentThreadId}`;
-    setAgentStatuses((current) => {
-      if (status == null && !(key in current) || status === current[key]) return current;
-      const next = { ...current };
-      if (status == null) delete next[key]; else next[key] = status;
-      for (const stale of Object.keys(next).slice(0, Math.max(0, Object.keys(next).length - 128))) delete next[stale];
-      return next;
-    });
+  const readSubAgentActivity = useCallback(async (hostId: HostId, threadId: string, agentThreadId: string) => {
+    const result = await request(hostId, 'web/subAgent/activity', { threadId, agentThreadId });
+    return parseSnapshot(result, agentThreadId);
+  }, [request]);
+  const reportAgentActivity = useCallback((hostId: HostId, threadId: string, agentThreadId: string, signature: string | null) => {
+    const key = JSON.stringify([hostId, threadId, agentThreadId]);
+    if (signature == null) { agentActivitySignatures.current.delete(key); return; }
+    if (agentActivitySignatures.current.get(key) === signature) return;
+    agentActivitySignatures.current.set(key, signature);
+    for (const stale of [...agentActivitySignatures.current.keys()].slice(0, Math.max(0, agentActivitySignatures.current.size - 128)))
+      agentActivitySignatures.current.delete(stale);
+    setAgentActivityRevision((revision) => revision + 1);
   }, []);
 
   const refreshQueue = useCallback(async (hostId: HostId, threadId: string) => {
@@ -1052,9 +1056,9 @@ export function useLiveCodex() {
   return {
     prepareAttachments,
     status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
-    projects, conversations, agentStatuses, setAgentStatus, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
+    projects, conversations, agentActivityRevision, reportAgentActivity, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
     contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
-    listSideChats, createSideChat, loadSideChat, readSubAgent,
+    listSideChats, createSideChat, loadSideChat, readSubAgent, readSubAgentActivity,
     request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,
     readAssistantImage, readToolImage,
     send, interrupt, renameThread, moveThread, setThreadPermission, setThreadModel, forkThread, setGoal, clearGoal, continueGoal, deleteQueued, replyApproval,

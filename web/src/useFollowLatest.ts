@@ -7,6 +7,7 @@ export function useFollowLatest(
   messages: unknown,
   localMessages: unknown,
   running: boolean,
+  activityRevision = 0,
 ) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -65,7 +66,7 @@ export function useFollowLatest(
     if (!threadKey) return;
     if (followingRef.current) snapToLatest();
     else updateJump();
-  }, [threadKey, messages, localMessages, running, snapToLatest, updateJump]);
+  }, [threadKey, messages, localMessages, running, activityRevision, snapToLatest, updateJump]);
 
   // Also follow late image/Markdown layout changes and viewport/keyboard resizing.
   useLayoutEffect(() => {

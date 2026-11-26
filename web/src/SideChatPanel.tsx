@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, ChevronDown, Plus, RefreshCw, Square, X } from 'lucide-react';
 import type { Conversation } from './types';
 import type { useLiveCodex } from './useLiveCodex';
 import type { PathHosts } from './pathHosts';
 import { MessageMarkdown } from './MessageMarkdown';
-import { ReasoningActivity, SubAgentDetails } from './ThreadActivity';
+import { groupSubAgentActivity, ReasoningActivity, SubAgentActivityFeed } from './ThreadActivity';
+import { useFollowLatest } from './useFollowLatest';
 
 type Props = {
   source: Conversation;
@@ -23,7 +24,6 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
   const [error, setError] = useState('');
   const [needsCheck, setNeedsCheck] = useState(false);
   const busy = useRef(false);
-  const scroll = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const hostId = source.hostId, sourceId = source.id;
   const online = live.status[hostId] === 'online';
@@ -35,6 +35,10 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
   // The native attached-thread read contains its own turns only; inherited
   // context is server-owned and must not be duplicated or heuristically hidden.
   const messages = side?.messages ?? [];
+  const subAgentGroups = useMemo(() => groupSubAgentActivity(messages), [messages]);
+  const subAgentRows = useMemo(() => new Map(subAgentGroups.map((group) => [group.childId, group])), [subAgentGroups]);
+  const follow = useFollowLatest(selected ? `${hostId}:${sourceId}:${selected}` : null,
+    messages, null, side?.running === true, live.agentActivityRevision);
   const { listSideChats, loadSideChat } = live;
 
   useEffect(() => {
@@ -56,9 +60,6 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
     });
     return () => { current = false; };
   }, [hostId, online, selected, loadSideChat]);
-  useEffect(() => {
-    if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [selected, messages.length, messages.at(-1)?.content]);
   useEffect(() => {
     if (initialSelection) input.current?.focus();
   }, [initialSelection]);
@@ -117,29 +118,38 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
       <button type="button" title="新建旁路对话" aria-label="新建旁路对话" disabled={sending}
         onClick={() => { setSelected(null); setError(''); input.current?.focus(); }}><Plus size={17}/></button>
     </div>
-    <div className="side-chat-messages" ref={scroll}>
+    <div className="side-chat-messages" ref={follow.scrollerRef} onScroll={follow.onScroll}>
+      <div className="side-chat-message-content" ref={follow.contentRef}>
       {loading && <p className="side-status">正在读取旁路对话…</p>}
       {!online && <p className="side-status">服务器未连接</p>}
       {!loading && !messages.length && <p className="side-chat-empty">围绕当前对话单独提问，不打断主任务。</p>}
-      {messages.map((message) => <article key={message.id} className={'side-message side-' + message.role}>
+      {messages.map((message) => {
+        if (message.activityType === 'subAgentActivity' && message.agentThreadId) {
+          const group = subAgentRows.get(message.agentThreadId);
+          if (!group || group.first.id !== message.id) return null;
+          return <article key={message.id} className="side-message side-assistant side-subagent-activity">
+            <SubAgentActivityFeed hostId={hostId} parentId={side?.id ?? sourceId} group={group} online={online}
+              readActivity={live.readSubAgentActivity} readHistory={live.readSubAgent}
+              onActivityChange={live.reportAgentActivity}/>
+          </article>;
+        }
+        return <article key={message.id} className={'side-message side-' + message.role}>
         {message.kind === 'reasoning' ? <ReasoningActivity message={message}/> :
           message.kind ? <details className="activity-card native-activity">
-            <summary>{message.activityType === 'subAgentActivity' && !(['completed', 'interrupted', 'failed'].includes(message.agentStatus ?? '') ||
-              online && ['completed', 'interrupted', 'failed'].includes(live.agentStatuses[`${hostId}:${side?.id}:${message.agentThreadId}`] ?? ''))
-              ? <span className="activity-spinner"/> : null}{message.title || '活动'}<ChevronDown size={15}/></summary>
+            <summary>{message.title || '活动'}<ChevronDown size={15}/></summary>
             <div className="activity-native-body">
               {message.content && <MessageMarkdown text={message.content}/>}
               {message.detail && <pre>{message.detail}</pre>}
-              {message.agentThreadId && side && <SubAgentDetails hostId={hostId} parentId={side.id}
-                agentThreadId={message.agentThreadId} agentName={message.agentPath}
-                parentRunning={side.running === true} syncPending={side.syncPending || !online}
-                online={online} onStatus={live.setAgentStatus} read={live.readSubAgent}/>}
             </div>
           </details> : message.role === 'user' ? <div className="user-bubble">{message.content}</div> :
             <MessageMarkdown text={message.content} hostId={hostId} threadId={side?.id}
               itemId={message.id.slice(message.id.indexOf(':') + 1)} imageReady={message.complete !== false}/>}
-      </article>)}
+      </article>;
+      })}
       {side?.running && <p className="side-status"><span className="activity-spinner"/>旁路任务运行中</p>}
+      </div>
+      {follow.showJump && <button type="button" className="jump-to-latest side-chat-jump" title="跳转到旁路最新活动"
+        aria-label="跳转到旁路最新活动" onClick={follow.jumpToLatest}><ChevronDown size={18}/></button>}
     </div>
     {error && <div className="side-chat-error" role="status">{error}</div>}
     <div className="side-chat-composer">

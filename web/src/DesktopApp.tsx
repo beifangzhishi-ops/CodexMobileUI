@@ -52,7 +52,7 @@ import { cachedMentions, refreshCachedMentions, filteredMentions, mentionQuery, 
 import { quotaPercent, quotaResetLabel, type RateQuota } from '../../shared/rateLimits';
 import { contextUsagePercent, formatContextTokens } from '../../shared/contextUsage';
 import { compactionBusy } from './compaction';
-import { ReasoningActivity, SubAgentDetails } from './ThreadActivity';
+import { groupSubAgentActivity, ReasoningActivity, SubAgentActivityFeed } from './ThreadActivity';
 import { SideChatPanel } from './SideChatPanel';
 import { contextTargetFromAttributes, gestureMoved, readUnreadThreads, threadFromLink, threadLink,
   type ContextTarget } from './contextActions';
@@ -347,6 +347,8 @@ export default function DesktopApp() {
   const fileRef = useRef<HTMLInputElement>(null);
   const documentRef = useRef<HTMLInputElement>(null);
   const active = conversations.find((item) => conversationKey(item.hostId, item.id) === activeId) ?? null;
+  const subAgentGroups = useMemo(() => groupSubAgentActivity(active?.messages ?? []), [active?.messages]);
+  const subAgentRows = useMemo(() => new Map(subAgentGroups.map((group) => [group.childId, group])), [subAgentGroups]);
   const browserNotifications = useBrowserNotifications(view === 'chat' && active
     ? { hostId: active.hostId, threadId: active.id } : null);
   const currentHost = active?.hostId ?? newHost;
@@ -495,7 +497,7 @@ export default function DesktopApp() {
   const isRunning = active?.running === true;
   const { scrollerRef, contentRef, showJump, onScroll: onMessageScroll, jumpToLatest } =
     useFollowLatest(view === 'chat' && active ? conversationKey(active.hostId, active.id) : null,
-      active?.messages, visibleLocalSubmissions, isRunning);
+      active?.messages, visibleLocalSubmissions, isRunning, live.agentActivityRevision);
   useEffect(() => { setPublicationTarget(null); }, [active?.hostId, active?.id]);
   function openAssistantFile(path: string, linkIndex: number, itemId?: string) {
     if (!active || !itemId) {
@@ -1845,6 +1847,17 @@ export default function DesktopApp() {
             <div className="message-scroller" ref={scrollerRef} onScroll={onMessageScroll}>
               <div className="messages-wrap" ref={contentRef}>
             {active.messages.map((message, index) => {
+              if (message.activityType === 'subAgentActivity' && message.agentThreadId) {
+                const group = subAgentRows.get(message.agentThreadId);
+                if (!group || group.first.id !== message.id) return null;
+                return <article key={message.id} className="message message-assistant message-subagent-activity"
+                  data-context-kind="message" data-message-index={index} data-context-host={active.hostId}
+                  data-context-id={message.id}>
+                  <SubAgentActivityFeed hostId={active.hostId} parentId={active.id} group={group}
+                    online={live.status[active.hostId] === 'online'} readActivity={live.readSubAgentActivity}
+                    readHistory={live.readSubAgent} onActivityChange={live.reportAgentActivity}/>
+                </article>;
+              }
               const turn = message.turnId ? turnActions.get(message.turnId) : undefined;
               const endOfTurn = Boolean(turn && turn.lastIndex === index);
               const answerText = endOfTurn ? turn?.answerText ?? '' : '';
@@ -1889,16 +1902,8 @@ export default function DesktopApp() {
                   {message.detail && <details><summary>错误详情</summary><pre>{message.detail}</pre></details>}
                 </div> :
                 message.kind === 'reasoning' ? <ReasoningActivity message={message}/> :
-                message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') +
-                  (message.failed || message.activityType === 'subAgentActivity' &&
-                    (message.agentStatus === 'failed' || live.agentStatuses[`${active.hostId}:${active.id}:${message.agentThreadId}`] === 'failed')
-                    ? ' activity-failed' : '')}>
-                  <summary>{(message.activityType === 'subAgentActivity'
-                    ? ['completed', 'interrupted', 'failed'].includes(message.agentStatus ?? '') ||
-                      live.status[active.hostId] === 'online' && ['completed', 'interrupted', 'failed'].includes(
-                        live.agentStatuses[`${active.hostId}:${active.id}:${message.agentThreadId}`] ?? '')
-                    : message.complete)
-                    ? <Check size={16}/> : <span className="activity-spinner"/>}
+                message.kind ? <details className={'activity-card native-activity' + (isTool ? ' native-command' : '') + (message.failed ? ' activity-failed' : '')}>
+                  <summary>{message.complete ? <Check size={16}/> : <span className="activity-spinner"/>}
                     {isTool ? <>
                       {message.activityType === 'imageView' ? <Image size={15}/> :
                         ['mcpToolCall', 'dynamicToolCall'].includes(message.activityType ?? '')
@@ -1909,18 +1914,12 @@ export default function DesktopApp() {
                       </span>
                     </>
                       : <span className="activity-label">{message.title ?? '工具调用'}</span>}
-                    {(message.failed || message.activityType === 'subAgentActivity' &&
-                      (message.agentStatus === 'failed' || live.agentStatuses[`${active.hostId}:${active.id}:${message.agentThreadId}`] === 'failed')) &&
-                      <span className="activity-error">失败</span>}<ChevronDown size={15}/></summary>
-                  {(message.content || message.detail || message.agentThreadId) && <div className="activity-native-body">
+                    {message.failed && <span className="activity-error">失败</span>}<ChevronDown size={15}/></summary>
+                    {(message.content || message.detail) && <div className="activity-native-body">
                     {message.content && (!isTool || !message.detail &&
                       message.activityType !== 'imageView') && (message.kind === 'plan'
                       ? <MessageMarkdown text={message.content}/> : <p>{message.content}</p>)}
                     {message.detail && <pre>{message.detail}</pre>}
-                    {message.agentThreadId && <SubAgentDetails hostId={active.hostId} parentId={active.id}
-                      agentThreadId={message.agentThreadId} agentName={message.agentPath}
-                      parentRunning={active.running === true} syncPending={active.syncPending || live.status[active.hostId] !== 'online'}
-                      online={live.status[active.hostId] === 'online'} onStatus={live.setAgentStatus} read={live.readSubAgent}/>}
                     {message.activityType === 'imageView' && message.turnId &&
                       <ToolImage hostId={active.hostId} threadId={active.id} turnId={message.turnId}
                         itemId={message.id.slice(message.id.indexOf(':') + 1)}
