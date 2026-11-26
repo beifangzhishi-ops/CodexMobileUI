@@ -28,6 +28,7 @@ import { sidebarPullDistance, SIDEBAR_PULL_THRESHOLD } from './sidebarPullRefres
 import { useLiveCodex } from './useLiveCodex';
 import { useThreadSearch } from './useThreadSearch';
 import { MessageImage } from './MessageImage';
+import { ImageZoomSurface } from './ImageZoomSurface';
 import { ToolImage } from './ToolImage';
 import { findToolLogo, parseToolLogos, toolDisplayName, type ToolLogo } from '../../shared/toolVisuals';
 import { MessageMarkdown } from './MessageMarkdown';
@@ -2222,7 +2223,7 @@ export default function DesktopApp() {
     {imageViewer && <div className="image-viewer" role="dialog" aria-modal="true" aria-label="查看图片原图"
       onMouseDown={(e) => { if (e.target === e.currentTarget) setImageViewer(null); }}>
       <button className="image-viewer-close" onClick={() => setImageViewer(null)} aria-label="关闭图片查看"><X size={22}/></button>
-      <img src={imageViewer} alt="原图"/>
+      <ImageZoomSurface src={imageViewer} alt="原图"/>
     </div>}
     {contextMenu && <div className="context-menu-layer" onPointerDown={(e) => e.stopPropagation()}>
       <button className="context-menu-dismiss" aria-label="关闭操作菜单"

@@ -1,0 +1,5 @@
+.image-zoom-image {
+  touch-action: none;
+  transform-origin: center;
+  will-change: transform;
+}
