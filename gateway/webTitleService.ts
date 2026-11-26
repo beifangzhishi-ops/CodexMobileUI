@@ -177,6 +177,7 @@ export class WebTitleService {
           guarded = error instanceof Error && [
             'QUOTA_GUARD_BLOCKED', 'QUOTA_GUARD_SYNC_PENDING',
             'QUOTA_GUARD_MONITOR_UNAVAILABLE', 'QUOTA_GUARD_STATE_INVALID',
+            'QUOTA_GUARD_PEER_BLOCKED', 'QUOTA_GUARD_PEER_PENDING',
           ].includes(error.message);
           retry = !guarded && job.attempts < 2;
         }

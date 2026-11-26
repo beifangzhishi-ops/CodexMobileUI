@@ -217,6 +217,13 @@ test('both quota popovers share one 6v-owned 3% guard control and status', () =>
   assert.match(bridge, /web\/quotaGuard/);
   assert.match(bridge, /remoteQuotaGuardReachable/);
   assert.match(bridge, /syncPeerQuotaGuard/);
+  assert.match(bridge, /const relayHostId = remotePeer \? null : coordinator \? '6v' : 'noha'/);
+  assert.match(bridge, /Direct relay bypasses the per-host Gateway/);
+  assert.match(bridge, /quotaGuardGuardedMethod\(msg\.method\)/);
+  assert.match(bridge, /quotaGuardFileAdmission\(quotaGuardStore, relayHostId/);
+  assert.match(bridge, /synchronizeQuotaGuardPeer/);
+  assert.match(bridge, /handleQuotaGuardPeerSync/);
+  assert.match(bridge, /parseQuotaGuardPeerSyncRequest/);
   assert.match(uiStyle, /\.quota-guard-toggle/);
   assert.match(uiStyle, /\.quota-guard-status/);
 });

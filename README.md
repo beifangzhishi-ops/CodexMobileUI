@@ -627,9 +627,13 @@ Gateway OAuth is independent of native Codex model login. For model requests, au
   queue additions/starts, goal execution, compaction, titles and manual
   scheduler runs while latched; due scheduled occurrences are skipped.
   Confirmed active turns are interrupted with their exact native thread/turn
-  IDs. Reads and manual stops remain available. There is no native queue-pause
-  RPC, so existing queue contents are preserved and still require the documented
-  manual recovery after interruption.
+  IDs. Each host's latch is exchanged over the bearer-authenticated private peer
+  connection and remains effective while the peer is offline until that host
+  confirms a strictly newer above-threshold snapshot. Reads and manual stops
+  remain available. There is no native queue-pause RPC, so queued model work
+  cannot be frozen in place: existing queue items are preserved and newly active
+  work is rediscovered from native status/queue notices, but an interrupted
+  active turn's preserved queue still needs the documented manual recovery.
 
 - **2026-11-16 attachment upload cancellation:** The Android composer exposes
   a cancel action while reading or uploading an image/document. A cancelled

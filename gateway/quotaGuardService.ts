@@ -6,7 +6,7 @@ import {
   mergeQuotaGuardTriggers, parseNativeQuotaWindows,
 } from '../shared/quotaGuard.js';
 import {
-  QuotaGuardSettingStore, type QuotaGuardAdmission,
+  QuotaGuardSettingStore, quotaGuardFileAdmission, type QuotaGuardAdmission,
 } from './quotaGuardState.js';
 
 type Json = Record<string, unknown>;
@@ -18,6 +18,7 @@ type Pending = {
 type GuardOptions = {
   pollMs?: number;
   maxReadAgeMs?: number;
+  peerPollMs?: number;
   retryDelaysMs?: readonly number[];
 };
 
@@ -35,12 +36,15 @@ export class QuotaGuardService {
   private readonly store: QuotaGuardSettingStore;
   private readonly pollMs: number;
   private readonly maxReadAgeMs: number;
+  private readonly peerPollMs: number;
+  private readonly peerHostId: QuotaHostId;
   private readonly retryDelaysMs: readonly number[];
   private socket: WebSocket | null = null;
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private readRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private peerPollTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectAttempt = 0;
   private nextId = 0;
   private requests = new Map<number, Pending>();
@@ -52,25 +56,32 @@ export class QuotaGuardService {
   private activeTurns = new Map<string, { threadId: string; turnId: string }>();
   private interruptsInFlight = new Set<string>();
   private readFailureCount = 0;
+  private rateGeneration = 0;
+  private refreshAgain = false;
+  private guardBlocked = false;
 
   constructor(private readonly stateDirectory: string, private readonly upstream: string,
     private readonly hostId: QuotaHostId, options: GuardOptions = {}) {
     this.pollMs = options.pollMs ?? 60_000;
     this.maxReadAgeMs = options.maxReadAgeMs ?? Math.max(120_000, this.pollMs * 2 + 15_000);
+    this.peerPollMs = options.peerPollMs ?? 1_000;
+    this.peerHostId = hostId === '6v' ? 'noha' : '6v';
     this.retryDelaysMs = options.retryDelaysMs ?? [750, 1_500, 3_000];
     this.store = new QuotaGuardSettingStore(stateDirectory);
     const setting = this.store.readSettingSync(hostId);
     this.runtime = this.store.readRuntimeSync(hostId) ?? {
-      version: 1, hostId, updatedAt: Date.now(), settingRevision: setting.revision,
+      version: 1, hostId, revision: 0, updatedAt: Date.now(), settingRevision: setting.revision,
       enabled: setting.enabled, nativeStatus: 'connecting', lastReadAt: null,
-      lastReadError: null, triggers: [], interrupts: [],
+      lastReadError: null, discovery: 'idle', triggers: [], interrupts: [],
     };
-    this.runtime = { ...this.runtime, hostId, nativeStatus: 'connecting', updatedAt: Date.now() };
+    this.runtime = { ...this.runtime, hostId, nativeStatus: 'connecting',
+      updatedAt: Date.now(), discovery: this.runtime.discovery ?? 'idle' };
     this.persist();
   }
 
   start(): void {
     if (this.closed || this.socket) return;
+    this.startPeerMonitor();
     this.connect();
   }
 
@@ -79,10 +90,12 @@ export class QuotaGuardService {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.readRetryTimer) clearTimeout(this.readRetryTimer);
+    if (this.peerPollTimer) clearInterval(this.peerPollTimer);
     for (const timer of this.interruptTimers.values()) clearTimeout(timer);
     this.reconnectTimer = null;
     this.pollTimer = null;
     this.readRetryTimer = null;
+    this.peerPollTimer = null;
     this.interruptTimers.clear();
     this.activeTurns.clear();
     this.interruptsInFlight.clear();
@@ -96,18 +109,7 @@ export class QuotaGuardService {
   }
 
   admission(now = Date.now()): QuotaGuardAdmission {
-    let setting;
-    try { setting = this.store.readSettingSync(this.hostId, now); }
-    catch { return { allowed: false, reason: 'QUOTA_GUARD_STATE_INVALID' }; }
-    if (setting.pending) return { allowed: false, reason: 'QUOTA_GUARD_SYNC_PENDING' };
-    if (!setting.enabled) return { allowed: true, reason: null };
-    if (this.runtime.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_BLOCKED' };
-    if (
-        (this.runtime.nativeStatus !== 'online' || this.runtime.lastReadAt === null ||
-          now - this.runtime.lastReadAt > this.maxReadAgeMs)) {
-      return { allowed: false, reason: 'QUOTA_GUARD_MONITOR_UNAVAILABLE' };
-    }
-    return { allowed: true, reason: null };
+    return quotaGuardFileAdmission(this.store, this.hostId, this.maxReadAgeMs, now);
   }
 
   status(): QuotaGuardRuntime {
@@ -118,15 +120,22 @@ export class QuotaGuardService {
 
   async observeRateLimitResponse(input: unknown, observedAt = Date.now()): Promise<void> {
     const readings = parseNativeQuotaWindows(input);
+    if (readings.length === 0) {
+      this.runtime = { ...this.runtime, nativeStatus: 'online', lastReadAt: null,
+        lastReadError: 'QUOTA_SNAPSHOT_INVALID_OR_EMPTY', updatedAt: observedAt };
+      this.persist();
+      return;
+    }
     const triggers = mergeQuotaGuardTriggers(this.runtime.triggers, readings, observedAt);
     const wasBlocked = this.runtime.triggers.length > 0;
+    const triggersChanged = JSON.stringify(triggers) !== JSON.stringify(this.runtime.triggers);
     this.runtime = {
       ...this.runtime, triggers, nativeStatus: 'online', lastReadAt: observedAt,
       lastReadError: null, updatedAt: observedAt,
       enabled: this.settingEnabled(),
       settingRevision: this.store.readSettingSync(this.hostId).revision,
     };
-    this.persist();
+    this.persist(triggersChanged);
     if (triggers.length > 0) {
       for (const active of this.activeTurns.values()) {
         await this.interruptTurn(active.threadId, active.turnId, 0);
@@ -142,12 +151,37 @@ export class QuotaGuardService {
   }
 
   private blocked(): boolean {
-    return this.settingEnabled() && this.runtime.triggers.length > 0;
+    if (!this.settingEnabled()) return false;
+    if (this.runtime.triggers.length > 0) return true;
+    return (this.store.readPeerRuntimeSync(this.peerHostId)?.runtime.triggers.length ?? 0) > 0;
   }
 
-  private persist(): void {
+  private persist(advanceRevision = false): void {
+    if (advanceRevision) {
+      this.runtime = { ...this.runtime, revision: this.runtime.revision + 1 };
+    }
     try { this.store.writeRuntimeSync(this.runtime); }
     catch { /* Native protection remains active even if status could not persist. */ }
+  }
+
+  private startPeerMonitor(): void {
+    if (this.peerPollTimer) return;
+    this.checkGuardLatches();
+    this.peerPollTimer = setInterval(() => this.checkGuardLatches(), this.peerPollMs);
+  }
+
+  private checkGuardLatches(): void {
+    if (this.closed) return;
+    const low = this.settingEnabled() &&
+      (this.runtime.triggers.length > 0 ||
+        (this.store.readPeerRuntimeSync(this.peerHostId)?.runtime.triggers.length ?? 0) > 0);
+    if (low && !this.guardBlocked) {
+      for (const active of this.activeTurns.values()) {
+        void this.interruptTurn(active.threadId, active.turnId, 0);
+      }
+      void this.recoverActiveTurns();
+    }
+    this.guardBlocked = low;
   }
 
   private connect(): void {
@@ -265,10 +299,19 @@ export class QuotaGuardService {
   }
 
   private async refreshRateLimits(): Promise<void> {
-    if (this.refreshing) return this.refreshing;
+    if (this.closed) return;
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return this.refreshing;
+    }
+    const generation = this.rateGeneration;
     this.refreshing = (async () => {
       try {
         const result = await this.request('account/rateLimits/read', {}, 15_000);
+        if (generation !== this.rateGeneration) {
+          this.refreshAgain = true;
+          return;
+        }
         this.readFailureCount = 0;
         if (this.readRetryTimer) clearTimeout(this.readRetryTimer);
         this.readRetryTimer = null;
@@ -286,13 +329,20 @@ export class QuotaGuardService {
           }, delay);
         }
       }
-    })().finally(() => { this.refreshing = null; });
+    })().finally(() => {
+      this.refreshing = null;
+      if (this.refreshAgain && !this.closed) {
+        this.refreshAgain = false;
+        setTimeout(() => { void this.refreshRateLimits(); }, 0);
+      }
+    });
     return this.refreshing;
   }
 
   private async handleNotification(method: string, params: Json): Promise<void> {
     if (!this.initialized) return;
     if (method === 'account/rateLimits/updated') {
+      this.rateGeneration++;
       const snapshot = object(params.rateLimits);
       if (Object.keys(snapshot).length) {
         await this.observeRateLimitResponse({ rateLimits: snapshot });
@@ -369,6 +419,8 @@ export class QuotaGuardService {
     const current = this.runtime.interrupts.find((item) =>
       item.threadId === threadId && item.turnId === turnId);
     if (current?.state === 'confirmed' || this.interruptsInFlight.has(key)) return;
+    if (current?.attempts !== undefined && current.attempts >= this.retryDelaysMs.length) return;
+    if (current?.state === 'retrying' && this.interruptTimers.has(key)) return;
     if (attempt === 0) this.rememberTurn(threadId, turnId);
     this.interruptsInFlight.add(key);
     const priorTimer = this.interruptTimers.get(key);
@@ -413,15 +465,37 @@ export class QuotaGuardService {
   private async recoverActiveTurns(): Promise<void> {
     if (!this.blocked() || this.discovering) return this.discovering ?? undefined;
     this.discovering = (async () => {
+      let incomplete = false;
       try {
-        const loaded = await this.request('thread/loaded/list', { limit: 100 });
-        const ids = Array.isArray(loaded.data)
-          ? loaded.data.filter(nativeId).slice(0, 100) : [];
+        const ids: string[] = [];
+        const cursors = new Set<string>();
+        let cursor: string | null = null;
+        for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
+          const loaded = await this.request('thread/loaded/list', {
+            limit: 100, ...(cursor ? { cursor } : {}),
+          });
+          if (Array.isArray(loaded.data)) ids.push(...loaded.data.filter(nativeId));
+          const next = loaded.nextCursor;
+          if (typeof next !== 'string' || !next) {
+            incomplete = false;
+            break;
+          }
+          if (cursors.has(next)) throw new Error('THREAD_LOADED_CURSOR_INVALID');
+          cursors.add(next);
+          cursor = next;
+          incomplete = pageIndex === 99;
+        }
         for (const threadId of ids) {
           if (!this.blocked()) break;
           await this.discoverThread(threadId);
         }
-      } catch { /* Reconnect/poll recovery will retry. */ }
+      } catch {
+        incomplete = true;
+      } finally {
+        this.runtime = { ...this.runtime,
+          discovery: incomplete ? 'incomplete' : 'complete', updatedAt: Date.now() };
+        this.persist();
+      }
     })().finally(() => { this.discovering = null; });
     return this.discovering;
   }

@@ -1,18 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { TaskInput } from '../shared/automation';
 import {
   buildQuotaGuardState, mergeQuotaGuardTriggers, parseQuotaGuardRuntime,
-  parseNativeQuotaWindows,
+  parseNativeQuotaWindows, type QuotaGuardRuntime, type QuotaHostId,
 } from '../shared/quotaGuard';
 import { createGateway } from '../gateway/main';
 import { SchedulerService } from '../gateway/schedulerService';
 import { SchedulerStore } from '../gateway/scheduler';
 import { QuotaGuardService } from '../gateway/quotaGuardService';
+import {
+  handleQuotaGuardPeerSync, synchronizeQuotaGuardPeer,
+  type QuotaGuardPeerSyncRequest,
+} from '../gateway/quotaGuardPeer';
 import {
   QuotaGuardSettingStore, quotaGuardFileAdmission,
 } from '../gateway/quotaGuardState';
@@ -34,6 +39,136 @@ const waitFor = async (condition: () => boolean, label: string, timeoutMs = 4_00
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.fail('Timed out waiting for ' + label);
+};
+
+type PeerSyncSession = {
+  request: (params: QuotaGuardPeerSyncRequest, timeoutMs?: number) => Promise<unknown>;
+  close: () => void;
+};
+
+const connectQuotaGuardPeer = async (port: number, credential: string): Promise<PeerSyncSession> => {
+  const socket = new WebSocket('ws://127.0.0.1:' + port + '/peer', {
+    headers: { Authorization: 'Bearer ' + credential },
+  });
+  const pending = new Map<number, {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  let sequence = 0;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(Error('peer ready timeout')), 3_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off('error', onError);
+      socket.off('close', onClose);
+    };
+    const onError = () => { cleanup(); reject(Error('peer connection failed')); };
+    const onClose = () => { cleanup(); reject(Error('peer closed before ready')); };
+    socket.once('error', onError);
+    socket.once('close', onClose);
+    socket.on('message', (bytes) => {
+      const frame = JSON.parse(bytes.toString()) as {
+        type?: string; id?: number; result?: unknown; error?: { message?: string };
+      };
+      if (frame.type === 'ready') {
+        cleanup();
+        resolve();
+        return;
+      }
+      if (!Number.isSafeInteger(frame.id)) return;
+      const request = pending.get(frame.id!);
+      if (!request) return;
+      pending.delete(frame.id!);
+      clearTimeout(request.timer);
+      if (frame.error) request.reject(Error(frame.error.message ?? 'peer request failed'));
+      else request.resolve(frame.result);
+    });
+  });
+  socket.on('close', () => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(Error('peer disconnected'));
+    }
+    pending.clear();
+  });
+  return {
+    request(params, timeoutMs = 3_000) {
+      return new Promise((resolve, reject) => {
+        const id = ++sequence;
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(Error('peer request timeout'));
+        }, timeoutMs);
+        pending.set(id, { resolve, reject, timer });
+        socket.send(JSON.stringify({ id, method: 'web/quotaGuard', params }));
+      });
+    },
+    close() { socket.close(); },
+  };
+};
+
+const startQuotaGuardPeerServer = async (store: QuotaGuardSettingStore,
+  credential: string) => {
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(404);
+    response.end();
+  });
+  const sockets = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (request, socket, head) => {
+    const authorized = new URL(request.url ?? '/', 'http://localhost').pathname === '/peer' &&
+      request.headers.authorization === 'Bearer ' + credential;
+    if (!authorized) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    sockets.handleUpgrade(request, socket, head, (client) => {
+      client.send(JSON.stringify({ type: 'ready' }));
+      client.on('message', (bytes) => {
+        let frame: { id?: number; method?: string; params?: unknown };
+        try { frame = JSON.parse(bytes.toString()); } catch { return; }
+        if (!Number.isSafeInteger(frame.id) || frame.method !== 'web/quotaGuard') return;
+        try {
+          const result = handleQuotaGuardPeerSync(store, frame.params, '6v', 'noha');
+          client.send(JSON.stringify({ id: frame.id, result }));
+        } catch (error) {
+          client.send(JSON.stringify({ id: frame.id, error: {
+            message: error instanceof Error ? error.message : 'peer sync failed',
+          } }));
+        }
+      });
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw Error('No quota peer port');
+  return {
+    port: address.port,
+    async close() {
+      for (const client of sockets.clients) client.terminate();
+      await new Promise<void>((resolve) => sockets.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+};
+
+const runtimeFor = (hostId: QuotaHostId, options: {
+  revision?: number; triggers?: QuotaGuardRuntime['triggers'];
+  now?: number; discovery?: QuotaGuardRuntime['discovery'];
+} = {}): QuotaGuardRuntime => {
+  const now = options.now ?? Date.now();
+  return {
+    version: 1, hostId, revision: options.revision ?? 1, updatedAt: now,
+    settingRevision: 1, enabled: true, nativeStatus: 'online', lastReadAt: now,
+    lastReadError: null, discovery: options.discovery ?? 'complete',
+    triggers: options.triggers ?? [], interrupts: [],
+  };
 };
 
 test('raw quota scanning covers every native limit id and never rounds the 3% boundary', () => {
@@ -75,6 +210,10 @@ test('proven low windows latch through missing data and clear only on a fresh ab
   assert.equal(triggers.length, 1);
   triggers = mergeQuotaGuardTriggers(triggers, parseNativeQuotaWindows(snapshot({
     plan: { limitId: 'plan', primary: nativeWindow(5, 300, 100), secondary: null },
+  })), 500);
+  assert.equal(triggers.length, 1, 'an older full read cannot clear a newer low');
+  triggers = mergeQuotaGuardTriggers(triggers, parseNativeQuotaWindows(snapshot({
+    plan: { limitId: 'plan', primary: nativeWindow(5, 300, 100), secondary: null },
   })), 5_000);
   assert.equal(triggers.length, 0);
 
@@ -82,8 +221,12 @@ test('proven low windows latch through missing data and clear only on a fresh ab
     plan: { limitId: 'plan', primary: nativeWindow(97, 300, 100), secondary: null },
   })), 6_000);
   triggers = mergeQuotaGuardTriggers(triggers, parseNativeQuotaWindows(snapshot({
-    plan: { limitId: 'plan', primary: nativeWindow(4, 300, 200), secondary: null },
+    plan: { limitId: 'plan', primary: nativeWindow(4, 300, 50), secondary: null },
   })), 7_000);
+  assert.equal(triggers.length, 1, 'an older reset timestamp cannot clear the latch');
+  triggers = mergeQuotaGuardTriggers(triggers, parseNativeQuotaWindows(snapshot({
+    plan: { limitId: 'plan', primary: nativeWindow(4, 300, 200), secondary: null },
+  })), 8_000);
   assert.equal(triggers.length, 0, 'a freshly reset native window may clear the prior low');
 });
 
@@ -115,23 +258,274 @@ test('authoritative default is off on 6v while an unsynced or stale noha mirror 
   }
 });
 
+test('peer latch preserves a low across age and ignores older clears until a newer confirmed snapshot', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-peer-latch-'));
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    const now = Date.now();
+    await store.setEnabled(true, 0, now);
+    store.writeRuntimeSync(runtimeFor('6v', { now, revision: 3 }));
+    const low = runtimeFor('noha', { now, revision: 9,
+      triggers: mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
+        codex: { limitId: 'codex', primary: nativeWindow(98, 300), secondary: null },
+      }))),
+    });
+    store.writePeerRuntimeSync(low, 'noha', now);
+    assert.equal(quotaGuardFileAdmission(store, '6v', 135_000, now + 1_000).reason,
+      'QUOTA_GUARD_PEER_BLOCKED');
+
+    store.writePeerRuntimeSync(runtimeFor('noha', {
+      now: now + 1_500, revision: 9,
+    }), 'noha', now + 1_500);
+    assert.equal(store.readPeerRuntimeSync('noha')?.runtime.triggers.length, 1,
+      'a same-revision clear cannot replace a durable peer low');
+
+    store.writePeerRuntimeSync(runtimeFor('noha', {
+      now: now + 2_000, revision: 8,
+    }), 'noha', now + 2_000);
+    assert.equal(store.readPeerRuntimeSync('noha')?.runtime.revision, 9,
+      'an older clear cannot replace the durable peer low');
+    assert.equal(quotaGuardFileAdmission(store, '6v', 135_000, now + 61_000).reason,
+      'QUOTA_GUARD_PEER_BLOCKED', 'an offline peer low stays blocking');
+
+    store.writePeerRuntimeSync(runtimeFor('noha', {
+      now: now + 62_000, revision: 10,
+    }), 'noha', now + 62_000);
+    assert.equal(quotaGuardFileAdmission(store, '6v', 135_000, now + 62_000).allowed, true,
+      'only the peer host newer clear restores admission');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('malformed peer runtimes are rejected without weakening an existing latch', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-peer-invalid-'));
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    const now = Date.now();
+    await store.setEnabled(true, 0, now);
+    const triggers = mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
+      codex: { limitId: 'codex', primary: nativeWindow(98, 300), secondary: null },
+    })), now);
+    store.writePeerRuntimeSync(runtimeFor('noha', {
+      now, revision: 4, triggers,
+    }), 'noha', now);
+    const malformed = runtimeFor('noha', { now: now + 1_000, revision: 5 });
+    malformed.triggers = [{
+      ...triggers[0],
+      windowKey: 'forged-window-key',
+    }];
+    assert.equal(parseQuotaGuardRuntime(malformed, 'noha'), null);
+    assert.throws(() => store.writePeerRuntimeSync(malformed, 'noha'),
+      /QUOTA_GUARD_PEER_STATE_INVALID/);
+    assert.equal(store.readPeerRuntimeSync('noha')?.runtime.triggers.length, 1);
+    assert.equal(quotaGuardFileAdmission(store, '6v', 135_000, now + 1_000).reason,
+      'QUOTA_GUARD_PEER_BLOCKED');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('authenticated peer sync carries each host latch in both directions and survives an outage', async () => {
+  const coordinatorDirectory = mkdtempSync(join(tmpdir(), 'quota-peer-coordinator-'));
+  const agentDirectory = mkdtempSync(join(tmpdir(), 'quota-peer-agent-'));
+  const credential = 'a'.repeat(64);
+  const now = Date.now();
+  let server: Awaited<ReturnType<typeof startQuotaGuardPeerServer>> | null = null;
+  let session: PeerSyncSession | null = null;
+  try {
+    const coordinator = new QuotaGuardSettingStore(coordinatorDirectory);
+    const agent = new QuotaGuardSettingStore(agentDirectory);
+    await coordinator.setEnabled(true, 0, now);
+    const sixLow = mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
+      codex: { limitId: 'codex', primary: nativeWindow(98, 300, 1_800_000_000), secondary: null },
+    })), now);
+    coordinator.writeRuntimeSync(runtimeFor('6v', {
+      now, revision: 2, triggers: sixLow,
+    }));
+    agent.writeRuntimeSync(runtimeFor('noha', { now, revision: 1 }));
+
+    server = await startQuotaGuardPeerServer(agent, credential);
+    await new Promise<void>((resolve, reject) => {
+      const unauthorized = new WebSocket('ws://127.0.0.1:' + server!.port + '/peer', {
+        headers: { Authorization: 'Bearer ' + 'b'.repeat(64) },
+      });
+      const timer = setTimeout(() => reject(Error('unauthorized peer timeout')), 2_000);
+      unauthorized.once('open', () => reject(Error('unauthorized peer connected')));
+      unauthorized.once('unexpected-response', (_request, response) => {
+        clearTimeout(timer);
+        try {
+          assert.equal(response.statusCode, 403);
+          response.resume();
+          resolve();
+        } catch (error) { reject(error as Error); }
+      });
+      unauthorized.once('error', () => undefined);
+    });
+
+    session = await connectQuotaGuardPeer(server.port, credential);
+    const peerSix = await synchronizeQuotaGuardPeer(
+      coordinator, '6v', 'noha', session.request, now);
+    assert.equal(peerSix?.hostId, 'noha');
+    assert.equal(agent.readSettingSync('noha', now).enabled, true);
+    assert.equal(agent.readPeerRuntimeSync('6v')?.runtime.triggers.length, 1);
+    assert.equal(quotaGuardFileAdmission(agent, 'noha', 135_000, now).reason,
+      'QUOTA_GUARD_PEER_BLOCKED');
+
+    const nohaLow = mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
+      plan: { limitId: 'plan', primary: nativeWindow(97.5, 10080, 1_800_100_000), secondary: null },
+    })), now + 1_000);
+    agent.writeRuntimeSync(runtimeFor('noha', {
+      now: now + 1_000, revision: 2, triggers: nohaLow,
+    }));
+    coordinator.writeRuntimeSync(runtimeFor('6v', {
+      now: now + 1_000, revision: 3,
+    }));
+    const peerNoha = await synchronizeQuotaGuardPeer(
+      coordinator, '6v', 'noha', session.request, now + 1_000);
+    assert.equal(peerNoha?.triggers.length, 1);
+    assert.equal(coordinator.readPeerRuntimeSync('noha')?.runtime.triggers.length, 1);
+    assert.equal(quotaGuardFileAdmission(coordinator, '6v', 135_000, now + 1_000).reason,
+      'QUOTA_GUARD_PEER_BLOCKED');
+
+    session.close();
+    session = null;
+    await server.close();
+    server = null;
+    await assert.rejects(synchronizeQuotaGuardPeer(
+      coordinator, '6v', 'noha', async () => {
+        throw Error('PEER_OFFLINE');
+      }, now + 2_000), /PEER_OFFLINE/);
+    assert.equal(coordinator.readPeerRuntimeSync('noha')?.runtime.triggers.length, 1);
+    assert.equal(quotaGuardFileAdmission(coordinator, '6v', 135_000, now + 31_000).reason,
+      'QUOTA_GUARD_PEER_BLOCKED');
+
+    server = await startQuotaGuardPeerServer(agent, credential);
+    agent.writeRuntimeSync(runtimeFor('noha', {
+      now: now + 40_000, revision: 3,
+    }));
+    session = await connectQuotaGuardPeer(server.port, credential);
+    const cleared = await synchronizeQuotaGuardPeer(
+      coordinator, '6v', 'noha', session.request, now + 40_000);
+    assert.equal(cleared?.triggers.length, 0);
+    assert.equal(coordinator.readPeerRuntimeSync('noha')?.runtime.triggers.length, 0);
+    coordinator.writeRuntimeSync(runtimeFor('6v', {
+      now: now + 40_000, revision: 4,
+    }));
+    assert.equal(quotaGuardFileAdmission(coordinator, '6v', 135_000, now + 40_000).allowed,
+      true);
+  } finally {
+    session?.close();
+    await server?.close();
+    rmSync(coordinatorDirectory, { recursive: true, force: true });
+    rmSync(agentDirectory, { recursive: true, force: true });
+  }
+});
+
 test('shared state keeps observed trigger reasons visible when the peer is offline', () => {
   const setting = { enabled: true, revision: 2, updatedAt: 100,
     syncedAt: 100, pending: false, reason: null };
-  const local = parseQuotaGuardRuntime({
-    version: 1, hostId: '6v', updatedAt: 100, settingRevision: 2, enabled: true,
-    nativeStatus: 'online', lastReadAt: Date.now(), lastReadError: null,
+  const local = parseQuotaGuardRuntime(runtimeFor('6v', {
+    revision: 2,
     triggers: mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
       codex: { limitId: 'codex', primary: nativeWindow(97.5, 300), secondary: null },
     }))),
-    interrupts: [],
-  }, '6v');
+  }), '6v');
   const state = buildQuotaGuardState(setting, true, 'noha offline', 90,
     { '6v': local, noha: null });
   assert.equal(state.status, 'guarded');
   assert.match(state.triggerReason ?? '', /6v/);
   assert.equal(state.sync.state, 'pending');
   assert.equal(state.hosts.noha?.status, 'pending');
+});
+
+test('an empty native rate-limit response never establishes fresh readiness', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-empty-native-'));
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    const now = Date.now();
+    await store.setEnabled(true, 0, now);
+    store.writeRuntimeSync(runtimeFor('6v', { now, revision: 1 }));
+    store.writePeerRuntimeSync(runtimeFor('noha', { now }), 'noha', now);
+    const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:65531', '6v', {
+      pollMs: 60_000, peerPollMs: 60_000,
+    });
+    try {
+      await guard.observeRateLimitResponse({}, now);
+      assert.equal(guard.status().lastReadAt, null);
+      assert.equal(guard.status().lastReadError, 'QUOTA_SNAPSHOT_INVALID_OR_EMPTY');
+      assert.equal(guard.admission(now).reason, 'QUOTA_GUARD_MONITOR_UNAVAILABLE');
+      assert.equal(guard.status().triggers.length, 0);
+    } finally { guard.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('a full read racing a newer sparse notification cannot clear the newer low', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-read-race-'));
+  let firstResponse: (() => void) | null = null;
+  let secondResponse: (() => void) | null = null;
+  let reads = 0;
+  const sockets = new Set<import('ws').WebSocket>();
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('message', (bytes) => {
+      const frame = JSON.parse(bytes.toString()) as { id?: number; method?: string };
+      if (!frame.id || !frame.method) return;
+      if (frame.method === 'initialize') {
+        socket.send(JSON.stringify({ id: frame.id, result: {} }));
+      } else if (frame.method === 'account/rateLimits/read') {
+        reads++;
+        const result = snapshot({
+          codex: { limitId: 'codex',
+            primary: nativeWindow(10, 300, 1_800_000_000), secondary: null },
+        });
+        const respond = () => socket.send(JSON.stringify({ id: frame.id, result }));
+        if (reads === 1) {
+          firstResponse = respond;
+          setImmediate(() => socket.send(JSON.stringify({
+            method: 'account/rateLimits/updated',
+            params: { rateLimits: { limitId: 'codex', limitName: 'Codex',
+              primary: nativeWindow(98, 300, 1_800_000_000), secondary: null } },
+          })));
+        } else if (reads === 2) {
+          secondResponse = respond;
+        } else {
+          respond();
+        }
+      } else if (frame.method === 'thread/loaded/list') {
+        socket.send(JSON.stringify({ id: frame.id, result: { data: [], nextCursor: null } }));
+      } else {
+        socket.send(JSON.stringify({ id: frame.id, result: {} }));
+      }
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw Error('No native test port');
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    await store.setEnabled(true, 0);
+    const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
+      '6v', { pollMs: 60_000, peerPollMs: 60_000 });
+    try {
+      guard.start();
+      await waitFor(() => firstResponse !== null && guard.status().triggers.length === 1,
+        'newer sparse low');
+      firstResponse!();
+      await waitFor(() => secondResponse !== null, 'post-notification full refresh');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(guard.status().triggers.length, 1,
+        'the older full read cannot overwrite the sparse low');
+      secondResponse!();
+      await waitFor(() => guard.status().triggers.length === 0,
+        'a later full read confirms recovery');
+    } finally { guard.close(); }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('scheduler refuses manual starts and records guarded occurrences without backlog', async () => {
@@ -197,11 +591,7 @@ test('private Gateway blocks a new native turn before forwarding it while low', 
   const triggers = mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
     codex: { limitId: 'codex', primary: nativeWindow(99, 300), secondary: null },
   })));
-  store.writeRuntimeSync({
-    version: 1, hostId: '6v', updatedAt: Date.now(), settingRevision: 1, enabled: true,
-    nativeStatus: 'online', lastReadAt: Date.now(), lastReadError: null,
-    triggers, interrupts: [],
-  });
+  store.writeRuntimeSync(runtimeFor('6v', { triggers }));
   const gateway = createGateway({
     publicOrigin: 'https://unused.invalid', secret: 'test-secret',
     redirectUri: 'codexmobileui://oauth', listenPort: 0, privatePort: 0,
@@ -336,6 +726,8 @@ test('native monitor catches an admission race, interrupts the exact turn and co
   try {
     const store = new QuotaGuardSettingStore(directory);
     await store.setEnabled(true, 0);
+    const peerNow = Date.now();
+    store.writePeerRuntimeSync(runtimeFor('noha', { now: peerNow }), 'noha', peerNow);
     const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
       '6v', { pollMs: 60_000, maxReadAgeMs: 120_000,
         retryDelaysMs: [80, 160, 320] });
@@ -380,7 +772,9 @@ test('native reconnect discovers an already-active turn before admitting more wo
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     socket.on('message', (bytes) => {
-      const frame = JSON.parse(bytes.toString()) as { id?: number; method?: string };
+      const frame = JSON.parse(bytes.toString()) as {
+        id?: number; method?: string; params?: { cursor?: string; threadId?: string };
+      };
       if (!frame.id || !frame.method) return;
       if (frame.method === 'initialize') {
         socket.send(JSON.stringify({ id: frame.id, result: {} }));
@@ -390,11 +784,17 @@ test('native reconnect discovers an already-active turn before admitting more wo
         }) }));
         if (connection === 1) setTimeout(() => socket.terminate(), 20);
       } else if (frame.method === 'thread/loaded/list') {
+        const params = frame.params;
         socket.send(JSON.stringify({ id: frame.id,
-          result: { data: connection > 1 ? [threadId] : [], nextCursor: null } }));
+          result: params?.cursor === 'next'
+            ? { data: [threadId], nextCursor: null }
+            : { data: [connection > 1 ? '019b0000-0000-7000-8000-000000000019' : ''],
+              nextCursor: connection > 1 ? 'next' : null } }));
       } else if (frame.method === 'thread/turns/list') {
+        const requestThreadId = frame.params?.threadId;
         socket.send(JSON.stringify({ id: frame.id, result: {
-          data: [{ id: turnId, status: 'inProgress' }], nextCursor: null,
+          data: requestThreadId === threadId ? [{ id: turnId, status: 'inProgress' }] : [],
+          nextCursor: null,
         } }));
       } else if (frame.method === 'turn/interrupt') {
         interrupts++;
@@ -409,6 +809,8 @@ test('native reconnect discovers an already-active turn before admitting more wo
   try {
     const store = new QuotaGuardSettingStore(directory);
     await store.setEnabled(true, 0);
+    const peerNow = Date.now();
+    store.writePeerRuntimeSync(runtimeFor('noha', { now: peerNow }), 'noha', peerNow);
     const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
       '6v', { pollMs: 60_000, maxReadAgeMs: 120_000,
         retryDelaysMs: [80, 160, 320] });
@@ -421,6 +823,209 @@ test('native reconnect discovers an already-active turn before admitting more wo
     for (const socket of sockets) socket.terminate();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('enabling protection interrupts an already active turn for a retained peer low', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-enable-peer-'));
+  const threadId = '019b0000-0000-7000-8000-000000000061';
+  const turnId = '019b0000-0000-7000-8000-000000000062';
+  let interrupts = 0;
+  const sockets = new Set<import('ws').WebSocket>();
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('message', (bytes) => {
+      const frame = JSON.parse(bytes.toString()) as {
+        id?: number; method?: string; params?: Record<string, unknown>;
+      };
+      if (!frame.id || !frame.method) return;
+      if (frame.method === 'initialize') {
+        socket.send(JSON.stringify({ id: frame.id, result: {} }));
+      } else if (frame.method === 'account/rateLimits/read') {
+        socket.send(JSON.stringify({ id: frame.id, result: snapshot({
+          codex: { limitId: 'codex', primary: nativeWindow(10, 300), secondary: null },
+        }) }));
+      } else if (frame.method === 'thread/loaded/list') {
+        socket.send(JSON.stringify({ id: frame.id, result: { data: [], nextCursor: null } }));
+      } else if (frame.method === 'turn/interrupt') {
+        interrupts++;
+        assert.equal(frame.params?.threadId, threadId);
+        assert.equal(frame.params?.turnId, turnId);
+        socket.send(JSON.stringify({ id: frame.id, result: {} }));
+        setImmediate(() => socket.send(JSON.stringify({ method: 'turn/completed',
+          params: { threadId, turn: { id: turnId, status: 'interrupted' } } })));
+      } else {
+        socket.send(JSON.stringify({ id: frame.id, result: {} }));
+      }
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw Error('No native test port');
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    const now = Date.now();
+    const triggers = mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
+      codex: { limitId: 'codex', primary: nativeWindow(98, 300), secondary: null },
+    })), now);
+    store.writePeerRuntimeSync(runtimeFor('noha', {
+      now, revision: 4, triggers,
+    }), 'noha', now);
+    const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
+      '6v', { pollMs: 60_000, peerPollMs: 20, retryDelaysMs: [20, 40, 80] });
+    try {
+      guard.start();
+      await waitFor(() => guard.status().lastReadAt !== null, 'healthy native startup');
+      for (const socket of sockets) {
+        socket.send(JSON.stringify({ method: 'turn/started',
+          params: { threadId, turn: { id: turnId } } }));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(interrupts, 0, 'the disabled guard leaves the active turn alone');
+      await store.setEnabled(true, 0);
+      await waitFor(() => interrupts === 1, 'enabling protection interrupts active work');
+      assert.equal(guard.admission().reason, 'QUOTA_GUARD_PEER_BLOCKED');
+    } finally { guard.close(); }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a durable low on either host interrupts the healthy peer active turn in both directions', async () => {
+  const directions = [
+    { lowHost: '6v' as const, activeHost: 'noha' as const },
+    { lowHost: 'noha' as const, activeHost: '6v' as const },
+  ];
+  for (const direction of directions) {
+    const dirs: Record<QuotaHostId, string> = {
+      '6v': mkdtempSync(join(tmpdir(), 'quota-cross-6v-')),
+      noha: mkdtempSync(join(tmpdir(), 'quota-cross-noha-')),
+    };
+    const servers: Partial<Record<QuotaHostId, WebSocketServer>> = {};
+    const guards: Partial<Record<QuotaHostId, QuotaGuardService>> = {};
+    const setLowCallbacks: Partial<Record<QuotaHostId, (value: boolean) => void>> = {};
+    const socketSets: Record<QuotaHostId, Set<import('ws').WebSocket>> = {
+      '6v': new Set(), noha: new Set(),
+    };
+    const interruptCalls: Record<QuotaHostId, { threadId: string; turnId: string }[]> = {
+      '6v': [], noha: [],
+    };
+    try {
+      for (const hostId of ['6v', 'noha'] as const) {
+        let low = false;
+        const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+        servers[hostId] = server;
+        await new Promise<void>((resolve, reject) => {
+          server.once('listening', resolve);
+          server.once('error', reject);
+        });
+        server.on('connection', (socket) => {
+          socketSets[hostId].add(socket);
+          socket.on('close', () => socketSets[hostId].delete(socket));
+          socket.on('message', (bytes) => {
+            const frame = JSON.parse(bytes.toString()) as {
+              id?: number; method?: string; params?: Record<string, unknown>;
+            };
+            if (!frame.id || !frame.method) return;
+            if (frame.method === 'initialize') {
+              socket.send(JSON.stringify({ id: frame.id, result: {} }));
+            } else if (frame.method === 'account/rateLimits/read') {
+              socket.send(JSON.stringify({ id: frame.id, result: snapshot({
+                codex: { limitId: 'codex',
+                  primary: nativeWindow(low ? 98 : 10, 300, 1_800_000_000),
+                  secondary: null },
+              }) }));
+            } else if (frame.method === 'thread/loaded/list') {
+              socket.send(JSON.stringify({ id: frame.id,
+                result: { data: [], nextCursor: null } }));
+            } else if (frame.method === 'turn/interrupt') {
+              const threadId = frame.params?.threadId as string;
+              const turnId = frame.params?.turnId as string;
+              interruptCalls[hostId].push({ threadId, turnId });
+              socket.send(JSON.stringify({ id: frame.id, result: {} }));
+              setImmediate(() => socket.send(JSON.stringify({ method: 'turn/completed',
+                params: { threadId, turn: { id: turnId, status: 'interrupted' } } })));
+            } else {
+              socket.send(JSON.stringify({ id: frame.id, result: {} }));
+            }
+          });
+        });
+        const address = server.address();
+        if (!address || typeof address === 'string') throw Error('No cross-host test port');
+        const store = new QuotaGuardSettingStore(dirs[hostId]);
+        if (hostId === '6v') await store.setEnabled(true, 0);
+        else store.writeMirrorSync(true, 1, Date.now());
+        const peerHost = hostId === '6v' ? 'noha' : '6v';
+        const peerNow = Date.now();
+        store.writePeerRuntimeSync(runtimeFor(peerHost, { now: peerNow }), peerHost, peerNow);
+        const guard = new QuotaGuardService(dirs[hostId],
+          'ws://127.0.0.1:' + address.port, hostId, {
+            pollMs: 60_000, peerPollMs: 20, retryDelaysMs: [20, 40, 80],
+          });
+        guards[hostId] = guard;
+        guard.start();
+        setLowCallbacks[hostId] = (value: boolean) => {
+            low = value;
+            if (value) {
+              for (const socket of socketSets[hostId]) {
+                socket.send(JSON.stringify({ method: 'account/rateLimits/updated',
+                  params: { rateLimits: { limitId: 'codex', limitName: 'Codex',
+                    primary: nativeWindow(98, 300, 1_800_000_000), secondary: null } } }));
+              }
+            }
+          };
+      }
+      const lowGuard = guards[direction.lowHost]!;
+      const activeGuard = guards[direction.activeHost]!;
+      await waitFor(() => activeGuard.status().lastReadAt !== null &&
+        lowGuard.status().lastReadAt !== null, 'healthy cross-host startup');
+      assert.equal(activeGuard.admission().allowed, true);
+
+      const threadId = direction.activeHost === '6v'
+        ? '019b0000-0000-7000-8000-000000000041'
+        : '019b0000-0000-7000-8000-000000000051';
+      const turnId = direction.activeHost === '6v'
+        ? '019b0000-0000-7000-8000-000000000042'
+        : '019b0000-0000-7000-8000-000000000052';
+      for (const socket of socketSets[direction.activeHost]) {
+        socket.send(JSON.stringify({ method: 'turn/started',
+          params: { threadId, turn: { id: turnId } } }));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(interruptCalls[direction.activeHost].length, 0,
+        'the active turn remains healthy before the peer low');
+
+      setLowCallbacks[direction.lowHost]?.(true);
+      await waitFor(() => lowGuard.status().triggers.length > 0, 'source host low latch');
+      const targetStore = new QuotaGuardSettingStore(dirs[direction.activeHost]);
+      handleQuotaGuardPeerSync(targetStore, {
+        action: 'sync', enabled: true, revision: 1, updatedAt: Date.now(),
+        runtime: lowGuard.status(),
+      }, direction.lowHost, direction.activeHost);
+      await waitFor(() => interruptCalls[direction.activeHost].length > 0,
+        direction.lowHost + ' low interrupting ' + direction.activeHost);
+      assert.deepEqual(interruptCalls[direction.activeHost][0], { threadId, turnId });
+      assert.equal(activeGuard.admission().reason, 'QUOTA_GUARD_PEER_BLOCKED');
+      await waitFor(() => activeGuard.status().interrupts.some((item) =>
+        item.turnId === turnId && item.state === 'confirmed'), 'cross-host terminal confirmation');
+    } finally {
+      for (const guard of Object.values(guards)) guard?.close();
+      for (const hostId of ['6v', 'noha'] as const) {
+        const server = servers[hostId];
+        if (!server) continue;
+        for (const socket of socketSets[hostId]) socket.terminate();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      rmSync(dirs['6v'], { recursive: true, force: true });
+      rmSync(dirs.noha, { recursive: true, force: true });
+    }
   }
 });
 
@@ -465,6 +1070,8 @@ test('native interrupt failures are bounded and remain visibly failed without cl
   try {
     const store = new QuotaGuardSettingStore(directory);
     await store.setEnabled(true, 0);
+    const peerNow = Date.now();
+    store.writePeerRuntimeSync(runtimeFor('noha', { now: peerNow }), 'noha', peerNow);
     const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
       '6v', { pollMs: 60_000, maxReadAgeMs: 120_000,
         retryDelaysMs: [20, 20, 20] });

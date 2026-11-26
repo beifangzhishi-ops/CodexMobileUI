@@ -34,12 +34,14 @@ export type QuotaInterrupt = {
 export type QuotaGuardRuntime = {
   version: 1;
   hostId: QuotaHostId;
+  revision: number;
   updatedAt: number;
   settingRevision: number;
   enabled: boolean;
   nativeStatus: 'connecting' | 'online' | 'offline';
   lastReadAt: number | null;
   lastReadError: string | null;
+  discovery: 'idle' | 'complete' | 'incomplete';
   triggers: QuotaGuardTrigger[];
   interrupts: QuotaInterrupt[];
 };
@@ -162,16 +164,19 @@ export function mergeQuotaGuardTriggers(existing: readonly QuotaGuardTrigger[],
     byBase.set(reading.baseKey, group);
   }
   for (const trigger of [...retained.values()]) {
+    if (observedAt < trigger.lastSeenAt) continue;
     const exact = readings.find((reading) => reading.windowKey === trigger.windowKey);
     const freshSameWindow = exact && exact.remainingPercent > QUOTA_GUARD_THRESHOLD_PERCENT;
     const resetWindow = !exact && (byBase.get(trigger.baseKey) ?? []).find((reading) =>
       reading.remainingPercent > QUOTA_GUARD_THRESHOLD_PERCENT &&
-      reading.resetsAt !== null && trigger.resetsAt !== null && reading.resetsAt !== trigger.resetsAt);
+      reading.resetsAt !== null && trigger.resetsAt !== null &&
+      reading.resetsAt > trigger.resetsAt);
     if (freshSameWindow || resetWindow) retained.delete(trigger.windowKey);
   }
   for (const reading of readings) {
     if (reading.remainingPercent > QUOTA_GUARD_THRESHOLD_PERCENT) continue;
     const prior = retained.get(reading.windowKey);
+    if (prior && observedAt < prior.lastSeenAt) continue;
     retained.set(reading.windowKey, {
       ...reading,
       firstDetectedAt: prior?.firstDetectedAt ?? observedAt,
@@ -197,11 +202,14 @@ export function parseQuotaGuardRuntime(input: unknown, expectedHost?: QuotaHostI
   const data = object(input);
   if (!data || data.version !== 1 || !hostId(data.hostId) ||
       (expectedHost && data.hostId !== expectedHost) ||
-      !finite(data.updatedAt) || !Number.isSafeInteger(data.settingRevision) ||
-      typeof data.enabled !== 'boolean' ||
+      !finite(data.updatedAt) || data.updatedAt < 0 || !Number.isSafeInteger(data.revision) ||
+      Number(data.revision) < 0 || !Number.isSafeInteger(data.settingRevision) ||
+      Number(data.settingRevision) < 0 || typeof data.enabled !== 'boolean' ||
       !['connecting', 'online', 'offline'].includes(String(data.nativeStatus)) ||
-      !(data.lastReadAt === null || finite(data.lastReadAt)) ||
-      !(data.lastReadError === null || typeof data.lastReadError === 'string') ||
+      !(data.lastReadAt === null || finite(data.lastReadAt) && data.lastReadAt >= 0) ||
+      !(data.lastReadError === null ||
+        typeof data.lastReadError === 'string' && data.lastReadError.length <= 200) ||
+      !['idle', 'complete', 'incomplete'].includes(String(data.discovery)) ||
       !Array.isArray(data.triggers) || data.triggers.length > 64 ||
       !Array.isArray(data.interrupts) || data.interrupts.length > 128) return null;
   const triggers: QuotaGuardTrigger[] = [];
@@ -209,11 +217,18 @@ export function parseQuotaGuardRuntime(input: unknown, expectedHost?: QuotaHostI
     const item = object(value);
     if (!item || !boundedString(item.limitId, 200) ||
         !(item.limitName === null || boundedString(item.limitName, 200)) ||
-        !slot(item.slot) || !finite(item.usedPercent) || !finite(item.remainingPercent) ||
-        !(item.windowDurationMins === null || finite(item.windowDurationMins)) ||
-        !(item.resetsAt === null || finite(item.resetsAt)) ||
+        !slot(item.slot) || !finite(item.usedPercent) ||
+        item.usedPercent < 0 || item.usedPercent > 1_000_000 ||
+        !finite(item.remainingPercent) || item.remainingPercent < 0 || item.remainingPercent > 100 ||
+        !(item.windowDurationMins === null ||
+          finite(item.windowDurationMins) && item.windowDurationMins > 0) ||
+        !(item.resetsAt === null || finite(item.resetsAt) && item.resetsAt > 0) ||
         !boundedString(item.baseKey, 1000) || !boundedString(item.windowKey, 1000) ||
-        !finite(item.firstDetectedAt) || !finite(item.lastSeenAt)) continue;
+        !finite(item.firstDetectedAt) || item.firstDetectedAt < 0 ||
+        !finite(item.lastSeenAt) || item.firstDetectedAt > item.lastSeenAt) return null;
+    const identity = windowIdentity(item.limitId, item.slot,
+      item.windowDurationMins as number | null, item.resetsAt as number | null);
+    if (item.baseKey !== identity.baseKey || item.windowKey !== identity.windowKey) return null;
     triggers.push(item as QuotaGuardTrigger);
   }
   const interrupts: QuotaInterrupt[] = [];
@@ -221,19 +236,31 @@ export function parseQuotaGuardRuntime(input: unknown, expectedHost?: QuotaHostI
     const item = object(value);
     if (!item || !boundedString(item.threadId, 200) || !boundedString(item.turnId, 200) ||
         !['requested', 'retrying', 'confirmed', 'failed'].includes(String(item.state)) ||
-        !Number.isSafeInteger(item.attempts) || !finite(item.requestedAt) ||
-        !(item.confirmedAt === null || finite(item.confirmedAt)) ||
-        !(item.reason === null || boundedString(item.reason, 200))) continue;
+        !Number.isSafeInteger(item.attempts) || Number(item.attempts) < 0 ||
+        !finite(item.requestedAt) || item.requestedAt < 0 ||
+        !(item.confirmedAt === null ||
+          finite(item.confirmedAt) && item.confirmedAt >= item.requestedAt) ||
+        item.state === 'confirmed' && item.confirmedAt === null ||
+        !(item.reason === null || boundedString(item.reason, 200))) return null;
     interrupts.push(item as QuotaInterrupt);
   }
   return {
-    version: 1, hostId: data.hostId, updatedAt: data.updatedAt,
+    version: 1, hostId: data.hostId, revision: Number(data.revision),
+    updatedAt: data.updatedAt,
     settingRevision: Number(data.settingRevision), enabled: data.enabled,
     nativeStatus: data.nativeStatus as QuotaGuardRuntime['nativeStatus'],
     lastReadAt: data.lastReadAt as number | null,
     lastReadError: data.lastReadError as string | null,
+    discovery: data.discovery as QuotaGuardRuntime['discovery'],
     triggers, interrupts,
   };
+}
+
+export function quotaGuardGuardedMethod(method: string): boolean {
+  return [
+    'turn/start', 'turn/steer', 'thread/queue/add', 'thread/queue/start',
+    'thread/goal/set', 'thread/compact/start',
+  ].includes(method);
 }
 
 export function quotaGuardHostView(runtime: QuotaGuardRuntime | null,
@@ -245,7 +272,10 @@ export function quotaGuardHostView(runtime: QuotaGuardRuntime | null,
   const active = runtime.interrupts.filter((item) => item.state === 'requested' || item.state === 'retrying');
   const failed = runtime.interrupts.filter((item) => item.state === 'failed');
   const confirmed = runtime.interrupts.filter((item) => item.state === 'confirmed');
-  const reason = runtime.triggers[0] ? quotaWindowLabel(runtime.triggers[0]) : runtime.lastReadError;
+  const reason = runtime.triggers[0]
+    ? quotaWindowLabel(runtime.triggers[0]) +
+      (runtime.discovery === 'incomplete' ? '；活跃回合扫描不完整' : '')
+    : runtime.lastReadError;
   const fresh = runtime.nativeStatus === 'online' && runtime.lastReadAt !== null &&
     now - runtime.lastReadAt <= 150_000;
   const status: QuotaGuardHostView['status'] = !runtime.enabled ? 'off'

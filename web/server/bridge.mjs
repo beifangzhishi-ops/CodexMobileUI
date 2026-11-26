@@ -27,10 +27,13 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 process.chdir(mode === 'coordinator' ? resolve(scriptDir, '../..') : resolve(scriptDir, '..'));
 const { WebTitleService } =
   await import(pathToFileURL(resolve('dist/gateway/webTitleService.js')).href);
-const { QuotaGuardSettingStore } =
+const { QuotaGuardSettingStore, quotaGuardFileAdmission } =
   await import(pathToFileURL(resolve('dist/gateway/quotaGuardState.js')).href);
-const { buildQuotaGuardState, parseQuotaGuardRuntime } =
+const { buildQuotaGuardState, parseQuotaGuardRuntime, quotaGuardGuardedMethod } =
   await import(pathToFileURL(resolve('dist/shared/quotaGuard.js')).href);
+const {
+  handleQuotaGuardPeerSync, parseQuotaGuardPeerSyncRequest, synchronizeQuotaGuardPeer,
+} = await import(pathToFileURL(resolve('dist/gateway/quotaGuardPeer.js')).href);
 // The browser uses the same native config resolution and strict read-back
 // verification as the mobile Gateway; no client-supplied policy or cwd.
 const { settingsFromNativeDefault, verifyNativePermissionApplied } =
@@ -228,8 +231,9 @@ function currentQuotaGuardState() {
   if (!coordinator) throw Error('QUOTA_GUARD_PRIMARY_UNAVAILABLE');
   const setting = quotaGuardStore.readAuthoritativeSync();
   const localValue = quotaGuardStore.readRuntimeSync('6v');
-  const remoteValue = remoteQuotaGuardReachable
-    ? parseQuotaGuardRuntime(remoteQuotaGuardRuntime, 'noha') : remoteQuotaGuardRuntime;
+  const persistedRemote = quotaGuardStore.readPeerRuntimeSync('noha')?.runtime ?? null;
+  const remoteValue = persistedRemote ?? (remoteQuotaGuardReachable
+    ? parseQuotaGuardRuntime(remoteQuotaGuardRuntime, 'noha') : remoteQuotaGuardRuntime);
   const local = localValue ? { ...localValue, enabled: setting.enabled,
     settingRevision: setting.revision } : null;
   const remote = remoteValue ? { ...remoteValue, enabled: setting.enabled,
@@ -257,14 +261,11 @@ async function syncPeerQuotaGuard() {
     do {
       quotaGuardSyncRequested = false;
       try {
-        const setting = quotaGuardStore.readAuthoritativeSync();
         const peer = await openGatewaySession('noha');
         try {
-          const result = await peer.request('', {
-            action: 'sync', enabled: setting.enabled, revision: setting.revision,
-            updatedAt: setting.updatedAt,
-          }, 15_000, 'web/quotaGuard');
-          remoteQuotaGuardRuntime = parseQuotaGuardRuntime(result?.runtime, 'noha');
+          remoteQuotaGuardRuntime = await synchronizeQuotaGuardPeer(
+            quotaGuardStore, '6v', 'noha',
+            (params, timeoutMs) => peer.request('', params, timeoutMs, 'web/quotaGuard'));
           remoteQuotaGuardReachable = true;
           remoteQuotaGuardSyncedAt = Date.now();
         } finally { peer.close(); }
@@ -279,7 +280,7 @@ async function syncPeerQuotaGuard() {
     quotaGuardSyncTimer = setTimeout(() => {
       quotaGuardSyncTimer = null;
       void syncPeerQuotaGuard();
-    }, 10_000);
+    }, 2_000);
   });
   return quotaGuardSyncPromise;
 }
@@ -613,10 +614,7 @@ function allowedFrame(msg) {
     typeof p.enabled === 'boolean' && Number.isSafeInteger(p.expectedRevision) &&
     p.expectedRevision >= 0;
   if (msg.method === 'web/quotaGuard') return !coordinator &&
-    subset(p, ['action', 'enabled', 'revision', 'updatedAt']) &&
-    Object.keys(p).length === 4 && p.action === 'sync' &&
-    typeof p.enabled === 'boolean' && Number.isSafeInteger(p.revision) && p.revision >= 0 &&
-    typeof p.updatedAt === 'number' && Number.isFinite(p.updatedAt);
+    parseQuotaGuardPeerSyncRequest(p, '6v') !== null;
   if (msg.method.startsWith('web/image/')) return isValidImageRpc(msg.method, p);
   if (msg.method.startsWith('web/attachment/')) return validDocumentUploadRpc(msg.method, p);
   if (msg.method === 'web/pathResolve') return subset(p, ['text', 'hosts']) &&
@@ -789,6 +787,7 @@ function allowedFrame(msg) {
 
 function attachRelay(browser, upstreamUrl, headers = {}) {
   const remotePeer = typeof headers.Authorization === 'string';
+  const relayHostId = remotePeer ? null : coordinator ? '6v' : 'noha';
   const upstream = new WebSocket(upstreamUrl, { headers, perMessageDeflate: false, handshakeTimeout: 10000, maxPayload: 16 * 1024 * 1024 });
   let upstreamReady = false;
   const pendingApprovals = new Set();
@@ -987,11 +986,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         return;
       }
       try {
-        quotaGuardStore.writeMirrorSync(msg.params.enabled, msg.params.revision,
-          msg.params.updatedAt);
-        safeSend(JSON.stringify({ id: msg.id, result: {
-          runtime: quotaGuardStore.readRuntimeSync('noha'),
-        } }));
+        const result = handleQuotaGuardPeerSync(
+          quotaGuardStore, msg.params, '6v', 'noha');
+        safeSend(JSON.stringify({ id: msg.id, result }));
       } catch {
         safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
           message: 'QUOTA_GUARD_SYNC_FAILED' } }));
@@ -999,6 +996,17 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       return;
     }
     if (!upstreamReady) { safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'HOST_OFFLINE' } })); return; }
+    // Direct relay bypasses the per-host Gateway. Gate every model-work method
+    // here too, after upload/path/preparation branches and immediately before
+    // the final native send below.
+    if (relayHostId && quotaGuardGuardedMethod(msg.method)) {
+      const admission = quotaGuardFileAdmission(quotaGuardStore, relayHostId, 135_000);
+      if (!admission.allowed) {
+        safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
+          message: admission.reason ?? 'QUOTA_GUARD_BLOCKED' } }));
+        return;
+      }
+    }
     if (!remotePeer && msg.method === 'thread/name/set') {
       // A requested manual rename takes precedence even if an independent
       // background title generation is already in flight.

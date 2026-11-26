@@ -24,6 +24,7 @@ import {
   classifyGatewayClient, classifyGatewayRoute, createGatewayJournal,
   type GatewayTrace,
 } from './diagnostics.js';
+import { quotaGuardGuardedMethod } from '../shared/quotaGuard.js';
 
 interface Config {
   publicOrigin: string;
@@ -567,7 +568,8 @@ export function createGateway(config: Config) {
                   'TASK_BUSY', 'RUN_NOT_FOUND', 'PROJECT_NOT_FOUND', 'MODEL_NOT_FOUND',
                   'EFFORT_NOT_SUPPORTED', 'THREAD_PROJECT_MISMATCH',
                   'QUOTA_GUARD_BLOCKED', 'QUOTA_GUARD_SYNC_PENDING',
-                  'QUOTA_GUARD_MONITOR_UNAVAILABLE', 'QUOTA_GUARD_STATE_INVALID']);
+                  'QUOTA_GUARD_MONITOR_UNAVAILABLE', 'QUOTA_GUARD_STATE_INVALID',
+                  'QUOTA_GUARD_PEER_BLOCKED', 'QUOTA_GUARD_PEER_PENDING']);
                 const name = error instanceof Error && allowed.has(error.message)
                   ? error.message : 'AUTOMATION_UNAVAILABLE';
                 reply({ error: { code: -32602, message: name } });
@@ -751,10 +753,7 @@ export function createGateway(config: Config) {
             const request = JSON.parse(bytes.toString()) as {
               id?: unknown; method?: unknown;
             };
-            const guardedMethod = [
-              'turn/start', 'turn/steer', 'thread/queue/add', 'thread/queue/start',
-              'thread/goal/set', 'thread/compact/start',
-            ].includes(String(request.method));
+            const guardedMethod = quotaGuardGuardedMethod(String(request.method));
             if (guardedMethod) {
               const admission = quotaGuard.admission();
               if (!admission.allowed && Number.isSafeInteger(request.id)) {

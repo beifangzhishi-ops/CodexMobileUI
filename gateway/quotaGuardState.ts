@@ -16,6 +16,11 @@ type StoredSetting = {
   updatedAt: number;
   syncedAt: number | null;
 };
+type StoredPeerRuntime = {
+  version: 1;
+  receivedAt: number;
+  runtime: QuotaGuardRuntime;
+};
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -40,11 +45,13 @@ function parseStoredSetting(raw: string, expectedHost: QuotaHostId,
 export class QuotaGuardSettingStore {
   readonly settingFile: string;
   readonly runtimeFile: string;
+  readonly peerRuntimeFile: string;
 
   constructor(private readonly stateDirectory: string,
     private readonly maxSyncAgeMs = 30_000) {
     this.settingFile = join(stateDirectory, 'quota-guard-setting.json');
     this.runtimeFile = join(stateDirectory, 'quota-guard-runtime.json');
+    this.peerRuntimeFile = join(stateDirectory, 'quota-guard-peer-runtime.json');
   }
 
   readAuthoritativeSync(now = Date.now()): QuotaGuardSetting {
@@ -81,6 +88,18 @@ export class QuotaGuardSettingStore {
   readRuntimeSync(hostId: QuotaHostId): QuotaGuardRuntime | null {
     try {
       return parseQuotaGuardRuntime(JSON.parse(readFileSync(this.runtimeFile, 'utf8')), hostId);
+    } catch {
+      return null;
+    }
+  }
+
+  readPeerRuntimeSync(expectedHost: QuotaHostId): StoredPeerRuntime | null {
+    try {
+      const parsed = JSON.parse(readFileSync(this.peerRuntimeFile, 'utf8')) as Partial<StoredPeerRuntime>;
+      if (parsed.version !== 1 || typeof parsed.receivedAt !== 'number' ||
+          !Number.isFinite(parsed.receivedAt)) return null;
+      const runtime = parseQuotaGuardRuntime(parsed.runtime, expectedHost);
+      return runtime ? { version: 1, receivedAt: parsed.receivedAt, runtime } : null;
     } catch {
       return null;
     }
@@ -157,6 +176,34 @@ export class QuotaGuardSettingStore {
     }
   }
 
+  writePeerRuntimeSync(runtime: unknown, expectedHost: QuotaHostId,
+    receivedAt = Date.now()): StoredPeerRuntime {
+    const parsed = parseQuotaGuardRuntime(runtime, expectedHost);
+    if (!parsed) throw new Error('QUOTA_GUARD_PEER_STATE_INVALID');
+    const previous = this.readPeerRuntimeSync(expectedHost);
+    if (previous && parsed.revision < previous.runtime.revision) return previous;
+    if (previous && parsed.revision === previous.runtime.revision) {
+      if (parsed.updatedAt < previous.runtime.updatedAt) return previous;
+      const previousLow = previous.runtime.triggers.length > 0;
+      if (previousLow && parsed.triggers.length === 0) return previous;
+    }
+    if (previous?.runtime.triggers.length && parsed.triggers.length === 0) {
+      const lastLowSeenAt = Math.max(...previous.runtime.triggers.map((item) => item.lastSeenAt));
+      if (parsed.nativeStatus !== 'online' || parsed.lastReadAt === null ||
+          parsed.lastReadAt < lastLowSeenAt) return previous;
+    }
+    const value: StoredPeerRuntime = { version: 1, receivedAt, runtime: parsed };
+    mkdirSync(dirname(this.peerRuntimeFile), { recursive: true });
+    const temporary = this.peerRuntimeFile + '.' + process.pid + '.tmp';
+    try {
+      writeFileSync(temporary, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 });
+      renameSync(temporary, this.peerRuntimeFile);
+    } finally {
+      try { unlinkSync(temporary); } catch { /* Already renamed. */ }
+    }
+    return value;
+  }
+
   async readRuntime(): Promise<QuotaGuardRuntime | null> {
     try {
       return parseQuotaGuardRuntime(JSON.parse(await readFile(this.runtimeFile, 'utf8')));
@@ -169,7 +216,8 @@ export class QuotaGuardSettingStore {
 export type QuotaGuardAdmission = {
   allowed: boolean;
   reason: 'QUOTA_GUARD_BLOCKED' | 'QUOTA_GUARD_SYNC_PENDING' |
-    'QUOTA_GUARD_MONITOR_UNAVAILABLE' | 'QUOTA_GUARD_STATE_INVALID' | null;
+    'QUOTA_GUARD_MONITOR_UNAVAILABLE' | 'QUOTA_GUARD_STATE_INVALID' |
+    'QUOTA_GUARD_PEER_BLOCKED' | 'QUOTA_GUARD_PEER_PENDING' | null;
 };
 
 export interface QuotaGuardGate {
@@ -177,7 +225,8 @@ export interface QuotaGuardGate {
 }
 
 export function quotaGuardFileAdmission(store: QuotaGuardSettingStore,
-  hostId: QuotaHostId, maxReadAgeMs: number, now = Date.now()): QuotaGuardAdmission {
+  hostId: QuotaHostId, maxReadAgeMs: number, now = Date.now(),
+  maxPeerAgeMs = 30_000): QuotaGuardAdmission {
   let setting: QuotaGuardSetting;
   try { setting = store.readSettingSync(hostId, now); }
   catch { return { allowed: false, reason: 'QUOTA_GUARD_STATE_INVALID' }; }
@@ -185,9 +234,17 @@ export function quotaGuardFileAdmission(store: QuotaGuardSettingStore,
   if (!setting.enabled) return { allowed: true, reason: null };
   const runtime = store.readRuntimeSync(hostId);
   if (runtime?.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_BLOCKED' };
+  const peerHost: QuotaHostId = hostId === '6v' ? 'noha' : '6v';
+  const peer = store.readPeerRuntimeSync(peerHost);
+  if (peer?.runtime.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_PEER_BLOCKED' };
   if (!runtime || runtime.nativeStatus !== 'online' ||
       runtime.lastReadAt === null || now - runtime.lastReadAt > maxReadAgeMs) {
     return { allowed: false, reason: 'QUOTA_GUARD_MONITOR_UNAVAILABLE' };
+  }
+  if (!peer || peer.runtime.nativeStatus !== 'online' ||
+      peer.runtime.lastReadAt === null || now - peer.receivedAt > maxPeerAgeMs ||
+      now - peer.runtime.lastReadAt > maxReadAgeMs) {
+    return { allowed: false, reason: 'QUOTA_GUARD_PEER_PENDING' };
   }
   return { allowed: true, reason: null };
 }
