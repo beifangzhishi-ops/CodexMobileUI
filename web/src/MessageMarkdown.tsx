@@ -2,6 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import { createContext, useContext, type ReactNode } from 'react';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import { remarkTexDelimiters } from './remarkTexDelimiters.mjs';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import type { HostId } from './types';
@@ -93,7 +94,7 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
       : <span className="unresolved-file-link">{children}</span>;
   };
   return <MessageLink.Provider value={renderLink}><div className="message-markdown">
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkTexDelimiters]} rehypePlugins={[rehypeKatex]}
       components={{
         a: MarkdownAnchor,
         img: ({ alt, src }) => {
