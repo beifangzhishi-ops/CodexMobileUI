@@ -11,6 +11,9 @@ const listener = Platform.OS === 'android'
   ? NativeModules.CodexNotifications as NativeListener | undefined : undefined;
 let currentHost: string | null = null;
 let currentThread: string | null = null;
+const validHostId = (id: unknown): id is string =>
+  typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(id) &&
+  !['all', 'constructor', 'prototype'].includes(id);
 
 function endpointFor(origin: string | null): string | null {
   const approved = unifiedWebUrl(origin);
@@ -59,16 +62,24 @@ export function observeAppVisibility(): () => void {
   return () => subscription.remove();
 }
 
-export type TaskLink = { hostId: '6v' | 'noha'; threadId: string };
+export type TaskLink = { hostId: string } & (
+  { threadId: string } | { taskId: string; runId: string }
+);
 export function parseTaskLink(url: string): TaskLink | null {
   try {
     const parsed = new URL(url);
     const hostId = parsed.searchParams.get('host');
+    if (parsed.protocol !== 'codexmobileui:' || !validHostId(hostId)) return null;
+    if (parsed.hostname === 'reminder') {
+      const taskId = parsed.searchParams.get('task');
+      const runId = parsed.searchParams.get('run');
+      const id = /^[a-f0-9-]{36}$/;
+      return taskId && runId && id.test(taskId) && id.test(runId) ? { hostId, taskId, runId } : null;
+    }
     const threadId = parsed.searchParams.get('thread');
-    if (parsed.protocol !== 'codexmobileui:' || parsed.hostname !== 'thread' ||
-      (hostId !== '6v' && hostId !== 'noha') ||
-      !threadId || !/^[a-zA-Z0-9_-]{8,256}$/.test(threadId)) return null;
-    return { hostId, threadId };
+    return parsed.hostname === 'thread' && (hostId === '6v' || hostId === 'noha') &&
+      threadId && /^[a-zA-Z0-9_-]{8,256}$/.test(threadId)
+      ? { hostId, threadId } : null;
   } catch { return null; }
 }
 

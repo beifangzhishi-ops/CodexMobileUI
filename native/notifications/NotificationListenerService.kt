@@ -28,6 +28,9 @@ class NotificationListenerService : Service() {
     private const val CHANNEL_STATUS = "codex_private_listener"
     private const val CHANNEL_EVENTS = "codex_task_completed"
     private const val STATUS_ID = 4101
+    private val HOST_ID = Regex("[a-z0-9][a-z0-9-]{0,31}")
+    private val RUN_ID = Regex("[a-f0-9-]{36}")
+    private val THREAD_ID = Regex("[a-zA-Z0-9_-]{8,256}")
     @Volatile var appForeground = false
     @Volatile var activeHost = ""
     @Volatile var activeThread = ""
@@ -35,6 +38,9 @@ class NotificationListenerService : Service() {
     // The current approved 6v Tailnet Coordinator, not an arbitrary public endpoint.
     fun validEndpoint(value: String): Boolean =
       Regex("wss://[a-z0-9-]+[.][a-z0-9-]+[.]ts[.]net:4190/api/notifications").matches(value)
+
+    private fun validHostId(value: String): Boolean =
+      HOST_ID.matches(value) && value != "all" && value != "constructor" && value != "prototype"
   }
 
   private val handler = Handler(Looper.getMainLooper())
@@ -56,12 +62,12 @@ class NotificationListenerService : Service() {
     super.onCreate()
     manager.createNotificationChannel(NotificationChannel(CHANNEL_STATUS,
       "Codex 内网监听", NotificationManager.IMPORTANCE_LOW).apply {
-      description = "保持与电脑的私网任务完成通知连接"
+      description = "保持与电脑的私网任务通知连接"
       setSound(null, null)
       enableVibration(false)
     })
     manager.createNotificationChannel(NotificationChannel(CHANNEL_EVENTS,
-      "Codex 任务完成", NotificationManager.IMPORTANCE_DEFAULT))
+      "Codex 任务通知", NotificationManager.IMPORTANCE_DEFAULT))
   }
 
   private fun status(text: String): Notification =
@@ -109,13 +115,13 @@ class NotificationListenerService : Service() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
         if (epoch != generation || shuttingDown) { webSocket.close(1000, null); return }
         failures = 0
-        handler.post { manager.notify(STATUS_ID, status("已连接 · 6v / noha")) }
+        handler.post { manager.notify(STATUS_ID, status("已连接私网通知")) }
         val cursor: Any = if (preferences.contains("lastSeq")) preferences.getLong("lastSeq", 0L)
           else JSONObject.NULL
         webSocket.send(JSONObject().put("type", "subscribe").put("after", cursor).toString())
       }
       override fun onMessage(webSocket: WebSocket, text: String) {
-        if (epoch != generation || shuttingDown || text.length > 160_000) return
+        if (epoch != generation || shuttingDown || text.length > 512_000) return
         try {
           val payload = JSONObject(text)
           when (payload.optString("type")) {
@@ -167,29 +173,39 @@ class NotificationListenerService : Service() {
     val seq = event.optLong("seq", -1L)
     if (seq < 0 || seq <= preferences.getLong("lastSeq", -1L)) return null
     val host = event.optString("hostId")
-    val thread = event.optString("threadId")
-    if ((host != "6v" && host != "noha") || !thread.matches(Regex("[a-zA-Z0-9_-]{8,256}"))) return null
+    if (event.optString("kind") == "reminder") {
+      if (!validHostId(host) || !event.optString("taskId").matches(RUN_ID) ||
+          !event.optString("runId").matches(RUN_ID)) return null
+    } else if ((host != "6v" && host != "noha") || !event.optString("threadId").matches(THREAD_ID)) return null
     preferences.edit().putLong("lastSeq", seq).apply()
     return seq
   }
 
   private fun isCurrentlyVisible(event: JSONObject): Boolean =
-    appForeground && activeHost == event.optString("hostId") &&
+    event.optString("kind") != "reminder" && appForeground && activeHost == event.optString("hostId") &&
       activeThread == event.optString("threadId")
 
   private fun notifyEvent(event: JSONObject) {
     if (isCurrentlyVisible(event)) return
     val seq = event.optLong("seq", 0L)
     val host = event.optString("hostId")
-    val thread = event.optString("threadId")
-    val title = event.optString("title").replace(Regex("\\s+"), " ").take(80).ifBlank { "新对话" }
-    val preview = event.optString("preview").replace(Regex("\\s+"), " ").take(360).trim()
-    val result = when (event.optString("status")) {
+    val reminder = event.optString("kind") == "reminder"
+    val title = if (reminder) event.optString("title").take(160).ifBlank { "定时提醒" }
+      else event.optString("title").replace(Regex("\\s+"), " ").take(80).ifBlank { "新对话" }
+    val preview = if (reminder) event.optString("preview").take(720)
+      else event.optString("preview").replace(Regex("\\s+"), " ").take(360).trim()
+    val result = if (reminder) "定时提醒" else when (event.optString("status")) {
       "failed" -> "执行失败"
       "interrupted" -> "已中断"
       else -> "本轮已完成"
     }
-    val uri = Uri.parse("codexmobileui://thread?host=$host&thread=$thread")
+    val uri = Uri.Builder().scheme("codexmobileui").authority(if (reminder) "reminder" else "thread")
+      .appendQueryParameter("host", host).apply {
+        if (reminder) {
+          appendQueryParameter("task", event.optString("taskId"))
+          appendQueryParameter("run", event.optString("runId"))
+        } else appendQueryParameter("thread", event.optString("threadId"))
+      }.build()
     val destination = PendingIntent.getActivity(this, (seq % Int.MAX_VALUE).toInt(),
       Intent(Intent.ACTION_VIEW, uri, this, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -212,7 +228,7 @@ class NotificationListenerService : Service() {
     manager.notify(4102, Notification.Builder(this, CHANNEL_EVENTS)
       .setSmallIcon(android.R.drawable.stat_notify_chat)
       .setContentTitle("CodexMobileUI")
-      .setContentText("离线期间有 $count 个任务结束，打开 App 查看")
+      .setContentText("离线期间有 $count 条任务消息，打开 App 查看")
       .setContentIntent(PendingIntent.getActivity(this, 4102, Intent(this, MainActivity::class.java),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
       .setAutoCancel(true).build())

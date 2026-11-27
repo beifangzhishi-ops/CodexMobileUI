@@ -14,6 +14,7 @@ export type TaskInput = {
   timeZone: string;
   conversationMode: 'new' | 'resume';
   threadId: string | null;
+  modelMode?: 'default' | 'none';
   model: string | null;
   effort: string | null;
   permissionMode: 'read-only' | 'workspace-write';
@@ -40,4 +41,5 @@ export type TaskRun = {
   reason: string | null;
   trigger: 'manual' | 'scheduled';
   seen: boolean;
+  reminder?: { title: string; text: string; scheduledAt: string | null };
 };

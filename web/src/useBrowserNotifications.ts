@@ -5,22 +5,28 @@ const preference = 'codex-web-system-notifications';
 const cursorKey = preference + '-cursor';
 
 type Target = { hostId: HostId; threadId: string };
-type Completion = Target & {
+type FeedEvent = {
+  hostId: HostId;
   seq: number;
-  status: 'completed' | 'failed' | 'interrupted';
   title: string;
   preview: string;
-};
+} & ({ kind?: undefined; threadId: string; status: 'completed' | 'failed' | 'interrupted' }
+  | { kind: 'reminder'; taskId: string; runId: string });
 
-function completion(value: unknown): Completion | null {
+function feedEvent(value: unknown): FeedEvent | null {
   if (!value || typeof value !== 'object') return null;
-  const event = value as Partial<Completion>;
-  return Number.isSafeInteger(event.seq) && event.seq! > 0 &&
+  const event = value as Record<string, unknown>;
+  if (!(typeof event.seq === 'number' && Number.isSafeInteger(event.seq) && event.seq > 0 &&
     validHostId(event.hostId) &&
-    typeof event.threadId === 'string' && /^[a-zA-Z0-9_-]{8,256}$/.test(event.threadId) &&
-    typeof event.title === 'string' && typeof event.preview === 'string' &&
+    typeof event.title === 'string' && typeof event.preview === 'string')) return null;
+  if (event.kind === 'reminder') {
+    const id = /^[a-f0-9-]{36}$/;
+    return typeof event.taskId === 'string' && id.test(event.taskId) &&
+      typeof event.runId === 'string' && id.test(event.runId) ? event as FeedEvent : null;
+  }
+  return typeof event.threadId === 'string' && /^[a-zA-Z0-9_-]{8,256}$/.test(event.threadId) &&
     (event.status === 'completed' || event.status === 'failed' || event.status === 'interrupted')
-    ? event as Completion : null;
+    ? event as FeedEvent : null;
 }
 
 function readCursor(): number | null {
@@ -30,17 +36,24 @@ function readCursor(): number | null {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-function show(event: Completion) {
-  const result = { completed: '本轮已完成', failed: '执行失败', interrupted: '已中断' }[event.status];
+function show(event: FeedEvent) {
+  const result = event.kind === 'reminder' ? '定时提醒' :
+    { completed: '本轮已完成', failed: '执行失败', interrupted: '已中断' }[event.status];
   const notice = new Notification(event.title.slice(0, 160) || '新对话', {
     body: event.hostId + ' · ' + result + (event.preview ? '\n' + event.preview.slice(0, 720) : ''),
     tag: 'codex-turn-' + event.seq,
   });
   notice.onclick = () => {
     window.focus();
-    window.dispatchEvent(new CustomEvent('codexmobileui:open-thread', {
-      detail: { hostId: event.hostId, threadId: event.threadId },
-    }));
+    if (event.kind === 'reminder') {
+      window.dispatchEvent(new CustomEvent('codexmobileui:open-reminder', {
+        detail: { hostId: event.hostId, taskId: event.taskId, runId: event.runId },
+      }));
+    } else {
+      window.dispatchEvent(new CustomEvent('codexmobileui:open-thread', {
+        detail: { hostId: event.hostId, threadId: event.threadId },
+      }));
+    }
     notice.close();
   };
 }
@@ -110,13 +123,13 @@ export function useBrowserNotifications(active: Target | null) {
             const stored = readCursor();
             cursor = replay && after !== null && message.latest < after && stored === after
               ? null : stored ?? cursor;
-            const pending: Completion[] = [];
+            const pending: FeedEvent[] = [];
             for (const raw of events) {
-              const event = completion(raw);
+              const event = feedEvent(raw);
               if (!event || event.seq <= (cursor ?? 0)) continue;
               cursor = event.seq;
               const target = visibleTarget.current;
-              if (document.visibilityState !== 'visible' || !document.hasFocus() ||
+              if (event.kind === 'reminder' || document.visibilityState !== 'visible' || !document.hasFocus() ||
                   target?.hostId !== event.hostId || target.threadId !== event.threadId) {
                 pending.push(event);
               }
@@ -126,7 +139,7 @@ export function useBrowserNotifications(active: Target | null) {
             if (Notification.permission !== 'granted') return;
             if (pending.length > 3) {
               const notice = new Notification('CodexMobileUI', {
-                body: '离线期间有 ' + pending.length + ' 个任务结束。',
+                body: '离线期间有 ' + pending.length + ' 条任务消息。',
                 tag: 'codex-turn-summary',
               });
               notice.onclick = () => { window.focus(); notice.close(); };

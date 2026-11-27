@@ -427,6 +427,9 @@ hosts' Gateway/Web services are now running the newly compiled code.
 - Background reconnect failures remain silent. Ambiguous message submissions
   retain their existing in-chat reconciliation state rather than being retried.
   Automation errors remain visible in the task screen until the next action.
+  The model selector offers **不使用模型（仅提醒）** for scheduled notifications
+  without inference. The task inbox keeps the original reminder text and
+  exposes it even if system notifications are disabled.
 - Explicit safety confirmations for deletion, unsaved edits, and elevated
   permissions are unchanged. Web already uses non-modal status notices.
 

@@ -305,6 +305,9 @@ export default function DesktopApp() {
   const forkBusy = useRef(false);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewMode>('chat');
+  const [reminderTarget, setReminderTarget] = useState<{
+    hostId: HostId; taskId: string; runId: string; navigation: number;
+  } | null>(null);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
   const pastedImagesRef = useRef<PastedImage[]>([]);
   pastedImagesRef.current = pastedImages;
@@ -703,6 +706,23 @@ export default function DesktopApp() {
     window.addEventListener('codexmobileui:open-thread', open);
     return () => window.removeEventListener('codexmobileui:open-thread', open);
   }, [sidebarSignature]);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const target = (event as CustomEvent).detail;
+      const id = /^[a-f0-9-]{36}$/;
+      if (!target || !validHostId(target.hostId) ||
+          (hosts.length > 0 && !hosts.some(({ id }) => id === target.hostId)) ||
+          typeof target.taskId !== 'string' || !id.test(target.taskId) ||
+          typeof target.runId !== 'string' || !id.test(target.runId)) return;
+      const { hostId, taskId, runId } = target;
+      setReminderTarget((previous) => ({ hostId, taskId, runId, navigation: (previous?.navigation ?? 0) + 1 }));
+      setView('tasks');
+      setPopup(null);
+      closeOnMobile();
+    };
+    window.addEventListener('codexmobileui:open-reminder', open);
+    return () => window.removeEventListener('codexmobileui:open-reminder', open);
+  }, [hosts]);
   function acceptPins(snapshot: SidebarPinsSnapshot) {
     if (snapshot.revision < pinsRevision.current) return;
     pinsRevision.current = snapshot.revision;
@@ -1721,7 +1741,7 @@ export default function DesktopApp() {
                   <button key={id} onClick={() => { setHostFilter(id); setPopup(null); }}><Monitor size={16}/>{id === 'all' ? '全部电脑' : id}{hostFilter === id && <Check size={16} className="check-icon" />}</button>)}
               </div>}
             </div>
-            <button className="task-row" onClick={() => { setView('tasks'); setPopup(null); closeOnMobile(); }}><Clock3 size={20} /><span>定时任务</span></button>
+            <button className="task-row" onClick={() => { setReminderTarget(null); setView('tasks'); setPopup(null); closeOnMobile(); }}><Clock3 size={20} /><span>定时任务</span></button>
             <div className="section-header"><button className="section-toggle" aria-expanded={!collapsedSections.includes('pinned')}
               onClick={() => toggleSection('pinned')}>置顶<ChevronRight size={15} className={collapsedSections.includes('pinned') ? '' : 'chevron-open'}/></button></div>
             {!collapsedSections.includes('pinned') && <div className="pinned-section">
@@ -1842,8 +1862,10 @@ export default function DesktopApp() {
       </header>
 
       {view === 'tasks' ? <AutomationView
+          key={reminderTarget ? reminderTarget.navigation : 'tasks'}
           hosts={hosts.map((host) => host.id)}
-          initialHost={currentHost}
+          initialHost={reminderTarget?.hostId ?? currentHost}
+          initialReminder={reminderTarget ?? undefined}
           projects={projects}
           models={live.models}
           status={live.status}

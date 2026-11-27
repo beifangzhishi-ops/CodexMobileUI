@@ -20,11 +20,17 @@ const hhmm = (h: unknown, m: unknown): boolean =>
 export function validateTaskInput(value: unknown): TaskInput {
   if (!plain(value) || !plain(value.schedule)) throw new Error('INVALID_TASK');
   const accepted = ['name', 'prompt', 'projectId', 'schedule', 'timeZone',
-    'conversationMode', 'threadId', 'model', 'effort', 'permissionMode', 'workspaceMode'];
+    'conversationMode', 'threadId', 'model', 'modelMode', 'effort', 'permissionMode', 'workspaceMode'];
   if (Object.keys(value).some((key) => !accepted.includes(key))) throw new Error('INVALID_TASK');
+  const reminder = value.modelMode === 'none';
   if (!str(value.name, 80) || !value.name.trim() ||
       !str(value.prompt, 12000) || !value.prompt.trim() ||
-      !str(value.projectId, 200) || !str(value.timeZone, 100) ||
+      (!str(value.projectId, 200) && !(reminder && value.projectId === '')) ||
+      !str(value.timeZone, 100) ||
+      (value.modelMode !== undefined && value.modelMode !== 'default' && !reminder) ||
+      (reminder && (value.model !== null || value.effort !== null || value.threadId !== null ||
+        value.conversationMode !== 'new' || value.workspaceMode !== 'project' ||
+        value.permissionMode !== 'read-only' || value.projectId !== '')) ||
       !['new', 'resume'].includes(String(value.conversationMode)) ||
       !['project', 'worktree'].includes(String(value.workspaceMode)) ||
       !['read-only', 'workspace-write'].includes(String(value.permissionMode)) ||
@@ -167,7 +173,7 @@ export class SchedulerStore {
   /** Never replay old scheduled triggers after machine/network downtime. */
   skipOverdue(now = new Date(), graceMs = 60_000): void {
     for (const task of this.list()) {
-      if (!task.enabled || !task.nextRunAt ||
+      if (task.modelMode === 'none' || !task.enabled || !task.nextRunAt ||
           Date.parse(task.nextRunAt) >= now.getTime() - graceMs) continue;
       this.skipOccurrence(task, 'MISSED_WHILE_OFFLINE', now);
     }
@@ -208,6 +214,13 @@ export class SchedulerStore {
       .all() as { json: unknown }[]).map((row) => JSON.parse(String(row.json)) as TaskRun)
       .filter((run) => !run.seen && run.state !== 'running');
   }
+  reminderEvents(after: number, now = new Date()): { cursor: number; run: TaskRun }[] {
+    const cutoff = new Date(now.getTime() - 7 * 86400_000).toISOString();
+    const rows = this.db.prepare(`SELECT rowid AS cursor, json FROM runs
+      WHERE rowid > ? AND started_at >= ? AND json_type(json, '$.reminder') = 'object'
+      ORDER BY rowid LIMIT 100`).all(after, cutoff) as { cursor: number; json: string }[];
+    return rows.map(({ cursor, json }) => ({ cursor, run: JSON.parse(json) as TaskRun }));
+  }
   markSeen(runId: string): void {
     const row = this.db.prepare('SELECT json FROM runs WHERE id=?').get(runId) as { json: unknown } | undefined;
     if (!row) throw new Error('RUN_NOT_FOUND');
@@ -222,14 +235,25 @@ export class SchedulerStore {
     const task = this.get(id);
     if (!task) throw new Error('TASK_NOT_FOUND');
     if (this.runs(id).some((run) => run.state === 'running')) throw new Error('TASK_BUSY');
-    const run: TaskRun = { id: randomUUID(), taskId: id, state: 'running',
-      startedAt: now.toISOString(), finishedAt: null, threadId: null, turnId: null,
+    const reminder = task.modelMode === 'none';
+    const at = now.toISOString();
+    const run: TaskRun = { id: randomUUID(), taskId: id, state: reminder ? 'completed' : 'running',
+      startedAt: at, finishedAt: reminder ? at : null, threadId: null, turnId: null,
       reason: null, trigger, seen: false };
-    this.writeRun(run);
-    if (trigger === 'scheduled') {
-      const next = nextOccurrence(task.schedule, task.timeZone, now);
-      this.save({ ...task, nextRunAt: next, completed: !next,
-        enabled: !!next && task.enabled, updatedAt: now.toISOString() });
+    if (reminder) run.reminder = { title: task.name, text: task.prompt,
+      scheduledAt: trigger === 'scheduled' ? task.nextRunAt : null };
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.writeRun(run);
+      if (trigger === 'scheduled') {
+        const next = nextOccurrence(task.schedule, task.timeZone, now);
+        this.save({ ...task, nextRunAt: next, completed: !next,
+          enabled: !!next && task.enabled, updatedAt: at });
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
     }
     return run;
   }

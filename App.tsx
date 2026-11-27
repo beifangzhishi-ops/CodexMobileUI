@@ -46,8 +46,9 @@ function SharedApp() {
     if (!webLoaded.current || !webReady.current || !lastTask.current) return;
     const detail = lastTask.current;
     lastTask.current = null;
+    const event = 'taskId' in detail ? 'codexmobileui:open-reminder' : 'codexmobileui:open-thread';
     web.current?.injectJavaScript(
-      "window.dispatchEvent(new CustomEvent('codexmobileui:open-thread',{detail:" +
+      'window.dispatchEvent(new CustomEvent(' + JSON.stringify(event) + ',{detail:' +
       JSON.stringify(detail) + "}));true;",
     );
   }, []);

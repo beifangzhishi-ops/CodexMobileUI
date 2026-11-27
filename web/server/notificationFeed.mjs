@@ -7,6 +7,11 @@ const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 const MAX_TITLE = 80;
 const MAX_PREVIEW = 360;
 const validId = (value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{8,256}$/.test(value);
+const reminderText = (value, limit) => typeof value === 'string'
+  ? [...value.slice(0, limit * 2)].slice(0, limit).join('') : '';
+const validReminder = (e) => validId(e.taskId) && validId(e.runId) &&
+  typeof e.at === 'number' && Number.isFinite(e.at) && e.at > Date.now() - MAX_AGE;
+const notificationKey = (e) => e.hostId + ':' + (e.kind === 'reminder' ? 'reminder:' + e.runId : e.turnId);
 const plain = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const subAgentThreadSources = new Set([
   'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther',
@@ -90,6 +95,7 @@ export class NotificationFeed {
     this.acceptsHost = acceptsHost;
     this.sequence = 0;
     this.events = [];
+    this.reminderCursors = {};
     this.clients = new Set();
     this.seen = new Set();
     this.pending = new Set();
@@ -100,11 +106,17 @@ export class NotificationFeed {
         if (Number.isSafeInteger(state.sequence) && state.sequence >= 0 &&
             Array.isArray(state.events)) {
           this.sequence = state.sequence;
-          this.events = state.events.filter((e) => e && Number.isSafeInteger(e.seq) &&
-            this.acceptsHost(e.hostId) &&
-            validId(e.threadId) && validId(e.turnId) &&
+          for (const [host, cursor] of Object.entries(plain(state.reminderCursors))) {
+            if (!this.acceptsHost(host)) continue;
+            if (Number.isSafeInteger(cursor) && cursor >= 0) this.reminderCursors[host] = cursor;
+          }
+          this.events = state.events.filter((e) => e && Number.isSafeInteger(e.seq) && this.acceptsHost(e.hostId) &&
+            (e.kind === 'reminder' ? validReminder(e) : validId(e.threadId) && validId(e.turnId)) &&
             typeof e.at === 'number' && e.at > Date.now() - MAX_AGE)
-            .slice(-MAX_EVENTS).map((e) => ({
+            .slice(-MAX_EVENTS).map((e) => e.kind === 'reminder' ? {
+              kind: 'reminder', seq: e.seq, hostId: e.hostId, taskId: e.taskId, runId: e.runId, at: e.at,
+              title: reminderText(e.title, MAX_TITLE), preview: reminderText(e.preview, MAX_PREVIEW),
+            } : ({
               seq: e.seq, hostId: e.hostId, threadId: e.threadId, turnId: e.turnId,
               status: statusOf(e), title: compact(e.title, MAX_TITLE) || '新对话',
               preview: compact(e.preview, MAX_PREVIEW), at: e.at,
@@ -112,14 +124,44 @@ export class NotificationFeed {
         }
       }
     } catch { /* Malformed log is ignored; the live watcher can continue. */ }
-    for (const event of this.events) this.seen.add(event.hostId + ':' + event.turnId);
+    for (const event of this.events) this.seen.add(notificationKey(event));
   }
 
-  persist() {
+  persist(sequence = this.sequence, events = this.events, reminderCursors = this.reminderCursors) {
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = this.path + '.partial';
-    writeFileSync(temp, JSON.stringify({ sequence: this.sequence, events: this.events }), { mode: 0o600 });
+    writeFileSync(temp, JSON.stringify({ sequence, events, reminderCursors }), { mode: 0o600 });
     renameSync(temp, this.path);
+  }
+
+  observeReminders(hostId, results) {
+    if (!this.acceptsHost(hostId) || !Array.isArray(results) || results.length > 100) return;
+    const after = this.reminderCursors[hostId] ?? 0;
+    let cursor = after;
+    let sequence = this.sequence;
+    const events = [];
+    const seen = new Set(this.seen);
+    for (const result of results) {
+      if (!result || !Number.isSafeInteger(result.cursor) || result.cursor <= cursor) continue;
+      cursor = result.cursor;
+      if (!validReminder(result)) continue;
+      const event = { kind: 'reminder', hostId, taskId: result.taskId, runId: result.runId,
+        at: result.at, title: reminderText(result.title, MAX_TITLE),
+        preview: reminderText(result.preview, MAX_PREVIEW) };
+      const key = notificationKey(event);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      events.push({ ...event, seq: ++sequence });
+    }
+    if (cursor === after) return;
+    const cursors = { ...this.reminderCursors, [hostId]: cursor };
+    const retained = [...this.events, ...events].filter((e) => e.at > Date.now() - MAX_AGE).slice(-MAX_EVENTS);
+    this.persist(sequence, retained, cursors);
+    this.sequence = sequence;
+    this.events = retained;
+    this.reminderCursors = cursors;
+    this.seen = new Set(retained.map(notificationKey));
+    for (const event of events) for (const send of this.clients) send(event);
   }
 
   async observe(hostId, params, resolveThread = async () => null) {
@@ -142,7 +184,7 @@ export class NotificationFeed {
         status: statusOf(turn), title, preview, at: Date.now() };
       this.events.push(event);
       this.events = this.events.filter((e) => e.at > Date.now() - MAX_AGE).slice(-MAX_EVENTS);
-      this.seen = new Set(this.events.map((e) => e.hostId + ':' + e.turnId));
+      this.seen = new Set(this.events.map(notificationKey));
       this.persist();
       for (const send of this.clients) send(event);
     } finally { this.pending.delete(key); }

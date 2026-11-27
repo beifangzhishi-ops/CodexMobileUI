@@ -23,6 +23,51 @@ const taskInput = (now = new Date()): TaskInput => ({
   permissionMode: 'workspace-write',
 });
 
+test('reminders create, edit, trigger and recover with native offline and quota blocked', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'scheduler-reminder-'));
+  const stateFile = join(directory, 'state.json');
+  const unavailable = 'ws://127.0.0.1:0';
+  const guard = { admission: () => ({ allowed: false, reason: 'QUOTA_GUARD_BLOCKED' as const }) };
+  const service = new SchedulerService(stateFile, unavailable, guard);
+  let restarted: SchedulerService | undefined;
+  let serviceClosed = false;
+  try {
+    const input = { ...taskInput(), modelMode: 'none', projectId: '', permissionMode: 'read-only' };
+    const task = await service.handle('automation/create', { task: input }) as { id: string; nextRunAt: string };
+    await assert.rejects(service.handle('automation/update', { id: task.id, patch: { model: 'fake' } }), /INVALID_TASK/);
+    const prompt = '  提交周报\n保留原文  ';
+    await service.handle('automation/update', { id: task.id, patch: { prompt } });
+    const manual = await service.handle('automation/run', { id: task.id });
+    assert.match(JSON.stringify(manual), /"state":"completed"/);
+    const overview = await service.handle('automation/list', {});
+    assert.match(JSON.stringify(overview), new RegExp(task.nextRunAt.replace('.', '\\.')));
+    const first = service.reminderEvents(0);
+    assert.equal(first.length, 1);
+    assert.equal(first[0].preview, prompt);
+    service.close();
+    serviceClosed = true;
+
+    const store = new SchedulerStore(join(directory, 'scheduler.sqlite'));
+    const earlier = new Date(Date.now() - 600_000);
+    const at = new Date(earlier.getTime() + 60_000).toISOString();
+    const overdue = store.create({ ...input, schedule: { kind: 'once', at } }, earlier);
+    store.close();
+    restarted = new SchedulerService(stateFile, unavailable, guard);
+    restarted.start();
+    const events = restarted.reminderEvents(first[0].cursor);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].taskId, overdue.id);
+    const runs = await restarted.handle('automation/runs', { taskId: overdue.id });
+    assert.match(JSON.stringify(runs), /"threadId":null,"turnId":null/);
+    assert.match(JSON.stringify(runs), new RegExp(at.replace('.', '\\.')));
+    assert.deepEqual(restarted.reminderEvents(events[0].cursor), []);
+  } finally {
+    if (!serviceClosed) service.close();
+    restarted?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('scheduled local times honor zones, weekdays and half-hour offsets', () => {
   assert.equal(nextOccurrence({ kind: 'daily', hour: 9, minute: 30 }, 'Asia/Kolkata',
     new Date('2026-11-13T04:01:00Z')), '2026-11-14T04:00:00.000Z');

@@ -27,6 +27,38 @@ function socket() {
   return client;
 }
 
+test('reminders preserve user text and resume after a coordinator restart without a turn', () => {
+  const f = fixture();
+  try {
+    const feed = new NotificationFeed(f.path);
+    const client = socket();
+    feed.subscribe(client);
+    client.subscribe(null);
+    const event = { taskId: THREAD, runId: TURN, cursor: 17,
+      title: '提交周报', preview: '**原样**\n第二行', at: Date.now() };
+    feed.observeReminders('6v', [event]);
+    feed.observeReminders('6v', [event]);
+    assert.equal(client.sent.length, 2);
+    assert.deepEqual(client.sent[1].event, {
+      kind: 'reminder', seq: 1, hostId: '6v', taskId: THREAD, runId: TURN,
+      title: '提交周报', preview: event.preview, at: event.at,
+    });
+    client.close();
+
+    const restored = new NotificationFeed(f.path);
+    assert.equal(restored.reminderCursors['6v'], 17);
+    restored.observeReminders('6v', [event]);
+    assert.equal(restored.sequence, 1);
+    restored.observeReminders('noha', [event]);
+    assert.equal(restored.sequence, 2);
+    const reconnected = socket();
+    restored.subscribe(reconnected);
+    reconnected.subscribe(0);
+    assert.equal(reconnected.sent[0].events.length, 2);
+    reconnected.close();
+  } finally { f.cleanup(); }
+});
+
 test('persist only a bounded final assistant preview, never arbitrary event text', async () => {
   const f = fixture();
   try {

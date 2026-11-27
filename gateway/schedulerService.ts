@@ -38,9 +38,9 @@ export class SchedulerService {
   private tick(): void {
     if (this.closed) return;
     const now = new Date();
-    const admission = this.quotaGuard?.admission(now.getTime());
     for (const task of this.store.list()) {
       if (task.enabled && task.nextRunAt && Date.parse(task.nextRunAt) <= now.getTime()) {
+        const admission = task.modelMode === 'none' ? undefined : this.quotaGuard?.admission(now.getTime());
         if (admission && !admission.allowed) {
           this.store.skipGuardedOccurrence(task.id, admission.reason ?? 'QUOTA_GUARD_BLOCKED', now);
         } else if (!this.busy.has(task.id)) this.launch(task.id, 'scheduled');
@@ -51,12 +51,14 @@ export class SchedulerService {
 
   private launch(id: string, trigger: 'manual' | 'scheduled'): ReturnType<SchedulerStore['beginRun']> {
     if (this.closed || this.busy.has(id)) throw new Error('TASK_BUSY');
-    const admission = this.quotaGuard?.admission();
+    const task = this.store.get(id);
+    if (!task) throw new Error('TASK_NOT_FOUND');
+    const admission = task.modelMode === 'none' ? undefined : this.quotaGuard?.admission();
     if (admission && !admission.allowed) {
       throw new Error(admission.reason ?? 'QUOTA_GUARD_BLOCKED');
     }
     const run = this.store.beginRun(id, trigger);
-    const task = this.store.get(id)!;
+    if (run.reminder) return run;
     this.busy.add(id);
     void executeScheduledTask(task, this.upstream, {
       onThread: (threadId) => {
@@ -114,6 +116,13 @@ export class SchedulerService {
     } finally { client.close(); }
   }
 
+  reminderEvents(after: number) {
+    return this.store.reminderEvents(after).map(({ cursor, run }) => ({
+      cursor, taskId: run.taskId, runId: run.id, at: Date.parse(run.startedAt),
+      title: run.reminder!.title, preview: [...run.reminder!.text.slice(0, 720)].slice(0, 360).join(''),
+    }));
+  }
+
   async handle(method: string, raw: unknown): Promise<unknown> {
     if (!object(raw)) throw new Error('INVALID_PARAMS');
     const params = raw;
@@ -135,14 +144,14 @@ export class SchedulerService {
         only('task');
         // Validate and inspect the authoritative native catalog before persistence.
         const task = this.store.createDraft(params.task);
-        await this.checkNativeSelection(task);
+        if (task.modelMode !== 'none') await this.checkNativeSelection(task);
         return this.store.create(params.task);
       }
       case 'automation/update': {
         only('id', 'patch');
         if (!identifier(params.id) || this.busy.has(params.id)) throw new Error('TASK_BUSY');
         const task = this.store.previewUpdate(params.id, params.patch);
-        await this.checkNativeSelection(task);
+        if (task.modelMode !== 'none') await this.checkNativeSelection(task);
         return this.store.update(params.id, params.patch);
       }
       case 'automation/toggle':

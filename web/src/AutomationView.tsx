@@ -7,6 +7,7 @@ import type { NativeProject, NativeModel } from './nativeProtocol';
 type Props = {
   hosts: readonly HostId[];
   initialHost: HostId;
+  initialReminder?: { taskId: string; runId: string };
   projects: readonly NativeProject[];
   models: Record<HostId, NativeModel[]>;
   status: Record<HostId, 'connecting' | 'online' | 'offline'>;
@@ -21,6 +22,7 @@ const effortLabels: Record<string, string> = {
   max: 'Max', ultra: 'Ultra',
 };
 const modelValue = (model: NativeModel) => model.model ?? model.id;
+const reminderOption = 'reminder:without-model';
 const zone = (() => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
   catch { return 'UTC'; }
@@ -51,7 +53,7 @@ const scheduleLabel = (s: TaskSchedule) => {
   return time;
 };
 
-export function AutomationView({ hosts, initialHost, projects, models, status,
+export function AutomationView({ hosts, initialHost, initialReminder, projects, models, status,
   request, onOpenThread, onNewChat }: Props) {
   const [host, setHost] = useState<HostId>(initialHost);
   const [mode, setMode] = useState<Mode>('list');
@@ -59,6 +61,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
   const [tasks, setTasks] = useState<Task[]>([]);
   const [inbox, setInbox] = useState<TaskRun[]>([]);
   const [runs, setRuns] = useState<TaskRun[]>([]);
+  const [openedReminder, setOpenedReminder] = useState<TaskRun | null>(null);
   const [selected, setSelected] = useState<Task | null>(null);
   const [draft, setDraft] = useState<TaskInput>(() => defaultInput(''));
   const [clock, setClock] = useState('09:00');
@@ -72,6 +75,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
   const hostModels = models[host] ?? [];
   const draftModel = hostModels.find((model) => modelValue(model) === draft.model);
   const selectedModel = hostModels.find((model) => modelValue(model) === selected?.model);
+  const reminder = draft.modelMode === 'none';
   const call = useCallback((method: string, params: Record<string, unknown> = {}) =>
     request(host, 'web/automation', { method, params }), [request, host]);
 
@@ -96,6 +100,21 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
     return () => window.clearInterval(timer);
   }, [host, refresh, online]);
 
+  useEffect(() => {
+    if (!initialReminder || !online || host !== initialHost) return;
+    let current = true;
+    void call('automation/runs', { taskId: initialReminder.taskId }).then((data) => {
+      if (!current) return;
+      const run = dataRows<TaskRun>(data).find((item) => item.id === initialReminder.runId);
+      if (run?.reminder) {
+        setOpenedReminder(run);
+        return call('automation/read', { runId: run.id }).then(refresh);
+      }
+      setError('找不到这条提醒记录。');
+    }).catch(() => { if (current) setError('无法读取这条提醒。'); });
+    return () => { current = false; };
+  }, [initialReminder, initialHost, host, online, call, refresh]);
+
   async function mutate(method: string, params: Record<string, unknown>) {
     if (busy) return;
     setBusy(true); setError('');
@@ -118,7 +137,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
     setSelected(task ?? null);
     setDraft({ name: value.name, prompt: value.prompt, projectId: value.projectId,
       schedule: s, timeZone: value.timeZone, conversationMode: value.conversationMode,
-      threadId: value.threadId, model: value.model, effort: value.effort,
+      threadId: value.threadId, model: value.model, modelMode: value.modelMode, effort: value.effort,
       permissionMode: value.permissionMode, workspaceMode: value.workspaceMode });
     if ('hour' in s) setClock(String(s.hour).padStart(2, '0') + ':' + String(s.minute).padStart(2, '0'));
     else if (s.kind === 'hourly') setClock('09:' + String(s.minute).padStart(2, '0'));
@@ -132,9 +151,10 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
     catch { setError('无法读取执行历史'); }
   }
   const save = () => {
-    if (!draft.name.trim() || !draft.prompt.trim() || !draft.projectId ||
-        !hostProjects.some((project) => project.id === draft.projectId)) {
-      setError('请填写任务名称、指令，并选择当前电脑上的项目。'); return;
+    if (!draft.name.trim() || !draft.prompt.trim() ||
+        (!reminder && !hostProjects.some((project) => project.id === draft.projectId))) {
+      setError(reminder ? '请填写任务名称和提醒内容。' :
+        '请填写任务名称、指令，并选择当前电脑上的项目。'); return;
     }
     let schedule: TaskSchedule = draft.schedule;
     const [hour, minute] = clock.split(':').map(Number);
@@ -153,8 +173,11 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       schedule = { kind: 'weekly', hour, minute,
         days: weekday === draft.schedule.days[0] ? draft.schedule.days : [weekday] };
     }
-    const task: TaskInput = { ...draft, name: draft.name.trim(),
-      prompt: draft.prompt.trim(), schedule };
+    const task: TaskInput = { ...draft, name: draft.name.trim(), schedule, modelMode: 'default',
+      prompt: draft.prompt.trim(), ...(reminder && {
+        modelMode: 'none', projectId: '', prompt: draft.prompt, threadId: null, model: null, effort: null,
+        conversationMode: 'new', permissionMode: 'read-only', workspaceMode: 'project',
+      }) };
     void mutate(selected ? 'automation/update' : 'automation/create',
       selected ? { id: selected.id, patch: task } : { task });
   };
@@ -165,23 +188,36 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
     <div className="automations-toolbar">
       <strong><CalendarClock size={20}/>定时任务</strong>
       <select aria-label="选择电脑" value={host} disabled={busy}
-        onChange={(event) => setHost(event.target.value as HostId)}>
+        onChange={(event) => { setOpenedReminder(null); setHost(event.target.value as HostId); }}>
         {hosts.map((item) => <option key={item} value={item}>{item}</option>)}
       </select>
       <button title="刷新" aria-label="刷新任务" disabled={loading} onClick={() => { void refresh(); }}>
         <RefreshCw size={18}/></button>
-      <button className="automations-create" disabled={!online} onClick={() => edit()}>
+      <button className="automations-create" disabled={!online} onClick={() => { setOpenedReminder(null); edit(); }}>
         <Plus size={17}/>新建
       </button>
     </div>
     {error && <p role="alert" className="automations-error">{error}</p>}
+    {openedReminder?.reminder && <div className="automations-details">
+      <button className="automations-back" onClick={() => setOpenedReminder(null)}>
+        <ChevronLeft size={18}/>关闭提醒
+      </button>
+      <h2>{openedReminder.reminder.title}</h2>
+      <p className="automations-prompt">{openedReminder.reminder.text}</p>
+      <p>触发时间 {new Date(openedReminder.startedAt).toLocaleString()}</p>
+      {openedReminder.reminder.scheduledAt && <p>
+        原定时间 {new Date(openedReminder.reminder.scheduledAt).toLocaleString()}
+      </p>}
+    </div>}
     {mode === 'list' && <>
       {inbox.length > 0 && <div className="automations-inbox">
-        {inbox.length} 条任务执行结果待查看
+        {inbox.length} 条任务消息待查看
         {inbox.map((run) => <button key={run.id} onClick={() => {
-          void call('automation/read', { runId: run.id }).then(refresh);
+          if (run.reminder) setOpenedReminder(run);
+          void call('automation/read', { runId: run.id }).then(refresh)
+            .catch(() => setError('无法标记为已读。'));
           if (run.threadId) onOpenThread(host, run.threadId);
-        }}>{run.state} · {new Date(run.startedAt).toLocaleString()}</button>)}
+        }}>{run.reminder?.title ?? run.state} · {new Date(run.startedAt).toLocaleString()}</button>)}
       </div>}
       <div className="automations-tabs">
         {(['active', 'paused', 'done'] as const).map((item) => <button key={item}
@@ -193,7 +229,8 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       <div className="automations-list">{shown.map((task) => <article key={task.id}>
         <button className="automations-task" onClick={() => { void details(task); }}>
           <strong>{task.name}</strong>
-          <span>{scheduleLabel(task.schedule)} · {hostProjects.find((p) => p.id === task.projectId)?.name ?? '项目'}</span>
+          <span>{scheduleLabel(task.schedule)} · {task.modelMode === 'none' ? '仅提醒' :
+            hostProjects.find((p) => p.id === task.projectId)?.name ?? '项目'}</span>
           <span>{task.nextRunAt ? '下次：' + new Date(task.nextRunAt).toLocaleString() : '暂无下次执行时间'}</span>
         </button>
         <button aria-label={task.enabled ? '暂停任务' : '启用任务'} disabled={busy}
@@ -205,13 +242,23 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       <button className="automations-back" onClick={() => setMode('list')}><ChevronLeft size={18}/>返回列表</button>
       <label>任务名称<input value={draft.name} maxLength={80} disabled={busy}
         onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))}/></label>
-      <label>执行指令<textarea value={draft.prompt} maxLength={12000} rows={5} disabled={busy}
+      <label>模型<select value={reminder ? reminderOption : draft.model ?? ''} disabled={busy} onChange={(event) => {
+        const value = event.target.value;
+        setDraft((old) => ({ ...old, modelMode: value === reminderOption ? 'none' : 'default',
+          model: value === reminderOption ? null : value || null, effort: null }));
+      }}>
+        <option value="">默认模型</option>
+        <option value={reminderOption}>不使用模型（仅提醒）</option>
+        {draft.model && !draftModel && <option value={draft.model}>{draft.model}（不可用）</option>}
+        {hostModels.map((model) => <option key={model.id} value={modelValue(model)}>{model.name}</option>)}
+      </select></label>
+      <label>{reminder ? '提醒内容' : '执行指令'}<textarea value={draft.prompt} maxLength={12000} rows={5} disabled={busy}
         onChange={(event) => setDraft((old) => ({ ...old, prompt: event.target.value }))}/></label>
-      <label>所属项目<select value={draft.projectId} disabled={busy || !!draft.threadId}
+      {!reminder && <label>所属项目<select value={draft.projectId} disabled={busy || !!draft.threadId}
         onChange={(event) => setDraft((old) => ({ ...old, projectId: event.target.value }))}>
         <option value="">请选择</option>
         {hostProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-      </select></label>
+      </select></label>}
       <label>重复规则<select value={draft.schedule.kind} disabled={busy}
         onChange={(event) => {
           const kind = event.target.value as TaskSchedule['kind'];
@@ -224,12 +271,12 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
         }}>
         <option value="daily">每天</option><option value="weekdays">工作日</option>
         <option value="weekly">每周</option><option value="hourly">每小时</option>
-        <option value="once">仅执行一次</option>
+        <option value="once">{reminder ? '仅提醒一次' : '仅执行一次'}</option>
         {draft.schedule.kind === 'rrule' && <option value="rrule">自定义 RRULE</option>}
       </select></label>
-      {draft.schedule.kind === 'once' ? <label>执行时间<input type="datetime-local" value={once}
+      {draft.schedule.kind === 'once' ? <label>{reminder ? '提醒时间' : '执行时间'}<input type="datetime-local" value={once}
         onChange={(event) => setOnce(event.target.value)}/></label> :
-        draft.schedule.kind !== 'rrule' && <label>执行时间
+        draft.schedule.kind !== 'rrule' && <label>{reminder ? '提醒时间' : '执行时间'}
           <input type="time" value={clock} onChange={(event) => setClock(event.target.value)}/>
         </label>}
       {draft.schedule.kind === 'weekly' && <label>星期<select value={weekday}
@@ -237,6 +284,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
         {['日','一','二','三','四','五','六'].map((day, i) =>
           <option key={i} value={i}>周{day}</option>)}
       </select></label>}
+      {!reminder && <>
       <label>权限<select value={draft.permissionMode}
         onChange={(event) => setDraft((old) => ({ ...old,
           permissionMode: event.target.value as TaskInput['permissionMode'] }))}>
@@ -248,12 +296,6 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
           workspaceMode: event.target.value as TaskInput['workspaceMode'] }))}>
         <option value="project">项目目录</option><option value="worktree">独立工作树</option>
       </select></label>
-      <label>模型<select value={draft.model ?? ''} disabled={busy} onChange={(event) =>
-        setDraft((old) => ({ ...old, model: event.target.value || null, effort: null }))}>
-        <option value="">默认模型</option>
-        {draft.model && !draftModel && <option value={draft.model}>{draft.model}（不可用）</option>}
-        {hostModels.map((model) => <option key={model.id} value={modelValue(model)}>{model.name}</option>)}
-      </select></label>
       <label>思考强度<select value={draft.effort ?? ''} disabled={busy || !draftModel?.efforts.length}
         onChange={(event) => setDraft((old) => ({ ...old, effort: event.target.value || null }))}>
         <option value="">默认</option>
@@ -262,6 +304,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
         {draftModel?.efforts.map((effort) =>
           <option key={effort} value={effort}>{effortLabels[effort] ?? effort}</option>)}
       </select></label>
+      </>}
       <button className="automations-save" disabled={busy} onClick={save}>
         <Check size={17}/>{busy ? '保存中…' : selected ? '保存任务' : '创建任务'}
       </button>
@@ -270,27 +313,34 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
       <button className="automations-back" onClick={() => setMode('list')}><ChevronLeft size={18}/>返回列表</button>
       <h2>{selected.name}</h2>
       <p>{scheduleLabel(selected.schedule)} · {selected.timeZone}</p>
-      <p>模型 {selectedModel?.name ?? selected.model ?? '默认'} · 思考强度 {selected.effort
-        ? effortLabels[selected.effort] ?? selected.effort : '默认'}</p>
+      {selected.modelMode === 'none' ? <p>仅提醒</p> : <p>
+        模型 {selectedModel?.name ?? selected.model ?? '默认'} · 思考强度 {selected.effort
+          ? effortLabels[selected.effort] ?? selected.effort : '默认'}</p>}
       <p className="automations-prompt">{selected.prompt}</p>
       <div className="automations-buttons">
         <button onClick={() => edit(selected)}>编辑</button>
         <button disabled={busy} onClick={() => { void mutate('automation/run', { id: selected.id }); }}>
-          <Play size={16}/>立即运行
+          <Play size={16}/>{selected.modelMode === 'none' ? '立即提醒' : '立即运行'}
         </button>
         <button disabled={busy} onClick={() => {
-          if (window.confirm('删除任务定义？已生成的聊天会保留。')) {
+          if (window.confirm(selected.modelMode === 'none' ? '删除此提醒任务？' : '删除任务定义？已生成的聊天会保留。')) {
             void mutate('automation/delete', { id: selected.id });
           }
         }}><Trash2 size={16}/>删除任务</button>
       </div>
-      <strong className="automations-history-title"><Clock3 size={17}/>执行历史</strong>
+      <strong className="automations-history-title"><Clock3 size={17}/>{selected.modelMode === 'none' ? '提醒历史' : '执行历史'}</strong>
       {runs.map((run) => <button key={run.id} className="automations-run"
-        onClick={() => { if (run.threadId) onOpenThread(host, run.threadId); }}>
-        {run.state} · {new Date(run.startedAt).toLocaleString()}
+        onClick={() => {
+          if (run.reminder) {
+            setOpenedReminder(run);
+            if (!run.seen) void call('automation/read', { runId: run.id }).then(refresh)
+              .catch(() => setError('无法标记为已读。'));
+          } else if (run.threadId) onOpenThread(host, run.threadId);
+        }}>
+        {run.reminder ? '已触发' : run.state} · {new Date(run.startedAt).toLocaleString()}
         {run.reason && <span> · {run.reason}</span>}
       </button>)}
-      {runs.length === 0 && <p>没有执行记录</p>}
+      {runs.length === 0 && <p>{selected.modelMode === 'none' ? '没有提醒记录' : '没有执行记录'}</p>}
     </div>}
     {mode === 'list' && <button className="automations-new-chat" onClick={onNewChat}>返回聊天</button>}
   </div>;

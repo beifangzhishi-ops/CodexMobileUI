@@ -1,6 +1,7 @@
 import http, { type IncomingMessage } from 'node:http';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Duplex } from 'node:stream';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -116,6 +117,7 @@ export function createGateway(config: Config) {
   const quotaGuard = config.privatePort === undefined ? null
     : new QuotaGuardService(dirname(config.stateFile), config.upstream, quotaHostId);
   const scheduler = new SchedulerService(config.stateFile, config.upstream, quotaGuard);
+  const reminderTokenFile = resolve(dirname(config.stateFile), 'reminder-feed-token');
   // Never route this listener through Funnel: membership in the Tailnet is its
   // entire access boundary. It does not serve OAuth or public Gateway routes.
   const privateServer = http.createServer((req, res) => {
@@ -125,6 +127,30 @@ export function createGateway(config: Config) {
     if (!allowedHost) {
       res.writeHead(403, { 'Cache-Control': 'no-store' });
       res.end();
+      return;
+    }
+    const reminderRequest = req.method === 'GET' &&
+      /^\/internal\/reminder-events\?after=(0|[1-9]\d{0,15})$/.exec(req.url ?? '');
+    if (reminderRequest) {
+      const after = Number(reminderRequest[1]);
+      const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+      const header = req.headers.authorization ?? '';
+      if (req.socket.remoteAddress !== '127.0.0.1' || req.headers.host !== '127.0.0.1:48889' ||
+          req.headers.origin || !/^Bearer [a-f0-9]{64}$/.test(header) || !Number.isSafeInteger(after)) {
+        res.writeHead(403, headers).end();
+        return;
+      }
+      try {
+        const token = readFileSync(reminderTokenFile, 'utf8').trim();
+        if (!/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(header), Buffer.from('Bearer ' + token))) {
+          res.writeHead(403, headers).end();
+          return;
+        }
+        const events = scheduler.reminderEvents(after);
+        res.writeHead(200, headers).end(JSON.stringify({ events }));
+      } catch {
+        res.writeHead(503, headers).end();
+      }
       return;
     }
     if (req.method === 'GET' && req.url === '/health') {
@@ -866,6 +892,9 @@ export function createGateway(config: Config) {
       });
       if (config.privatePort === undefined) await start(server, config.listenPort);
       else {
+        try {
+          writeFileSync(reminderTokenFile, randomBytes(32).toString('hex'), { flag: 'wx', mode: 0o600 });
+        } catch { /* Existing token is reused; a missing or invalid one disables only the reminder feed. */ }
         await start(privateServer, config.privatePort);
         if (config.privatePort === 48889) {
           try {

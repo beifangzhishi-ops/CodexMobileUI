@@ -346,6 +346,25 @@ function privatePeerAuthorized(req) {
   return req.socket.remoteAddress === '127.0.0.1' &&
     safeEqual(req.headers.authorization, 'Bearer ' + credential);
 }
+async function readReminderEvents(url, token, after) {
+  url.searchParams.set('after', String(after));
+  const response = await fetch(url, {
+    headers: { Authorization: 'Bearer ' + token }, redirect: 'error',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw Error('REMINDER_FEED_UNAVAILABLE');
+  }
+  return (await response.json()).events;
+}
+
+function readLocalReminderEvents(after) {
+  const token = readFileSync(resolve('.state/reminder-feed-token'), 'utf8').trim();
+  if (!/^[a-f0-9]{64}$/.test(token)) throw Error('REMINDER_FEED_UNAVAILABLE');
+  return readReminderEvents(new URL('http://127.0.0.1:48889/internal/reminder-events'), token, after);
+}
+
 function reject(socket, code = 403) {
   socket.end('HTTP/1.1 ' + code + ' Forbidden\r\nConnection: close\r\n\r\n');
 }
@@ -360,6 +379,19 @@ const server = http.createServer((req, res) => {
   if (respondLocalIdentity(req, res, {
     hostId: localHostId, port, origin: config.origin ?? 'http://100.76.74.124:4190',
   })) return;
+  const reminderRequest = !coordinator && req.method === 'GET' &&
+    /^\/internal\/reminder-events\?after=(0|[1-9]\d{0,15})$/.exec(req.url ?? '');
+  if (reminderRequest) {
+    const after = Number(reminderRequest[1]);
+    if (req.headers.origin || !privatePeerAuthorized(req) || !Number.isSafeInteger(after)) {
+      res.writeHead(403).end();
+      return;
+    }
+    void readLocalReminderEvents(after).then((events) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ events }));
+    }).catch(() => res.writeHead(503).end());
+    return;
+  }
   if (!coordinator || !browserAuthorized(req)) {
     res.writeHead(403); res.end(); return;
   }
@@ -1245,3 +1277,24 @@ if (notificationFeed) {
   }
 }
 if (coordinator) void syncPeerQuotaGuard();
+
+if (notificationFeed) {
+  for (const { id } of hostRegistry.list()) {
+    const peer = hostRegistry.get(id);
+    const poll = async () => {
+      try {
+        const after = notificationFeed.reminderCursors[id] ?? 0;
+        let events;
+        if (peer.primary) events = await readLocalReminderEvents(after);
+        else {
+          const url = new URL('/internal/reminder-events', peer.peerUrl);
+          url.protocol = 'http:';
+          events = await readReminderEvents(url, peer.credential, after);
+        }
+        notificationFeed.observeReminders(id, events);
+      } catch { /* The persisted cursor lets a reconnect resume from the last event. */ }
+      finally { setTimeout(poll, 5000).unref(); }
+    };
+    void poll();
+  }
+}

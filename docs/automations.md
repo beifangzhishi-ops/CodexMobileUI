@@ -5,8 +5,8 @@
 The **per-computer Gateway process** owns the scheduler. The shared Web UI
 sends `web/automation` through the private Web Bridge, which calls
 `automation/*` over the authenticated Gateway WebSocket `/connect`.
-Every task belongs to exactly one host and a native Codex
-project on that host. There is no cross-host implicit execution or shared disk.
+Every task belongs to exactly one host. Model tasks also belong to a native
+Codex project on that host. Execution and reminder storage are host-local.
 
 The Gateway keeps an SQLite database at `.state/scheduler.sqlite`; it contains
 task prompts, run status, timestamps, native thread IDs, and unread state. This
@@ -15,11 +15,27 @@ task contents/IDs into diagnostics. The Gateway's embedded scheduler connects
 **directly to the dedicated, loopback-only App Server** using a separate
 initialized native WebSocket. It never opens or starts the Desktop UI.
 
-Tasks run only while the owning Windows computer, private App Server, and
-Gateway are online. Existing host lifecycle scripts own these processes. If
-offline at the scheduled minute, missed occurrences are recorded but not
-replayed in a burst. Each host owns its local scheduling clock; schedules have
-an IANA timezone, and calendar triggers are calculated in that zone.
+Model tasks require the owning Windows computer, private App Server, and
+Gateway. Existing host lifecycle scripts own these processes. For model
+tasks, missed occurrences are recorded and skipped. Each host owns its local
+scheduling clock; calendar triggers use the task's IANA time zone.
+
+Select **不使用模型（仅提醒）** in the task editor to create a reminder on the
+selected host. It needs a title, reminder text and a schedule. At trigger time
+the Gateway stores the reminder in the task inbox and advances the schedule in
+the same transaction. The reminder path makes no native RPC or model call. The
+Gateway emits at most one overdue reminder per task on recovery and records its
+original due time. **立即提醒** creates an inbox entry immediately and preserves
+the next scheduled time.
+
+The Coordinator polls a bounded, authenticated feed for each registered host
+and reuses the existing notification stream. Remote reads go through the
+registered Web Agent with its own peer credential. Each host's Web service
+reads its Gateway over loopback using a separate local token. Neither feed
+connects to the App Server. Browser and supported Android system notifications open
+the reminder record. Task management still uses the existing Web host
+connection. With system notifications disabled, the record is available in the
+task inbox.
 
 ## Client contract (v1)
 
@@ -62,11 +78,13 @@ WebSocket, with normal JSON-RPC `id`, `method`, and `params` envelopes:
 Use `project/list`, `thread/list`, `model/list` from the **same selected host**
 for live selectors; never hardcode a model catalog or send arbitrary host file
 paths from the client. Creation/update validates the live native project and
-model/effort catalog. `conversationMode: 'new'` creates a new native thread
+model/effort catalog for model tasks. `modelMode: 'none'` selects a reminder;
+the existing default-model value remains `model: null`. For model tasks,
+`conversationMode: 'new'` creates a new native thread
 every run; `resume` uses `threadId` or creates one on the first run and stores
 its ID for later runs. The task list and run history are authoritative server
-state, not client-side preferences. To view a result, open its native `threadId`
-on the run's host.
+state. Results with a native `threadId` open the run's chat; reminder records
+open in the task page with the saved title and text.
 
 Recurrences: `once`, `hourly`, `daily`, `weekdays`, `weekly`, or a restricted
 `rrule` variant supporting `FREQ=HOURLY|DAILY|WEEKLY`, bounded `INTERVAL`,

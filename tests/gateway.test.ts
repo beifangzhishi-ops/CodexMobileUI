@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { createHttpHandler, type OAuthAuditEvent } from '../gateway/http';
 import { createGateway } from '../gateway/main';
+import { SchedulerStore } from '../gateway/scheduler';
 import { OAuthStore, PUBLIC_CLIENT_ID } from '../gateway/oauth';
 import { SIDE_CHAT_DEVELOPER_INSTRUCTIONS } from '../shared/sideChatPolicy';
 
@@ -517,6 +518,56 @@ test('private gateway adds trusted side-chat policy only after exact browser val
     await gateway.close();
     for (const socket of native.clients) socket.terminate();
     await new Promise<void>((done) => native.close(() => done()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('local reminder endpoint requires its own credentials and works with native offline', async () => {
+  const directory = resolve('.tmp', 'reminder-gateway-' + randomUUID());
+  const store = new SchedulerStore(resolve(directory, 'scheduler.sqlite'));
+  const manifest = resolve(directory, 'hosts.json');
+  writeFileSync(manifest, JSON.stringify([{ name: '6v', url: 'http://100.76.74.124:48889' }]));
+  const before = new Date(Date.now() - 120_000);
+  const task = store.create({ name: '提醒', prompt: '完整通知内容', modelMode: 'none',
+    projectId: '', schedule: { kind: 'once', at: new Date(before.getTime() + 60_000).toISOString() },
+    timeZone: 'UTC', conversationMode: 'new', threadId: null, model: null, effort: null,
+    permissionMode: 'read-only', workspaceMode: 'project' }, before);
+  store.close();
+  const gateway = createGateway({
+    publicOrigin: 'https://unused.invalid', secret: SECRET, redirectUri: REDIRECT,
+    listenPort: 0, privatePort: 0, privateManifestFile: manifest, stateFile: resolve(directory, 'state.json'),
+    upstream: 'ws://127.0.0.1:0',
+  });
+  await gateway.listen();
+  try {
+    const token = readFileSync(resolve(directory, 'reminder-feed-token'), 'utf8');
+    const read = (after: number, headers: Record<string, string>) =>
+      new Promise<{ status: number; body: string }>((done, reject) => {
+        const request = httpRequest({ hostname: '127.0.0.1', port: gateway.port(),
+          path: '/internal/reminder-events?after=' + after, headers: { Host: '127.0.0.1:48889', ...headers },
+        }, (response) => {
+          response.setEncoding('utf8');
+          let body = '';
+          response.on('data', (chunk: string) => { body += chunk; });
+          response.on('end', () => done({ status: response.statusCode ?? 0, body }));
+        });
+        request.on('error', reject);
+        request.end();
+      });
+    const auth = { Authorization: 'Bearer ' + token };
+    assert.equal((await read(0, {})).status, 403);
+    assert.equal((await read(0, { Authorization: 'Bearer ' + 'd'.repeat(64) })).status, 403);
+    assert.equal((await read(0, { ...auth, Host: '100.76.74.124:48889' })).status, 403);
+    assert.equal((await read(0, { ...auth, Origin: 'https://example.invalid' })).status, 403);
+    const first = await read(0, auth);
+    assert.equal(first.status, 200);
+    const { events } = JSON.parse(first.body);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].taskId, task.id);
+    assert.equal(events[0].preview, '完整通知内容');
+    assert.deepEqual(JSON.parse((await read(events[0].cursor, auth)).body), { events: [] });
+  } finally {
+    await gateway.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
