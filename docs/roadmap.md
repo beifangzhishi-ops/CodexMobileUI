@@ -1,5 +1,17 @@
 # CodexMobileUI implementation and acceptance
 
+## 2026-11-27 Second private release (0.2.4)
+
+- [x] Include verified live sub-agent activity, bounded thread settings relay,
+  corrected model-update feedback, and stale no-image splash override cleanup.
+- [x] Validate local and peer-forwarded Coordinator/Agent settings RPCs with
+  isolated native fixtures, Web tests/build, Chromium desktop/390px behavior,
+  Android splash source fixtures and the full repository check.
+- [x] Build a fresh ARM64 Release APK (versionCode 31), with embedded JS,
+  v2 test signature matching 0.2.3 (`fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`),
+  and SHA-256 `EF3A6F2AE6F9A0E5273F16E693106F6565EAB2E1734CF9B62154EE93C0B7929F`.
+- [ ] Physical Android installation and launch acceptance remain separate.
+
 ## Release version records
 
 Use `app.json` (`expo.version`) as the release version for Android and Windows.

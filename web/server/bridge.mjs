@@ -14,6 +14,9 @@ import { PathOverlayStore } from './pathOverlays.mjs';
 import { respondLocalIdentity } from './localIdentity.mjs';
 import { NotificationFeed, watchNativeCompletions } from './notificationFeed.mjs';
 import { validModelIdentifier } from './modelIdentifier.mjs';
+import {
+  updatePermissionFromNativeConfig, updateThreadSettings, validThreadSettingsUpdate,
+} from './threadSettingsPolicy.mjs';
 import { projectSubAgentActivitySnapshot, SubAgentProofCache } from './subAgentActivity.mjs';
 import {
   ISOLATED_MARKUP_CSP, parsePublicationRange, streamPublicationRange,
@@ -750,12 +753,9 @@ function allowedFrame(msg) {
   if (msg.method === 'thread/fork') return subset(p, ['threadId','lastTurnId','excludeTurns']) &&
     validId(p.threadId) && validId(p.lastTurnId) && p.excludeTurns === true;
   if (msg.method === 'thread/settings/update') {
-    if (!validId(p.threadId)) return false;
-    if (p.model !== undefined || p.effort !== undefined) return
-      subset(p, ['threadId','model','effort']) && validModelIdentifier(p.model) &&
-      (p.effort === undefined || ['minimal','low','medium','high','xhigh','max','ultra'].includes(p.effort));
-    return subset(p, ['threadId','permissions','approvalsReviewer']) &&
-      typeof p.permissions === 'string' && validPermissions({ permissions: p.permissions, approvalsReviewer: p.approvalsReviewer });
+    return validThreadSettingsUpdate(p, {
+      subset, validId, validModelIdentifier, validPermissions,
+    });
   }
   if (msg.method === 'project/read') return subset(p, ['projectId']) && validId(p.projectId);
   if (msg.method === 'model/list') return subset(p, ['limit', 'cursor']) &&
@@ -1138,24 +1138,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32000, message: 'SIDE_CHAT_UNCONFIRMED' } })));
     } else if (msg.method === 'web/permissionFromConfig' && !remotePeer) {
-      void (async () => {
-        const threadId = msg.params.threadId;
-        const snapshot = await internalRequest('thread/read', { threadId, includeTurns: true });
-        const thread = snapshot?.thread;
-        if (thread?.id !== threadId || typeof thread.cwd !== 'string' || !thread.cwd) {
-          throw Error('THREAD_NOT_FOUND');
-        }
-        const turns = Array.isArray(thread.turns) ? thread.turns : [];
-        if (['inProgress', 'running', 'in_progress'].includes(String(turns.at(-1)?.status))) {
-          throw Error('THREAD_BUSY');
-        }
-        const resolved = settingsFromNativeDefault(await internalRequest('thread/start', {
-          cwd: thread.cwd, ephemeral: true,
-        }));
-        await internalRequest('thread/settings/update', { threadId, ...resolved.update });
-        return verifyNativePermissionApplied(
-          await internalRequest('thread/resume', { threadId }), resolved.expected);
-      })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
+      void updatePermissionFromNativeConfig(msg.params.threadId, {
+        internalRequest, settingsFromNativeDefault, verifyNativePermissionApplied,
+      }).then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch((error) => {
           const known = new Set(['THREAD_NOT_FOUND', 'THREAD_BUSY',
             'NATIVE_DEFAULT_UNAVAILABLE', 'NATIVE_PERMISSION_NOT_CONFIRMED']);
@@ -1164,13 +1149,7 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         });
     } else if (msg.method === 'thread/settings/update' && !remotePeer) {
       const modelChange = msg.params.model !== undefined;
-      void (modelChange
-        ? verifyModelChoice(msg.params.model, msg.params.effort)
-        : internalRequest('permissionProfile/list', {}).then((profiles) => {
-          if (!Array.isArray(profiles?.data) || !profiles.data.some((profile) =>
-            profile?.id === msg.params.permissions && profile.allowed === true))
-            throw Error('PERMISSION_NOT_ALLOWED');
-        })).then(() => internalRequest('thread/settings/update', msg.params))
+      void updateThreadSettings(msg.params, { verifyModelChoice, internalRequest })
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: { code: -32602,
           message: modelChange ? 'MODEL_UPDATE_REJECTED' : 'PERMISSION_UPDATE_REJECTED' } })));

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body><div id="root"></div><script type="module" src="./project-thread-preview.chromium.tsx"></script>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #151515; color: #f4f4f4; font: 14px system-ui, sans-serif; }
+.sidebar { width: 320px; max-width: 100vw; padding: 12px; overflow: auto; }
+h1 { font-size: 16px; margin: 0 0 12px; }
+.project { margin: 6px 0; }
+.project-line { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+button { color: inherit; background: transparent; border: 0; font: inherit; cursor: pointer; text-align: left; }
+.project-disclosure { width: 24px; text-align: center; }
+.project-name { font-weight: 600; }
+.nested-conversations { display: grid; margin-left: 24px; }
+.conversation-row, .project-thread-toggle { min-height: 32px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-thread-toggle { color: #a9c8ff; }
+</style></body>
+</html>

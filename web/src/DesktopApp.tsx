@@ -17,7 +17,9 @@ import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
 import { fetchThreadCompletions, parseThreadCompletions, setThreadCompletion,
   writeCachedThreadCompletions,
   type CompletedThread, type ThreadCompletionsSnapshot } from './threadCompletions';
-import { PROJECT_THREAD_PREVIEW_LIMIT, visibleProjectThreads } from './projectThreadVisibility';
+import {
+  PROJECT_THREAD_PREVIEW_LIMIT, clearProjectThreadLimit, nextProjectThreadLimit, visibleProjectThreads,
+} from './projectThreadVisibility';
 import {
   clampSidebarWidth, defaultSidebarPreferences, loadSidebarPreferences, saveSidebarPreferences,
 } from './sidebarPreferences';
@@ -197,7 +199,7 @@ export default function DesktopApp() {
   const [hostFilter, setHostFilter] = useState<'all' | HostId>('all');
   const [hostCollapsed, setHostCollapsed] = useState<HostId[]>(initialSidebar.collapsedHosts);
   const [openedProjects, setOpenedProjects] = useState<string[]>(initialSidebar.openedProjects);
-  const [expandedProjectThreadLists, setExpandedProjectThreadLists] = useState<string[]>([]);
+  const [projectThreadLimits, setProjectThreadLimits] = useState<Record<string, number>>({});
   const [showAllRecent, setShowAllRecent] = useState(initialSidebar.showAllRecent);
   const [showArchived, setShowArchived] = useState(false);
   const [recentLimit, setRecentLimit] = useState(10);
@@ -491,7 +493,7 @@ export default function DesktopApp() {
     setModelWorkingFor(key);
     void live.setThreadModel(hostId, threadId, modelId, effort).then(() => {
       live.clearContextUsage(hostId, threadId);
-    }).catch(() => setNotice('??????????????????')).finally(() => {
+    }).catch(() => setNotice('模型或思考强度切换未确认，请刷新会话核对后重试')).finally(() => {
       setModelWorkingFor((value) => value === key ? null : value);
     });
   }
@@ -799,6 +801,13 @@ export default function DesktopApp() {
   async function changeThreadCompletion(thread: CompletedThread, completed: boolean) {
     try { acceptThreadCompletions(await setThreadCompletion(thread, completed)); }
     catch { setNotice('完成状态未能保存到 6v，请检查主机连接'); }
+  }
+  function toggleProject(key: string) {
+    const closing = openedProjects.includes(key);
+    setOpenedProjects((current) => closing
+      ? current.filter((item) => item !== key)
+      : current.includes(key) ? current : [...current, key]);
+    if (closing) setProjectThreadLimits((current) => clearProjectThreadLimit(current, key));
   }
   useEffect(() => {
     void refreshPins();
@@ -1503,18 +1512,18 @@ export default function DesktopApp() {
   function projectRow(project: NativeProject) {
     const key = conversationKey(project.hostId, project.id);
     const expanded = openedProjects.includes(key);
-    const showAllThreads = expandedProjectThreadLists.includes(key);
+    const threadLimit = projectThreadLimits[key] ?? PROJECT_THREAD_PREVIEW_LIMIT;
     const pinned = pinnedProjectIds.includes(key);
     const children = sidebarConversations.filter((item) =>
       item.project === project.id && item.hostId === project.hostId && !item.archived);
-    const visibleChildren = visibleProjectThreads(children, showAllThreads);
+    const visibleChildren = visibleProjectThreads(children, threadLimit);
     return <div className="tree-project" key={key}>
       <div className="project-line context-press-target" data-context-kind="project"
         data-context-host={project.hostId} data-context-id={project.id}>
         <button className="project-disclosure" aria-label={(expanded ? '收起 ' : '展开 ') + project.name}
-          aria-expanded={expanded} onClick={() => toggle(openedProjects, key, setOpenedProjects)}>
+          aria-expanded={expanded} onClick={() => toggleProject(key)}>
           <ChevronRight size={17} className={expanded ? 'chevron-open' : ''}/></button>
-        <button className="project-name" onClick={() => toggle(openedProjects, key, setOpenedProjects)}>
+        <button className="project-name" onClick={() => toggleProject(key)}>
           <Folder size={19}/><span>{project.name}</span></button>
         <button className={'row-pin project-pin' + (pinned ? ' is-pinned' : '')}
           aria-label={(pinned ? '取消置顶 ' : '置顶 ') + project.name}
@@ -1527,10 +1536,11 @@ export default function DesktopApp() {
       {expanded && <div className="nested-conversations">{children.length
         ? <>
             {visibleChildren.map((item) => conversationRow(item, true, 'project'))}
-            {children.length > PROJECT_THREAD_PREVIEW_LIMIT && <button className="project-thread-toggle"
-              aria-expanded={showAllThreads}
-              onClick={() => toggle(expandedProjectThreadLists, key, setExpandedProjectThreadLists)}>
-              {showAllThreads ? '收起对话' : '展开全部对话'}
+            {children.length > threadLimit && <button className="project-thread-toggle"
+              onClick={() => setProjectThreadLimits((current) => ({
+                ...current, [key]: nextProjectThreadLimit(current[key] ?? PROJECT_THREAD_PREVIEW_LIMIT, children.length),
+              }))}>
+              加载更多对话
             </button>}
           </>
         : <button className="empty-project" onClick={() => createNewChat(project.hostId, project.id)}>＋ 新建项目聊天</button>}</div>}

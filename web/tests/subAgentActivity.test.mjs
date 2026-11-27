@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { projectSubAgentActivitySnapshot, SubAgentProofCache } from '../server/subAgentActivity.mjs';
 import { groupSubAgentActivity, mergeActivityHistory, reconcileSubAgentTurn, shouldReadSubAgentSnapshot } from '../src/subAgentLifecycle.ts';
 
@@ -126,4 +128,11 @@ test('same-turn running observation authorizes its terminal snapshot, and row an
     item('start-p1', 'parent-turn-1'), item('interact-p1', 'parent-turn-1'),
   ]);
   assert.equal(sameTurn.first.id, 'start-p1');
+});
+
+test('side-chat activity feed mounts only at the first lifecycle item of the current parent turn', () => {
+  const source = readFileSync(fileURLToPath(new URL('../src/SideChatPanel.tsx', import.meta.url)), 'utf8');
+  assert.match(source, /const subAgentGroups = useMemo\(\(\) => groupSubAgentActivity\(messages\), \[messages\]\)/);
+  assert.match(source, /if \(!group \|\| group\.first\.id !== message\.id\) return null/);
+  assert.match(source, /<SubAgentActivityFeed hostId=\{hostId\} parentId=\{side\?\.id \?\? sourceId\} group=\{group\}/);
 });

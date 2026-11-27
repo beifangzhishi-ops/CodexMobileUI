@@ -182,6 +182,14 @@ try {
             Sync-Tree (Join-Path $sourceRoot 'android') (Join-Path $buildRoot 'android') @(
                 '.gradle', '.cxx', 'build'
             )
+            $splashImageProperty = $app.expo.splash.PSObject.Properties['image']
+            if ($null -eq $splashImageProperty -or
+                [string]::IsNullOrWhiteSpace([string]$splashImageProperty.Value)) {
+                & (Join-Path $sourceRoot 'scripts\sync-android-splash-resources.ps1') `
+                    -SourceAndroidRoot (Join-Path $sourceRoot 'android') `
+                    -TargetAndroidRoot (Join-Path $buildRoot 'android')
+                if (-not $?) { throw 'Unable to remove stale no-image splash overrides.' }
+            }
             if (-not $dependenciesCurrent) {
                 Write-Host 'Installing dependency lockfile in the persistent build checkout.'
                 # npm ci runs before the Gradle builder; it must also use an

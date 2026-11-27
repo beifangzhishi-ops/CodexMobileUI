@@ -3,7 +3,7 @@
     "name": "CodexMobileUI",
     "slug": "codex-mobile-ui",
     "scheme": "codexmobileui",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -15,7 +15,7 @@
       "package": "dev.codexmobileui.app",
       "usesCleartextTraffic": false,
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 30,
+      "versionCode": 31,
       "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

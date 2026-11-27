@@ -53,6 +53,8 @@ test('native model is per-thread and new threads prewarm the chosen model', () =
   assert.match(client, /web\/start'[\s\S]*?model: nativeModel\.id/);
   assert.match(bridge, /model_reasoning_effort: request\.params\.effort/);
   assert.match(bridge, /MODEL_UPDATE_REJECTED/);
+  assert.doesNotMatch(webApp, /\?{10,}/);
+  assert.match(webApp, /模型或思考强度切换未确认，请刷新会话核对后重试/);
 });
 
 test('Android diagnostics and mobile settings remain accessible and scrollable', () => {
