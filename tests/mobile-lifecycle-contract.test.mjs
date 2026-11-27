@@ -41,7 +41,8 @@ test("cold start resolves the stored Tailnet coordinator before showing shared U
 
 test("native splash and web container stay dark until the shared UI loads", () => {
   assert.match(splashColors, /name="splashscreen_background">#000000</);
-  assert.match(splashStyles, /name="android:windowBackground">@color\/splashscreen_background</);
+  assert.match(splashStyles, /name="Theme\.App\.SplashScreen" parent="Theme\.SplashScreen"/);
+  assert.match(splashStyles, /name="windowSplashScreenBackground">@color\/splashscreen_background</);
   assert.match(mainApp, /backgroundColor: '#101010'/);
   assert.match(mainApp, /startInLoadingState/);
   assert.match(mainApp, /renderLoading=/);

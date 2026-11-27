@@ -1,5 +1,6 @@
 import {
-  MAX_PUBLICATION_BYTES, isValidPublicationId, type PublicationFile,
+  MAX_PUBLICATION_BYTES, PUBLICATION_CHUNK_BYTES, isValidPublicationId,
+  safePublicationFileName, type PublicationFile,
 } from '../../shared/publicationProtocol';
 import type { HostId } from './types';
 
@@ -10,6 +11,7 @@ export type HostRequest = (
 ) => Promise<unknown>;
 type NativeBridge = { postMessage: (message: string) => void };
 type NativeReply = { id: string; seq: number; ok: boolean; message?: string };
+type TransferChunk = { encoded: string; bytes: Uint8Array; received: number };
 
 /** Parameters for `workspace/publication/publish` after a user clicks one native link. */
 type PublicationPublishParams = {
@@ -30,6 +32,7 @@ type PublicationReadParams = {
 };
 
 function bridge(): NativeBridge | null {
+  if (typeof window === 'undefined') return null;
   const native = (window as Window & { ReactNativeWebView?: NativeBridge }).ReactNativeWebView;
   return typeof native?.postMessage === 'function' ? native : null;
 }
@@ -77,25 +80,27 @@ function parseChunk(raw: unknown, offset: number, total: number) {
   };
 }
 
-/** Explicitly publish one selected native assistant link; no batch scanning occurs. */
-export async function publishAssistantFile(
-  host: HostId, threadId: string, itemId: string, linkIndex: number, request: HostRequest,
-): Promise<PublishedFile> {
-  const params: PublicationPublishParams = { threadId, itemId, linkIndex };
-  return parsePublishedFile(await request(host, 'web/publication', {
-    method: 'workspace/publication/publish',
-    params,
-  }), threadId);
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }
 
-/** Android keeps the existing chunked system-save bridge and can abort stale work. */
-export async function downloadPublication(
-  host: HostId, file: PublishedFile, request: HostRequest,
+/**
+ * Transfer already-authorized bytes into the browser download path or the
+ * existing Android native sink. The sink receives only an opaque transfer ID
+ * and validated chunk bytes; it never receives a host path or RPC method.
+ */
+async function transferFile(
+  file: { id: string; name: string; size: number; mime: string },
+  readChunk: (offset: number) => Promise<TransferChunk>,
   onProgress: (received: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (file.status !== 'ready' || !isValidPublicationId(file.id) ||
-      !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > MAX_PUBLICATION_BYTES) {
+  if (!isValidPublicationId(file.id) || !Number.isSafeInteger(file.size) ||
+      file.size <= 0 || file.size > MAX_PUBLICATION_BYTES) {
     throw Error('FILE_UNAVAILABLE');
   }
   const native = !!bridge();
@@ -111,11 +116,10 @@ export async function downloadPublication(
     let offset = 0;
     while (offset < file.size) {
       if (signal?.aborted) throw Error('DOWNLOAD_CANCELLED');
-      const params: PublicationReadParams = { id: file.id, offset };
-      const result = await request(host, 'web/publication', {
-        method: 'workspace/publication/read', params,
-      });
-      const chunk = parseChunk(result, offset, file.size);
+      const chunk = await readChunk(offset);
+      if (chunk.received <= offset || chunk.received > file.size) {
+        throw Error('INVALID_FILE_CHUNK');
+      }
       if (native) {
         await nativeExchange({ type: 'publication.chunk', id: file.id, seq: sequence++,
           offset, data: chunk.encoded }, file.id, sequence - 1);
@@ -137,7 +141,7 @@ export async function downloadPublication(
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = file.name.replace(/[\\/\x00-\x1f]/g, '_').slice(0, 150) || 'codex-file';
+      link.download = safePublicationFileName(file.name);
       link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
@@ -151,6 +155,59 @@ export async function downloadPublication(
     }
     throw error;
   }
+}
+
+/** Explicitly publish one selected native assistant link; no batch scanning occurs. */
+export async function publishAssistantFile(
+  host: HostId, threadId: string, itemId: string, linkIndex: number, request: HostRequest,
+): Promise<PublishedFile> {
+  const params: PublicationPublishParams = { threadId, itemId, linkIndex };
+  return parsePublishedFile(await request(host, 'web/publication', {
+    method: 'workspace/publication/publish',
+    params,
+  }), threadId);
+}
+
+/** Android keeps the existing chunked system-save bridge and can abort stale work. */
+export async function downloadPublication(
+  host: HostId, file: PublishedFile, request: HostRequest,
+  onProgress: (received: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (file.status !== 'ready' || !isValidPublicationId(file.id) ||
+      !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > MAX_PUBLICATION_BYTES) {
+    throw Error('FILE_UNAVAILABLE');
+  }
+  await transferFile(file, async (offset) => {
+    const params: PublicationReadParams = { id: file.id, offset };
+    const result = await request(host, 'web/publication', {
+      method: 'workspace/publication/read', params,
+    });
+    return parseChunk(result, offset, file.size);
+  }, onProgress, signal);
+}
+
+/**
+ * Save an image Blob that was already produced by the native image-read path
+ * or selected by the user. `transferId` is an opaque 64-hex sink identifier,
+ * not a host path or publication request.
+ */
+export async function downloadImageBlob(
+  blob: Blob, name: string, transferId: string,
+  onProgress: (received: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const size = blob.size;
+  if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_PUBLICATION_BYTES ||
+      !isValidPublicationId(transferId)) {
+    throw Error('FILE_UNAVAILABLE');
+  }
+  await transferFile({ id: transferId, name, size, mime: blob.type }, async (offset) => {
+    const bytes = new Uint8Array(await blob.slice(offset,
+      Math.min(size, offset + PUBLICATION_CHUNK_BYTES)).arrayBuffer());
+    if (!bytes.length) throw Error('INVALID_FILE_CHUNK');
+    return { encoded: bytesToBase64(bytes), bytes, received: offset + bytes.length };
+  }, onProgress, signal);
 }
 
 export function publicationUrl(host: HostId, id: string, mode: PublicationMode): string {
