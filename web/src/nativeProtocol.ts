@@ -14,7 +14,7 @@ export type NativePermission = { id: string; allowed: boolean; description: stri
 export type NativeGoal = { objective: string; status: string; tokenBudget: number | null; tokensUsed: number; timeUsedSeconds: number };
 export type NativeQueueEntry = { id: string; text: string };
 export type Snapshot = { messages: Message[]; running: boolean; activeTurnId: string | null; runningSinceMs: number | null;
-  threadName?: string; terminalStatus?: string };
+  threadName?: string; terminalStatus?: string; latestTurnId?: string };
 export type NativeNotice = { method: string; params: Obj };
 
 /** Parameters for native `thread/fork`; source: ThreadForkParams schema. */
@@ -303,7 +303,8 @@ export function parseSnapshot(raw: unknown, expectedThreadId: string): Snapshot 
     running && message.turnId === activeTurnId && message.role === 'assistant' && !message.kind
       ? { ...message, complete: false } : message),
     running, activeTurnId, runningSinceMs: running ? unixMs(last.startedAt) ?? null : null,
-    threadName: text(thread.name) || undefined, terminalStatus: terminalStatus || undefined };
+    threadName: text(thread.name) || undefined, terminalStatus: terminalStatus || undefined,
+    latestTurnId: text(last.id) || undefined };
 }
 
 /** A paginated snapshot may deliberately omit text from a known native

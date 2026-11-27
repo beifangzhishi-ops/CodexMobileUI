@@ -53,6 +53,7 @@ test('real sub-agent activity identity survives snapshots and live notices', () 
   assert.equal(done.threadName, 'worker');
   assert.equal(done.terminalStatus, 'completed');
   assert.equal(done.running, false);
+  assert.equal(done.latestTurnId, 'ct');
   const failed = parseSnapshot({ thread: { id: 'child', turns: [
     { id: 'ct', status: 'failed', items: [] },
   ] } }, 'child');
