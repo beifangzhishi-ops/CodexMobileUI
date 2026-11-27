@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { projectSubAgentActivitySnapshot, SubAgentProofCache } from '../server/subAgentActivity.mjs';
-import { mergeActivityHistory, reconcileSubAgentTurn, shouldReadSubAgentSnapshot } from '../src/subAgentLifecycle.ts';
+import { groupSubAgentActivity, mergeActivityHistory, reconcileSubAgentTurn, shouldReadSubAgentSnapshot } from '../src/subAgentLifecycle.ts';
 
 test('automatic child activity projection is bounded, identifying and omits tool outputs', () => {
   const raw = { thread: { id: 'child', name: 'Worker', turns: [{ id: 'turn', status: 'inProgress', items: [
@@ -97,4 +97,33 @@ test('child turn verification accepts initial terminal, rejects old turns after 
   const parentFinal = reconcileSubAgentTurn({ nativeActive: true, nativeTerminalStatus: 'completed', baselineTurnId: 'turn-1',
     snapshotTurnId: 'turn-1', snapshotRunning: true, attempts: 0 });
   assert.equal(parentFinal.status, 'terminal');
+});
+
+test('same-turn running observation authorizes its terminal snapshot, and row anchor follows the latest parent turn', () => {
+  const stale = reconcileSubAgentTurn({ nativeActive: true, baselineTurnId: 'turn-1',
+    snapshotTurnId: 'turn-1', snapshotRunning: false, snapshotTerminalStatus: 'completed', attempts: 0 });
+  assert.equal(stale.status, 'pending');
+  assert.equal(stale.observedRunningTurnId, null);
+  const running = reconcileSubAgentTurn({ nativeActive: true, baselineTurnId: 'turn-1',
+    snapshotTurnId: 'turn-1', snapshotRunning: true, snapshotTerminalStatus: 'inProgress', attempts: stale.attempts,
+    observedRunningTurnId: stale.observedRunningTurnId });
+  assert.equal(running.status, 'running');
+  assert.equal(running.observedRunningTurnId, 'turn-1');
+  const completed = reconcileSubAgentTurn({ nativeActive: true, baselineTurnId: 'turn-1',
+    snapshotTurnId: 'turn-1', snapshotRunning: false, snapshotTerminalStatus: 'completed', attempts: running.attempts,
+    observedRunningTurnId: running.observedRunningTurnId });
+  assert.equal(completed.status, 'terminal');
+
+  const item = (id, turnId) => ({ id, turnId, agentThreadId: 'child', activityType: 'subAgentActivity' });
+  const [group] = groupSubAgentActivity([
+    item('start-p1', 'parent-turn-1'), item('interact-p1', 'parent-turn-1'),
+    item('interact-p2', 'parent-turn-2'), item('complete-p2', 'parent-turn-2'),
+  ]);
+  assert.equal(group.first.id, 'interact-p2');
+  assert.equal(group.latest.id, 'complete-p2');
+  assert.equal(group.records.length, 4);
+  const [sameTurn] = groupSubAgentActivity([
+    item('start-p1', 'parent-turn-1'), item('interact-p1', 'parent-turn-1'),
+  ]);
+  assert.equal(sameTurn.first.id, 'start-p1');
 });

@@ -127,7 +127,7 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
         if (message.activityType === 'subAgentActivity' && message.agentThreadId) {
           const group = subAgentRows.get(message.agentThreadId);
           if (!group || group.first.id !== message.id) return null;
-          return <article key={message.id} className="side-message side-assistant side-subagent-activity">
+          return <article key={group.childId} className="side-message side-assistant side-subagent-activity">
             <SubAgentActivityFeed hostId={hostId} parentId={side?.id ?? sourceId} group={group} online={online}
               readActivity={live.readSubAgentActivity} readHistory={live.readSubAgent}
               onActivityChange={live.reportAgentActivity}/>

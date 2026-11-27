@@ -4,6 +4,9 @@ import { MessageMarkdown } from './MessageMarkdown';
 import type { HostId, Message } from './types';
 import type { Snapshot } from './nativeProtocol';
 import { mergeActivityHistory, reconcileSubAgentTurn, shouldReadSubAgentSnapshot } from './subAgentLifecycle';
+import type { SubAgentGroup } from './subAgentLifecycle';
+export { groupSubAgentActivity } from './subAgentLifecycle';
+export type { SubAgentGroup } from './subAgentLifecycle';
 
 type ReasoningPresentation = Pick<Message, 'content' | 'summaryParts' | 'reasoningText' | 'reasoningParts'>;
 
@@ -90,21 +93,6 @@ export function ReasoningActivity({ message }: { message: Message }) {
   </div>;
 }
 
-export type SubAgentGroup = { childId: string; first: Message; latest: Message; records: Message[] };
-
-/** Group separate native lifecycle items into one display row per child thread. */
-export function groupSubAgentActivity(messages: readonly Message[]): SubAgentGroup[] {
-  const groups = new Map<string, SubAgentGroup>();
-  for (const message of messages) {
-    if (message.activityType !== 'subAgentActivity' || !message.agentThreadId) continue;
-    const existing = groups.get(message.agentThreadId);
-    if (existing) { existing.latest = message; existing.records.push(message); }
-    else groups.set(message.agentThreadId, { childId: message.agentThreadId,
-      first: message, latest: message, records: [message] });
-  }
-  return [...groups.values()];
-}
-
 export function SubAgentActivityFeed({ hostId, parentId, group, online, readActivity, readHistory, onActivityChange }: {
   hostId: HostId; parentId: string; group: SubAgentGroup; online: boolean;
   readActivity: (hostId: HostId, parentId: string, childId: string) => Promise<Snapshot>;
@@ -129,8 +117,8 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
   const activityRef = useRef<Snapshot | null>(activity);
   activityRef.current = activity;
   const latestTurnId = useRef<string | null>(activity?.latestTurnId ?? null);
-  const verificationRef = useRef<{ key: string; baselineTurnId: string | null; attempts: number; status: 'running' | 'terminal' | 'pending' | 'unknown'; terminalStatus?: string }>({
-    key: '', baselineTurnId: null, attempts: 0, status: 'pending',
+  const verificationRef = useRef<{ key: string; baselineTurnId: string | null; attempts: number; status: 'running' | 'terminal' | 'pending' | 'unknown'; terminalStatus?: string; observedRunningTurnId: string | null }>({
+    key: '', baselineTurnId: null, attempts: 0, status: 'pending', observedRunningTurnId: null,
   });
   const finalReadKey = useRef<string | null>(null);
   const latestNativeStatus = group.latest.agentStatus ?? '';
@@ -163,7 +151,7 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
     if (!online || !visible) return;
     if (nativeActive && verificationRef.current.key !== lifecycleKey) {
       const baselineTurnId = latestNativeStatus === 'interacted' ? latestTurnId.current : null;
-      verificationRef.current = { key: lifecycleKey, baselineTurnId, attempts: 0, status: 'pending' };
+      verificationRef.current = { key: lifecycleKey, baselineTurnId, attempts: 0, status: 'pending', observedRunningTurnId: null };
       setTurnVerification({ key: lifecycleKey, status: 'pending' });
     }
     const verification = nativeActive && verificationRef.current.key === lifecycleKey ? verificationRef.current : null;
@@ -198,10 +186,11 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
           nativeActive, baselineTurnId: activeGeneration?.baselineTurnId ?? null,
           snapshotTurnId: next.latestTurnId ?? null, snapshotRunning: next.running,
           snapshotTerminalStatus: next.terminalStatus, attempts: activeGeneration?.attempts ?? 0,
+          observedRunningTurnId: activeGeneration?.observedRunningTurnId ?? null,
         });
         if (nativeActive && activeGeneration) {
           verificationRef.current = { ...activeGeneration, status: verdict.status, attempts: verdict.attempts,
-            terminalStatus: verdict.terminalStatus };
+            terminalStatus: verdict.terminalStatus, observedRunningTurnId: verdict.observedRunningTurnId };
           setTurnVerification({ key: lifecycleKey, status: verdict.status, terminalStatus: verdict.terminalStatus });
         }
         const nextTerminal = verdict.status === 'terminal';

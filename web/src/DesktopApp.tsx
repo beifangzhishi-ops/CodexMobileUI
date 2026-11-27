@@ -1873,7 +1873,7 @@ export default function DesktopApp() {
               if (message.activityType === 'subAgentActivity' && message.agentThreadId) {
                 const group = subAgentRows.get(message.agentThreadId);
                 if (!group || group.first.id !== message.id) return null;
-                return <article key={message.id} className="message message-assistant message-subagent-activity"
+                return <article key={group.childId} className="message message-assistant message-subagent-activity"
                   data-context-kind="message" data-message-index={index} data-context-host={active.hostId}
                   data-context-id={message.id}>
                   <SubAgentActivityFeed hostId={active.hostId} parentId={active.id} group={group}
