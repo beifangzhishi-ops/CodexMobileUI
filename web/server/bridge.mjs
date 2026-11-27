@@ -359,7 +359,7 @@ async function readReminderEvents(url, token, after) {
   return (await response.json()).events;
 }
 
-function readLocalReminderEvents(after) {
+async function readLocalReminderEvents(after) {
   const token = readFileSync(resolve('.state/reminder-feed-token'), 'utf8').trim();
   if (!/^[a-f0-9]{64}$/.test(token)) throw Error('REMINDER_FEED_UNAVAILABLE');
   return readReminderEvents(new URL('http://127.0.0.1:48889/internal/reminder-events'), token, after);
