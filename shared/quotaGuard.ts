@@ -1,5 +1,9 @@
 export const QUOTA_GUARD_THRESHOLD_PERCENT = 3;
 
+export function isQuotaGuardThreshold(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
+}
+
 export type QuotaHostId = '6v' | 'noha';
 export type QuotaWindowSlot = 'primary' | 'secondary';
 export type QuotaInterruptState = 'requested' | 'retrying' | 'confirmed' | 'failed';
@@ -47,6 +51,7 @@ export type QuotaGuardRuntime = {
 };
 
 export type QuotaGuardSetting = {
+  thresholdPercent: number;
   enabled: boolean;
   revision: number;
   updatedAt: number;
@@ -69,7 +74,7 @@ export type QuotaGuardSharedState = {
   revision: number;
   updatedAt: number;
   authoritativeHost: '6v';
-  thresholdPercent: 3;
+  thresholdPercent: number;
   status: 'off' | 'ready' | 'guarded' | 'interrupting' | 'confirmed' | 'failed' | 'degraded' | 'pending';
   triggerReason: string | null;
   sync: {
@@ -150,7 +155,8 @@ export function parseNativeQuotaWindows(input: unknown): QuotaWindowReading[] {
 }
 
 export function mergeQuotaGuardTriggers(existing: readonly QuotaGuardTrigger[],
-  readings: readonly QuotaWindowReading[], observedAt = Date.now()): QuotaGuardTrigger[] {
+  readings: readonly QuotaWindowReading[], observedAt = Date.now(),
+  thresholdPercent = QUOTA_GUARD_THRESHOLD_PERCENT): QuotaGuardTrigger[] {
   const retained = new Map<string, QuotaGuardTrigger>();
   for (const trigger of existing) {
     if (!trigger || !boundedString(trigger.windowKey, 1000) ||
@@ -166,15 +172,15 @@ export function mergeQuotaGuardTriggers(existing: readonly QuotaGuardTrigger[],
   for (const trigger of [...retained.values()]) {
     if (observedAt < trigger.lastSeenAt) continue;
     const exact = readings.find((reading) => reading.windowKey === trigger.windowKey);
-    const freshSameWindow = exact && exact.remainingPercent > QUOTA_GUARD_THRESHOLD_PERCENT;
+    const freshSameWindow = exact && exact.remainingPercent > thresholdPercent;
     const resetWindow = !exact && (byBase.get(trigger.baseKey) ?? []).find((reading) =>
-      reading.remainingPercent > QUOTA_GUARD_THRESHOLD_PERCENT &&
+      reading.remainingPercent > thresholdPercent &&
       reading.resetsAt !== null && trigger.resetsAt !== null &&
       reading.resetsAt > trigger.resetsAt);
     if (freshSameWindow || resetWindow) retained.delete(trigger.windowKey);
   }
   for (const reading of readings) {
-    if (reading.remainingPercent > QUOTA_GUARD_THRESHOLD_PERCENT) continue;
+    if (reading.remainingPercent > thresholdPercent) continue;
     const prior = retained.get(reading.windowKey);
     if (prior && observedAt < prior.lastSeenAt) continue;
     retained.set(reading.windowKey, {
@@ -315,7 +321,7 @@ export function buildQuotaGuardState(setting: QuotaGuardSetting,
       (triggered.length > 3 ? '；另有 ' + (triggered.length - 3) + ' 台电脑触发' : '');
   return {
     version: 1, enabled: setting.enabled, revision: setting.revision,
-    updatedAt: setting.updatedAt, authoritativeHost: '6v', thresholdPercent: 3,
+    updatedAt: setting.updatedAt, authoritativeHost: '6v', thresholdPercent: setting.thresholdPercent,
     status, triggerReason,
     sync: { state: syncPending ? 'pending' : 'current', syncedAt,
       reason: syncReason },
@@ -326,7 +332,7 @@ export function buildQuotaGuardState(setting: QuotaGuardSetting,
 export function parseQuotaGuardSharedState(input: unknown): QuotaGuardSharedState | null {
   const data = object(input);
   if (!data || data.version !== 1 || data.authoritativeHost !== '6v' ||
-      data.thresholdPercent !== 3 || typeof data.enabled !== 'boolean' ||
+      !isQuotaGuardThreshold(data.thresholdPercent) || typeof data.enabled !== 'boolean' ||
       !Number.isSafeInteger(data.revision) || !finite(data.updatedAt) ||
       !['off', 'ready', 'guarded', 'interrupting', 'confirmed', 'failed', 'degraded', 'pending']
         .includes(String(data.status)) ||
@@ -350,7 +356,7 @@ export function parseQuotaGuardSharedState(input: unknown): QuotaGuardSharedStat
   }
   return {
     version: 1, enabled: data.enabled, revision: Number(data.revision),
-    updatedAt: data.updatedAt, authoritativeHost: '6v', thresholdPercent: 3,
+    updatedAt: data.updatedAt, authoritativeHost: '6v', thresholdPercent: data.thresholdPercent,
     status: data.status as QuotaGuardSharedState['status'],
     triggerReason: data.triggerReason as string | null,
     sync: sync as QuotaGuardSharedState['sync'], hosts,

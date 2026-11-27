@@ -1,12 +1,13 @@
 import type {
   QuotaGuardRuntime, QuotaGuardSetting, QuotaHostId,
 } from '../shared/quotaGuard.js';
-import { parseQuotaGuardRuntime } from '../shared/quotaGuard.js';
+import { isQuotaGuardThreshold, parseQuotaGuardRuntime, QUOTA_GUARD_THRESHOLD_PERCENT } from '../shared/quotaGuard.js';
 import type { QuotaGuardSettingStore } from './quotaGuardState.js';
 
 export type QuotaGuardPeerSyncRequest = {
   action: 'sync';
   enabled: boolean;
+  thresholdPercent: number;
   revision: number;
   updatedAt: number;
   runtime: QuotaGuardRuntime | null;
@@ -32,6 +33,7 @@ export function quotaGuardPeerSyncRequest(setting: QuotaGuardSetting,
   return {
     action: 'sync',
     enabled: setting.enabled,
+    thresholdPercent: setting.thresholdPercent,
     revision: setting.revision,
     updatedAt: setting.updatedAt,
     runtime,
@@ -42,15 +44,20 @@ export function parseQuotaGuardPeerSyncRequest(input: unknown,
   sourceHost: QuotaHostId): QuotaGuardPeerSyncRequest | null {
   const data = object(input);
   if (!data || data.action !== 'sync' ||
-      Object.keys(data).sort().join(',') !== 'action,enabled,revision,runtime,updatedAt' ||
+      !['action,enabled,revision,runtime,updatedAt', 'action,enabled,revision,runtime,thresholdPercent,updatedAt']
+        .includes(Object.keys(data).sort().join(',')) ||
       typeof data.enabled !== 'boolean' ||
       !Number.isSafeInteger(data.revision) || Number(data.revision) < 0 ||
       !finite(data.updatedAt) || data.updatedAt < 0) return null;
+  const thresholdPercent = data.thresholdPercent === undefined
+    ? QUOTA_GUARD_THRESHOLD_PERCENT : data.thresholdPercent;
+  if (!isQuotaGuardThreshold(thresholdPercent)) return null;
   const runtime = data.runtime === null ? null : parseQuotaGuardRuntime(data.runtime, sourceHost);
   if (data.runtime !== null && runtime === null) return null;
   return {
     action: 'sync',
     enabled: data.enabled,
+    thresholdPercent,
     revision: Number(data.revision),
     updatedAt: data.updatedAt,
     runtime,
@@ -76,7 +83,7 @@ export function handleQuotaGuardPeerSync(store: QuotaGuardSettingStore,
   now = Date.now()): QuotaGuardPeerSyncResponse {
   const request = parseQuotaGuardPeerSyncRequest(input, sourceHost);
   if (!request) throw new Error('QUOTA_GUARD_PEER_SYNC_INVALID');
-  store.writeMirrorSync(request.enabled, request.revision, request.updatedAt, now);
+  store.writeMirrorSync(request.enabled, request.revision, request.updatedAt, now, request.thresholdPercent);
   if (request.runtime) {
     store.writePeerRuntimeSync(request.runtime, sourceHost, now);
   }
