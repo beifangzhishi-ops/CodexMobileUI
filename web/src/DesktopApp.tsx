@@ -611,6 +611,7 @@ export default function DesktopApp() {
   ).sort((a, b) => Number(pinnedIds.includes(conversationKey(b.hostId, b.id))) -
     Number(pinnedIds.includes(conversationKey(a.hostId, a.id))) ||
     b.updatedAt - a.updatedAt), [sidebarConversations, hostFilter, showAllRecent, showArchived, pinnedIds]);
+  const showRecentRefreshStatus = sidebarRefreshing && !collapsedSections.includes('recent') && recents.length > recentLimit;
   const pinnedProjects = useMemo(() => projects.filter((item) =>
     pinnedProjectIds.includes(conversationKey(item.hostId, item.id)) &&
     (hostFilter === 'all' || item.hostId === hostFilter)), [projects, pinnedProjectIds, hostFilter]);
@@ -1703,7 +1704,7 @@ export default function DesktopApp() {
           <strong className="app-wordmark">CodexMobile</strong>
           <button className="circle-tool sidebar-search" aria-label="搜索" title="搜索聊天 (Ctrl+K)" onClick={() => { setQuery(''); setSearchOpen(true); }}><Search size={23} /></button>
         </div>
-        {(sidebarPull > 0 || sidebarRefreshing) && <div className="sidebar-pull-status" role="status" aria-live="polite">
+        {(sidebarPull > 0 || sidebarRefreshing) && <div className="sidebar-pull-status" role="status" aria-live={showRecentRefreshStatus ? 'off' : 'polite'}>
           <RefreshCw size={16} className={sidebarRefreshing ? 'sidebar-refresh-spinner' : ''}/>
           {sidebarRefreshing ? '正在刷新…' : sidebarPull >= SIDEBAR_PULL_THRESHOLD ? '松手刷新' : '下拉刷新'}
         </div>}
@@ -1748,7 +1749,7 @@ export default function DesktopApp() {
               aria-expanded={!collapsedSections.includes('recent')} onClick={() => toggleSection('recent')}>
               {showArchived ? '已归档对话' : '最近对话'}
               <ChevronRight size={15} className={collapsedSections.includes('recent') ? '' : 'chevron-open'}/></button>
-              {!collapsedSections.includes('recent') && <button aria-label="刷新所有电脑的会话" title="刷新所有电脑的会话" onClick={() => { void refreshSidebar(); }}><RefreshCw size={17}/></button>}
+              {!collapsedSections.includes('recent') && <button aria-label="刷新所有电脑的会话" title="刷新所有电脑的会话" disabled={sidebarRefreshing} onClick={() => { void refreshSidebar(); }}><RefreshCw size={17} className={sidebarRefreshing ? 'sidebar-refresh-spinner' : ''}/></button>}
               {!collapsedSections.includes('recent') && <button data-popup-trigger aria-label="最近对话设置" title="最近对话设置" onClick={() => setPopup(popup === 'recent' ? null : 'recent')}><Settings size={20} /></button>}
             </div>
             {!collapsedSections.includes('recent') && <>
@@ -1758,7 +1759,9 @@ export default function DesktopApp() {
             </div>}
             {recents.length === 0 && <div className="empty-recents">{Object.values(live.status).some((s) => s === 'connecting') ? '正在从电脑读取会话…' : '暂无真实会话'}</div>}
             {recents.slice(0, recentLimit).map((item) => conversationRow(item))}
-            {recents.length > recentLimit && <button className="more-recents"
+            {sidebarRefreshing && recents.length > recentLimit && <div className="more-recents is-refreshing" role="status" aria-live="polite">
+              <RefreshCw size={14} className="sidebar-refresh-spinner"/>正在刷新…</div>}
+            {!sidebarRefreshing && recents.length > recentLimit && <button className="more-recents"
               onClick={() => setRecentLimit((count) => count + 10)}>加载更多对话<ChevronDown size={14}/></button>}
             </>}
           </div>
