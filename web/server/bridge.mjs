@@ -832,6 +832,9 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
   // bounded proof for this browser connection so live child polling does not
   // reread the parent's complete history for every child refresh.
   const subAgentReadProofs = new SubAgentProofCache();
+  // Only proven, currently active children are resumed to attach this native
+  // connection to their turn/item events. Keep subscriptions connection-scoped.
+  const subAgentSubscriptions = new Map();
   const createdHere = new Map();
   const firstTurnRequests = new Map();
   let internalId = 1_000_000_000;
@@ -923,6 +926,7 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
     if (!remotePeer && msg?.method === 'thread/deleted' && typeof msg.params?.threadId === 'string') {
       subAgentReadProofs.invalidateParent(msg.params.threadId);
     }
+    if (['thread/deleted', 'thread/closed'].includes(msg?.method)) subAgentSubscriptions.delete(msg.params?.threadId);
     if (scheduleCalls && msg?.method === 'item/tool/call' &&
         (Number.isSafeInteger(msg.id) || typeof msg.id === 'string') &&
         msg.params?.namespace == null &&
@@ -1154,6 +1158,19 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
         const child = await internalRequest('thread/read', { threadId: agentThreadId, includeTurns: true });
         if (child?.thread?.id !== agentThreadId) throw Error('AGENT_NOT_FOUND');
         if (!proven) subAgentReadProofs.remember(threadId, agentThreadId);
+        if (msg.method === 'web/subAgent/activity' &&
+            (child.thread.status?.type === 'active' || ['inProgress', 'in_progress', 'running'].includes(child.thread.turns?.at(-1)?.status)) &&
+            subAgentSubscriptions.size < 64 && !subAgentSubscriptions.has(agentThreadId)) {
+          subAgentSubscriptions.set(agentThreadId, true);
+          // Native thread/read does not subscribe. Resume without history or
+          // settings overrides; never start a turn or send user input here.
+          void internalRequest('thread/resume', { threadId: agentThreadId, excludeTurns: true }).then((result) => {
+            if (result?.thread?.id !== agentThreadId) throw Error('AGENT_NOT_FOUND');
+          }).catch(() => {
+            const retry = setTimeout(() => subAgentSubscriptions.delete(agentThreadId), 30_000);
+            retry.unref?.();
+          });
+        }
         return msg.method === 'web/subAgent/activity'
           ? projectSubAgentActivitySnapshot(child, agentThreadId) : child;
       })().then((result) => safeSend(JSON.stringify({ id: msg.id, result })))

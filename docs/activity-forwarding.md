@@ -14,11 +14,19 @@ the owning App Server; none of the following creates artificial chat history.
   for an item the native history still contains; a page reload cannot recover
   text absent from the native history.
 - Native subAgentActivity records (started, interacted, interrupted, completed)
-  are compact and expandable, with real agentPath, model and effort when present.
+  start as compact single rows and expand into an independently scrolling live
+  activity timeline, with real agentPath, model and effort when present.
   A read-only detail request verifies that the parent history actually refers to
   the requested agentThreadId before retrieving the child on the same host.
-  Child messages remain separate from the parent. The user can refresh the child
-  detail; a failed read is not replaced with fabricated content.
+  The verified active child receives native item/turn events with bounded
+  snapshot polling as a recovery path. Recent entries are accumulated rather
+  than replaced by the last few items. The timeline follows its newest activity
+  using the shared chat scrolling behavior; scrolling up pauses follow and
+  the jump-to-latest control resumes it. Explicitly collapsing an expanded
+  child also returns its containing main or side chat to the latest message
+  and resumes its follow mode. Child messages remain separate from
+  the parent. Full history remains an explicit read; a failed read is not
+  replaced with fabricated content.
 - Command, plan, tool and compaction activities keep the native IDs. The final
   server item is authoritative when it provides text. Failures are understated
   but visible. The UI does not treat socket acknowledgment as task completion.

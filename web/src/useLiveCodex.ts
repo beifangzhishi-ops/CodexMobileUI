@@ -7,7 +7,7 @@ import {
 } from './nativeProtocol';
 import type {
   NativeGoal, NativeModel, NativePermission, NativeProject, NativeQueueEntry,
-  NativeThreadForkParams,
+  NativeThreadForkParams, NativeNotice,
 } from './nativeProtocol';
 import { localMessageId } from './browserHelpers';
 import type { NativeMention } from '../../shared/mentions';
@@ -73,6 +73,17 @@ export function useLiveCodex() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agentActivityRevision, setAgentActivityRevision] = useState(0);
   const agentActivitySignatures = useRef(new Map<string, string>());
+  const agentNoticeListeners = useRef(new Map<string, Set<(notice: NativeNotice) => void>>());
+  const subscribeSubAgentNotices = useCallback((hostId: HostId, childId: string, listener: (notice: NativeNotice) => void) => {
+    const key = threadKey(hostId, childId);
+    const listeners = agentNoticeListeners.current.get(key) ?? new Set();
+    listeners.add(listener);
+    agentNoticeListeners.current.set(key, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) agentNoticeListeners.current.delete(key);
+    };
+  }, []);
   const [models, setModels] = useState<Record<HostId, NativeModel[]>>({ '6v': [], noha: [] });
   const [permissions, setPermissions] = useState<Record<HostId, NativePermission[]>>({ '6v': [], noha: [] });
   const [threadPermissions, setThreadPermissions] = useState<Record<string, PermissionMode>>({});
@@ -523,6 +534,9 @@ export function useLiveCodex() {
         const threadId = text(params.threadId) || text(obj(params.thread).id);
         if (threadId) {
           const key = threadKey(hostId, threadId);
+          for (const listener of agentNoticeListeners.current.get(key) ?? []) {
+            listener({ method: frame.method, params });
+          }
           const compaction = compactionJobs.current.get(key);
           if (compaction?.dispatched && compactionBusy(compaction.phase)) {
             if (['item/started', 'item/completed'].includes(frame.method) &&
@@ -1072,7 +1086,7 @@ export function useLiveCodex() {
   return {
     prepareAttachments,
     hosts, status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
-    projects, conversations, agentActivityRevision, reportAgentActivity, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
+    projects, conversations, agentActivityRevision, reportAgentActivity, subscribeSubAgentNotices, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
     contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
     listSideChats, createSideChat, loadSideChat, readSubAgent, readSubAgentActivity,
     request, select, refresh, forgetDeletedThread, readThread, refreshGoal, refreshQueue, readImage,

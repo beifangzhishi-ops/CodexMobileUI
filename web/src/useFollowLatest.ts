@@ -31,6 +31,11 @@ export function useFollowLatest(
     setShowJump(false);
   }, []);
 
+  const resumeToLatest = useCallback(() => {
+    followingRef.current = true;
+    snapToLatest();
+  }, [snapToLatest]);
+
   const onScroll = useCallback(() => {
     const node = scrollerRef.current;
     if (!node) return;
@@ -87,5 +92,5 @@ export function useFollowLatest(
     return () => window.removeEventListener('resize', handleResize);
   }, [threadKey, snapToLatest, updateJump]);
 
-  return { scrollerRef, contentRef, showJump, onScroll, jumpToLatest };
+  return { scrollerRef, contentRef, showJump, onScroll, jumpToLatest, resumeToLatest };
 }

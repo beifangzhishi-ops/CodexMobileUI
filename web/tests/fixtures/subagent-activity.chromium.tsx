@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ReasoningActivity, SubAgentActivityFeed, groupSubAgentActivity } from '../../src/ThreadActivity';
 import type { Message } from '../../src/types';
-import type { Snapshot } from '../../src/nativeProtocol';
+import type { NativeNotice, Snapshot } from '../../src/nativeProtocol';
 import '../../src/desktop.css';
 
 const parentId = 'parent-thread-fixture';
@@ -24,6 +24,23 @@ let lastSnapshot: Snapshot = {
   ], latestTurnId: 'child-turn-1', running: true,
 };
 let activityReads: Array<{ hostId: string; parentId: string; childId: string }> = [];
+const listeners = new Set<(notice: NativeNotice) => void>();
+const subscribe = (_host: string, _child: string, listener: (notice: NativeNotice) => void) => {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+};
+let sequence = 0;
+let collapseCount = 0;
+const onCollapse = () => { collapseCount++; };
+function emitActivity(count = 1) {
+  for (let i = 0; i < count; i++) {
+    const n = ++sequence;
+    for (const listener of listeners) listener({ method: 'item/completed', params: {
+      turnId: lastSnapshot.latestTurnId, item: { id: `live-${n}`, type: 'commandExecution',
+        command: `live activity ${n} ` + 'detail '.repeat(20), status: 'completed' },
+    } });
+  }
+}
 const readActivity = async (hostId: '6v' | 'noha', parent: string, child: string) => {
   activityReads.push({ hostId, parentId: parent, childId: child });
   if (snapshots.length) lastSnapshot = snapshots.shift()!;
@@ -63,7 +80,8 @@ function App() {
     setParentTurnId('parent-turn-2');
     setParentMessages((current) => [...current, activityRecord('activity-completed', 'parent-turn-2', 'completed')]);
   }
-  Object.assign(window, { fixture: { newInteraction, completeChild, get activityReads() { return activityReads; } } });
+  Object.assign(window, { fixture: { newInteraction, completeChild, emitActivity,
+    get collapseCount() { return collapseCount; }, get activityReads() { return activityReads; } } });
   return <main className="fixture-shell">
     <nav className="fixture-controls">
       <button id="new-interaction" onClick={newInteraction}>父会话新一轮交互</button>
@@ -78,7 +96,7 @@ function App() {
           return anchoredGroup && <article key={anchoredGroup.childId} className="side-message side-assistant side-subagent-activity"
             data-subagent-anchor={message.id}>
             <SubAgentActivityFeed hostId="6v" parentId={parentId} group={anchoredGroup} online
-              readActivity={stableReadActivity} readHistory={stableReadHistory}/>
+              readActivity={stableReadActivity} readHistory={stableReadHistory} subscribeNotices={subscribe} onCollapse={onCollapse}/>
           </article>;
         })}
       </section>
