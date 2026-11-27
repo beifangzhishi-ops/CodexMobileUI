@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { projectSubAgentActivitySnapshot, SubAgentProofCache } from '../server/subAgentActivity.mjs';
+import { mergeActivityHistory, shouldReadSubAgentSnapshot } from '../src/subAgentLifecycle.ts';
 
 test('automatic child activity projection is bounded, identifying and omits tool outputs', () => {
   const raw = { thread: { id: 'child', name: 'Worker', turns: [{ id: 'turn', status: 'inProgress', items: [
@@ -35,4 +36,37 @@ test('child attachment proof cache uses pair identity, expires, bounds and inval
   assert.equal(proofs.has('a', 'b:c'), false);
   now = 11;
   assert.equal(proofs.has('third', 'child'), false);
+});
+
+test('terminal children get one final compact read, including before an initial snapshot and after reconnect', () => {
+  const terminal = { online: true, visible: true, terminal: true, nativeActive: false,
+    childRunning: false, hasSnapshot: false, terminalKey: 'item-2:completed', completedTerminalKey: null };
+  assert.equal(shouldReadSubAgentSnapshot(terminal), true);
+  assert.equal(shouldReadSubAgentSnapshot({ ...terminal, completedTerminalKey: terminal.terminalKey }), false);
+  assert.equal(shouldReadSubAgentSnapshot({ ...terminal, online: false }), false);
+  assert.equal(shouldReadSubAgentSnapshot({ ...terminal, online: true }), true,
+    'the same pending final read becomes eligible after reconnect');
+  assert.equal(shouldReadSubAgentSnapshot({ ...terminal, terminalKey: 'item-3:failed' }), true,
+    'a newer terminal lifecycle receives its own final read');
+});
+
+test('new native interaction wakes a terminal child; compact state never rebases full history', () => {
+  assert.equal(shouldReadSubAgentSnapshot({ online: true, visible: true, terminal: false,
+    nativeActive: true, childRunning: false, hasSnapshot: true,
+    terminalKey: 'item-4:interacted', completedTerminalKey: 'snapshot:child:completed' }), true);
+  const full = [
+    { id: 'old', ordinal: 1, kind: 'tool', title: 'run command', content: 'npm test', detail: 'full args', status: 'completed' },
+    { id: 'recent', ordinal: 99, kind: 'tool', title: 'read file', content: 'src/app.ts', detail: 'full path', status: 'inProgress' },
+  ];
+  const compact = [
+    { id: 'recent', ordinal: 2, kind: 'tool', title: 'tool', content: 'src/app.ts', status: 'completed', complete: true },
+    { id: 'new', ordinal: 3, kind: 'tool', title: 'command', content: 'npm run check' },
+  ];
+  const merged = mergeActivityHistory(full, compact);
+  assert.deepEqual(merged.map((entry) => entry.id), ['old', 'recent', 'new']);
+  assert.equal(merged[1].title, 'read file');
+  assert.equal(merged[1].content, 'src/app.ts');
+  assert.equal(merged[1].detail, 'full path');
+  assert.equal(merged[1].ordinal, 99);
+  assert.equal(merged[1].status, 'completed');
 });

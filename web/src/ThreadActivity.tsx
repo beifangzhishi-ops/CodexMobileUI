@@ -3,6 +3,7 @@ import { Check, ChevronDown, CircleX, RefreshCw } from 'lucide-react';
 import { MessageMarkdown } from './MessageMarkdown';
 import type { HostId, Message } from './types';
 import type { Snapshot } from './nativeProtocol';
+import { mergeActivityHistory, shouldReadSubAgentSnapshot } from './subAgentLifecycle';
 
 /** Public/native display text only. Keep manual expansion independent of stream updates. */
 export function ReasoningActivity({ message }: { message: Message }) {
@@ -58,10 +59,12 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
   const failureCount = useRef(0);
   const activityRef = useRef<Snapshot | null>(activity);
   activityRef.current = activity;
+  const finalReadKey = useRef<string | null>(null);
   const latestNativeStatus = group.latest.agentStatus ?? '';
+  const lifecycleKey = `${group.latest.id}:${latestNativeStatus}`;
   const nativeTerminal = ['completed', 'failed', 'interrupted'].includes(latestNativeStatus);
   const nativeActive = ['started', 'interacted'].includes(latestNativeStatus);
-  const childTerminal = Boolean(activity && !activity.running && ['completed', 'failed', 'interrupted'].includes(activity.terminalStatus ?? ''));
+  const childTerminal = Boolean(!nativeActive && activity && !activity.running && ['completed', 'failed', 'interrupted'].includes(activity.terminalStatus ?? ''));
 
   useEffect(() => {
     if (!root.current || typeof IntersectionObserver === 'undefined') return;
@@ -71,9 +74,13 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
   }, []);
 
   useEffect(() => {
-    if (!online || !visible || nativeTerminal || childTerminal || !(nativeActive || activityRef.current?.running)) return;
+    if (!online || !visible) return;
+    const terminal = nativeTerminal || childTerminal;
+    const terminalKey = nativeTerminal ? lifecycleKey : `snapshot:${group.childId}:${activityRef.current?.terminalStatus ?? ''}`;
+    if (!shouldReadSubAgentSnapshot({ online, visible, terminal, nativeActive,
+      childRunning: activityRef.current?.running === true, hasSnapshot: activityRef.current !== null,
+      terminalKey, completedTerminalKey: finalReadKey.current })) return;
     let current = true, timer = 0;
-    failureCount.current = 0;
     const schedule = (delay: number) => { timer = window.setTimeout(load, delay); };
     const load = async () => {
       if (inFlight.current) { schedule(250); return; }
@@ -90,7 +97,9 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
         setLastObservedAt(Date.now());
         onActivityChange?.(hostId, parentId, group.childId, signature);
         const nextTerminal = !next.running && ['completed', 'failed', 'interrupted'].includes(next.terminalStatus ?? '');
-        if (!nativeTerminal && !nextTerminal && (nativeActive || next.running)) schedule(2500);
+        if (terminal) finalReadKey.current = terminalKey;
+        else if (nextTerminal && !nativeActive) finalReadKey.current = `snapshot:${group.childId}:${next.terminalStatus ?? ''}`;
+        if (!terminal && !nativeTerminal && (nativeActive || (!nextTerminal && next.running))) schedule(2500);
       } catch {
         if (!current) return;
         setError(true);
@@ -103,7 +112,7 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
     };
     void load();
     return () => { current = false; window.clearTimeout(timer); };
-  }, [hostId, parentId, group.childId, nativeTerminal, nativeActive, childTerminal, online, visible, readActivity, onActivityChange]);
+  }, [hostId, parentId, group.childId, lifecycleKey, nativeTerminal, nativeActive, childTerminal, online, visible, readActivity, onActivityChange]);
 
   useEffect(() => () => onActivityChange?.(hostId, parentId, group.childId, null),
     [hostId, parentId, group.childId, onActivityChange]);
@@ -116,8 +125,8 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
     finally { setHistoryBusy(false); }
   }
 
-  const terminalStatus = nativeTerminal ? latestNativeStatus : activity?.terminalStatus;
-  const running = online && !nativeTerminal && (activity?.running === true || !activity && nativeActive && !error);
+  const terminalStatus = nativeTerminal ? latestNativeStatus : !nativeActive ? activity?.terminalStatus : undefined;
+  const running = online && !nativeTerminal && !error && (nativeActive || activity?.running === true);
   useEffect(() => {
     if (!running || !online) return;
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
@@ -139,31 +148,32 @@ export function SubAgentActivityFeed({ hostId, parentId, group, online, readActi
       {running ? <span className="activity-spinner"/> : ['failed', 'interrupted'].includes(terminalStatus ?? '')
         ? <CircleX size={15}/> : terminalStatus === 'completed' ? <Check size={15}/> : <RefreshCw size={14}/>}
       <strong>{name}</strong><span className={'subagent-lifecycle' + (terminalStatus === 'failed' ? ' is-failed' : '')}>{lifecycle}{age}</span>
-      {group.records.length > 1 && <span className="subagent-record-count">{group.records.length} 条原生记录</span>}
       <ChevronDown size={15} className={expanded ? 'expanded' : ''}/>
     </button>
     {metadata && <div className="subagent-metadata">{metadata}</div>}
     {shown.length > 0 && <div className="subagent-history">
-      {shown.map((entry) => <SubAgentEntry key={entry.id} entry={entry} full={showHistory} online={online}/>) }
+      {shown.map((entry) => <SubAgentEntry key={entry.id} entry={entry} full={showHistory}
+        online={online && !error && !nativeTerminal && !childTerminal}/>) }
     </div>}
     {expanded && <div className="subagent-feed-actions">
       {showHistory
-        ? <button type="button" className="subagent-read" onClick={() => setShowHistory(false)}>收起完整历史</button>
+        ? <><button type="button" className="subagent-read" disabled={historyBusy} onClick={() => void refreshFullHistory()}>
+          {historyBusy ? <span className="activity-spinner"/> : <RefreshCw size={13}/>}刷新完整历史</button>
+          <button type="button" className="subagent-read" onClick={() => setShowHistory(false)}>收起完整历史</button></>
         : <button type="button" className="subagent-read" disabled={historyBusy} onClick={() => void openFullHistory()}>
           {historyBusy ? <span className="activity-spinner"/> : <RefreshCw size={13}/>}展开完整活动历史</button>}
       {error && <span className="subagent-sync" role="status">连接恢复后重试同步</span>}
     </div>}
-    {!shown.length && <p className="subagent-empty">{online ? '正在同步子 Agent 活动…' : '连接恢复后同步子 Agent 活动'}</p>}
+    {!shown.length && <p className="subagent-empty">{terminalStatus ? '暂无可用活动记录' : online ? '正在同步子 Agent 活动…' : '连接恢复后同步子 Agent 活动'}</p>}
   </section>;
-}
 
-function mergeActivityHistory(history: Message[], activity: Message[]) {
-  const merged = new Map(history.map((message) => [message.id, message]));
-  for (const update of activity) {
-    const old = merged.get(update.id);
-    merged.set(update.id, old ? { ...old, ...update, detail: old.detail } : update);
+  async function refreshFullHistory() {
+    if (historyBusy) return;
+    setHistoryBusy(true); setError(false);
+    try { setHistory(await readHistory(hostId, parentId, group.childId)); }
+    catch { setError(true); }
+    finally { setHistoryBusy(false); }
   }
-  return [...merged.values()].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
 }
 
 function SubAgentEntry({ entry, full, online }: { entry: Message; full: boolean; online: boolean }) {
