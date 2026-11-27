@@ -176,10 +176,29 @@ try {
     await waitUntil(async () => (await status()).includes('运行中'), 'active child activity');
     assert.equal(await activityPage.evaluate(`document.querySelector('[data-testid="parent-turn"] .subagent-feed') !== null`), true,
       'activity feed must render inside the current parent turn');
+    assert.equal(await activityPage.evaluate(`document.querySelector('.subagent-history') === null`), true, 'child starts collapsed');
+    await click(activityPage, '.subagent-feed-toggle');
+    await activityPage.evaluate('window.fixture.emitActivity(30)');
+    const bottom = () => activityPage.evaluate(`(() => { const el = document.querySelector('.subagent-history'); return el && el.scrollHeight - el.clientHeight - el.scrollTop <= 2; })()`);
+    await waitUntil(() => activityPage.evaluate(`document.querySelector('.subagent-history-content')?.textContent.includes('live activity 30')`), 'native child activity appended');
+    await waitUntil(bottom, 'child auto follows latest');
+    await activityPage.evaluate(`document.querySelector('.subagent-history').scrollTop = 0`);
+    await waitUntil(() => activityPage.evaluate(`document.querySelector('.subagent-jump-latest') !== null`), 'jump shown when reading older child activity');
+    await activityPage.evaluate('window.fixture.emitActivity(1)');
+    await waitUntil(() => activityPage.evaluate(`document.querySelector('.subagent-history-content')?.textContent.includes('live activity 31')`), 'child keeps streaming while scrolled up');
+    assert.equal(await activityPage.evaluate(`document.querySelector('.subagent-history').scrollTop`), 0);
+    await click(activityPage, '.subagent-jump-latest');
+    await waitUntil(bottom, 'child jump resumes following');
+    assert.equal(await activityPage.evaluate('window.fixture.collapseCount'), 0, 'initial collapsed state and opening do not jump outer chat');
+    await click(activityPage, '.subagent-feed-toggle');
+    await waitUntil(() => activityPage.evaluate('window.fixture.collapseCount === 1 && !document.querySelector(".subagent-history")'), 'closing requests outer chat follow after collapse');
+    await click(activityPage, '.subagent-feed-toggle');
     await activityPage.evaluate('window.fixture.newInteraction()');
     await waitUntil(async () => await activityPage.evaluate(`document.querySelector('[data-testid="parent-turn"]')?.dataset.parentTurn === 'parent-turn-2'`),
       'parent turn advances');
     await waitUntil(async () => (await status()).includes('运行中'), 'new child interaction wakes activity', 9000);
+    if (await activityPage.evaluate(`document.querySelector('.subagent-feed-toggle')?.getAttribute('aria-expanded') === 'false'`))
+      await click(activityPage, '.subagent-feed-toggle');
     assert.equal(await activityPage.evaluate(`document.querySelector('[data-testid="parent-turn"] .subagent-feed') !== null && document.querySelector('[data-testid="parent-turn"] .subagent-feed').closest('.parent-turn')?.dataset.parentTurn === 'parent-turn-2'`), true,
       'new interaction is anchored in the current parent turn');
     const activityReads = await activityPage.evaluate('window.fixture.activityReads');

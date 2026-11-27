@@ -130,7 +130,8 @@ export function SideChatPanel({ source, live, pathHosts, drafts, setDraft, onClo
           return <article key={group.childId} className="side-message side-assistant side-subagent-activity">
             <SubAgentActivityFeed hostId={hostId} parentId={side?.id ?? sourceId} group={group} online={online}
               readActivity={live.readSubAgentActivity} readHistory={live.readSubAgent}
-              onActivityChange={live.reportAgentActivity}/>
+              onActivityChange={live.reportAgentActivity} subscribeNotices={live.subscribeSubAgentNotices}
+              onCollapse={follow.resumeToLatest}/>
           </article>;
         }
         return <article key={message.id} className={'side-message side-' + message.role}>

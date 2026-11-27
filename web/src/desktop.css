@@ -422,6 +422,11 @@ button:hover { transition: background-color 100ms; }
 .subagent-feed-toggle strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 600; }
 .subagent-feed-toggle > svg:last-child { flex: none; margin-left: auto; color: var(--muted); transition: transform 160ms; }
 .subagent-feed-toggle > svg:last-child.expanded { transform: rotate(180deg); }
+.subagent-feed:not(.is-expanded) { width: 100%; padding: 0; border: 0; border-radius: 0; gap: 0; background: transparent; }
+.subagent-feed:not(.is-expanded) .subagent-feed-toggle { min-height: 27px; padding: 3px 4px; gap: 8px; color: var(--muted); }
+.subagent-feed:not(.is-expanded) .subagent-feed-toggle:hover { background: var(--selected); border-radius: 6px; }
+.subagent-feed:not(.is-expanded) .subagent-feed-toggle strong { flex: 1; color: var(--muted); font-weight: 400; font: 12px/1.5 'Cascadia Code', Consolas, monospace; }
+.subagent-feed:not(.is-expanded) .subagent-feed-toggle > svg:last-child { margin-left: 0; }
 .subagent-lifecycle { flex: none; color: var(--muted); font-size: 11px; }
 .subagent-lifecycle.is-failed { color: #e9877a; }
 .subagent-metadata { padding-left: 23px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
@@ -430,7 +435,12 @@ button:hover { transition: background-color 100ms; }
 .subagent-read { display: flex; align-items: center; gap: 6px; width: fit-content; padding: 6px 9px; border-radius: 7px; color: var(--soft); font-size: 12px; }
 .subagent-read:hover { background: var(--surface); }
 .subagent-feed-actions { display: flex; align-items: center; gap: 8px; }
-.subagent-history { display: grid; gap: 7px; max-height: 440px; overflow: auto; overscroll-behavior: contain; font-size: 12px; padding: 8px; border: 1px solid var(--stroke); border-radius: 8px; }
+.subagent-history-wrap { position: relative; min-width: 0; }
+.subagent-history { max-height: 440px; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; font-size: 12px; padding: 8px; border: 1px solid var(--stroke); border-radius: 8px; }
+.subagent-history:has(.subagent-history-content:empty) { border: 0; padding: 0; }
+.subagent-history-content { display: grid; gap: 7px; min-width: 0; }
+.subagent-jump-latest { position: absolute; bottom: 10px; right: 12px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; color: var(--text); background: var(--surface); border: 1px solid var(--stroke); box-shadow: 0 2px 8px #0003; }
+.subagent-jump-latest:hover { background: var(--selected); }
 .subagent-entry { min-width: 0; overflow-wrap: anywhere; display: flex; gap: 8px; align-items: flex-start; }
 .subagent-entry-icon { flex: none; display: grid; place-items: center; width: 16px; height: 17px; color: var(--muted); }
 .subagent-entry-icon .activity-spinner { width: 13px; height: 13px; }

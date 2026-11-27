@@ -3,7 +3,32 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { projectSubAgentActivitySnapshot, SubAgentProofCache } from '../server/subAgentActivity.mjs';
-import { groupSubAgentActivity, mergeActivityHistory, reconcileSubAgentTurn, shouldReadSubAgentSnapshot } from '../src/subAgentLifecycle.ts';
+import { applySubAgentLiveNotice, mergeSubAgentLiveActivity, groupSubAgentActivity, mergeActivityHistory, reconcileSubAgentTurn, shouldReadSubAgentSnapshot } from '../src/subAgentLifecycle.ts';
+
+test('native child tool events update before the next persisted read and survive a stale snapshot', () => {
+  const base = { messages: [], running: true, activeTurnId: 'child-turn', latestTurnId: 'child-turn', runningSinceMs: null };
+  const notice = (method, item) => ({ method, params: { turnId: 'child-turn', item } });
+  let live = applySubAgentLiveNotice([], notice('item/started', { id: 'tool', type: 'commandExecution', command: 'npm test', status: 'inProgress' }));
+  assert.equal(mergeSubAgentLiveActivity(base, live).messages[0].complete, false);
+  live = applySubAgentLiveNotice(live, notice('item/completed', { id: 'tool', type: 'commandExecution', command: 'npm test', status: 'completed', aggregatedOutput: 'private output' }));
+  const merged = mergeSubAgentLiveActivity(base, live);
+  assert.equal(merged.messages[0].complete, true);
+  assert.equal(merged.messages[0].content, 'npm test');
+  assert.equal(merged.messages[0].detail, undefined);
+  assert.equal(mergeSubAgentLiveActivity({ ...base, latestTurnId: 'other-turn' }, live).messages.length, 0);
+  assert.equal(applySubAgentLiveNotice(live, { method: 'item/commandExecution/outputDelta', params: {} }), live);
+});
+
+test('compact fallback carries native summaries and plans but not raw reasoning', () => {
+  const raw = { thread: { id: 'child', turns: [{ id: 'turn', items: [
+    { id: 'reason', type: 'reasoning', summary: ['native summary'], content: ['raw reasoning'] },
+    { id: 'plan', type: 'plan', text: 'native plan' },
+  ] }] } };
+  const projected = JSON.stringify(projectSubAgentActivitySnapshot(raw, 'child'));
+  assert.match(projected, /native summary/);
+  assert.match(projected, /native plan/);
+  assert.doesNotMatch(projected, /raw reasoning/);
+});
 
 test('automatic child activity projection is bounded, identifying and omits tool outputs', () => {
   const raw = { thread: { id: 'child', name: 'Worker', turns: [{ id: 'turn', status: 'inProgress', items: [
@@ -19,8 +44,9 @@ test('automatic child activity projection is bounded, identifying and omits tool
   assert.match(serialized, /npm test/);
   assert.match(serialized, /catalog/);
   assert.match(serialized, /C:\/repo\/file\.ts/);
-  assert.doesNotMatch(serialized, /secret raw output|never send|private diff|prose excluded/);
-  assert.equal(projected.thread.turns[0].items.length, 3);
+  assert.doesNotMatch(serialized, /secret raw output|never send|private diff/);
+  assert.match(serialized, /prose excluded from live preview/);
+  assert.equal(projected.thread.turns[0].items.length, 4);
   assert.throws(() => projectSubAgentActivitySnapshot(raw, 'other'), /AGENT_NOT_FOUND/);
 });
 

@@ -41,6 +41,18 @@ export function projectSubAgentActivitySnapshot(raw, expectedThreadId) {
       if (remaining <= 0) break;
       let value;
       switch (item?.type) {
+        case 'agentMessage':
+          value = { text: bounded(typeof item.text === 'string' ? item.text :
+            Array.isArray(item.content) ? item.content.filter((part) => part?.type === 'text')
+              .map((part) => part.text).filter((part) => typeof part === 'string').join('\n') : '', 1500) };
+          if (!value.text) continue;
+          break;
+        case 'reasoning':
+          value = { summary: (Array.isArray(item.summary) ? item.summary : [item.summary]).slice(0, 8)
+            .map((part) => bounded(typeof part === 'string' ? part : part?.text, 1500)).filter(Boolean) };
+          if (!value.summary.length) continue;
+          break;
+        case 'plan': value = { text: bounded(item.text, 1500) }; break;
         case 'commandExecution':
           value = { command: bounded(item.command), exitCode: item.exitCode };
           break;

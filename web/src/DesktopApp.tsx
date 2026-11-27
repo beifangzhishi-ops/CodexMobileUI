@@ -512,7 +512,7 @@ export default function DesktopApp() {
   const compacting = compactionBusy(compactPhase);
   const displayedGoal = active ? activeGoal?.objective ?? '' : goal;
   const isRunning = active?.running === true;
-  const { scrollerRef, contentRef, showJump, onScroll: onMessageScroll, jumpToLatest } =
+  const { scrollerRef, contentRef, showJump, onScroll: onMessageScroll, jumpToLatest, resumeToLatest } =
     useFollowLatest(view === 'chat' && active ? conversationKey(active.hostId, active.id) : null,
       active?.messages, visibleLocalSubmissions, isRunning, live.agentActivityRevision);
   useEffect(() => { setPublicationTarget(null); }, [active?.hostId, active?.id]);
@@ -1913,12 +1913,13 @@ export default function DesktopApp() {
               if (message.activityType === 'subAgentActivity' && message.agentThreadId) {
                 const group = subAgentRows.get(message.agentThreadId);
                 if (!group || group.first.id !== message.id) return null;
-                return <article key={group.childId} className="message message-assistant message-subagent-activity"
+                return <article key={group.childId} className="message message-assistant message-command-activity message-subagent-activity"
                   data-context-kind="message" data-message-index={index} data-context-host={active.hostId}
                   data-context-id={message.id}>
                   <SubAgentActivityFeed hostId={active.hostId} parentId={active.id} group={group}
                     online={live.status[active.hostId] === 'online'} readActivity={live.readSubAgentActivity}
-                    readHistory={live.readSubAgent} onActivityChange={live.reportAgentActivity}/>
+                    readHistory={live.readSubAgent} onActivityChange={live.reportAgentActivity}
+                    subscribeNotices={live.subscribeSubAgentNotices} onCollapse={resumeToLatest}/>
                 </article>;
               }
               const turn = message.turnId ? turnActions.get(message.turnId) : undefined;
