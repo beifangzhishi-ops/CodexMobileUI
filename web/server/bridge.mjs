@@ -122,7 +122,8 @@ async function requestLocalGateway(method, params) {
       handshakeTimeout: 10000, perMessageDeflate: false,
     });
     let settled = false;
-    const needsNativeRead = ['workspace/publication/publish', 'workspace/visualize/read'].includes(method);
+    const needsNativeRead = ['workspace/publication/publish', 'workspace/visualize/read'].includes(method) ||
+      (['workspace/hostFileRead', 'workspace/hostFileWrite'].includes(method) && params?.kind === 'projectRules');
     let phase = 'connecting';
     const finish = (error, result) => {
       if (settled) return;

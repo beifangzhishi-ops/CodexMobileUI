@@ -125,7 +125,29 @@ test('isolated Coordinator and peer Agent validate thread settings against nativ
   ];
   const nativeServers = hostFixtures.map((host) => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: host.port });
-    server.on('connection', (socket) => {
+    server.on('connection', (socket, request) => {
+      if (request.url.startsWith('/connect?')) {
+        let initialized = false;
+        let initializeSeen = false;
+        socket.on('message', (data) => {
+          const message = JSON.parse(String(data));
+          if (message.type === 'connect') {
+            socket.send(JSON.stringify({ type: 'ready' }));
+          } else if (message.method === 'initialize') {
+            initializeSeen = message.params?.capabilities?.experimentalApi === true;
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
+          } else if (message.method === 'initialized') {
+            initialized = initializeSeen;
+          } else if (['workspace/hostFileRead', 'workspace/hostFileWrite'].includes(message.method)) {
+            const result = { kind: message.params.kind, text: host.hostId, initialized };
+            const error = { code: -32602, message: 'NATIVE_NOT_INITIALIZED' };
+            socket.send(JSON.stringify({ id: message.id, ...(
+              message.params.kind === 'projectRules' && !initialized ? { error } : { result }
+            ) }));
+          }
+        });
+        return;
+      }
       socket.send(JSON.stringify({ type: 'ready' }));
       socket.on('message', (data) => {
         const message = JSON.parse(String(data));
@@ -174,7 +196,7 @@ test('isolated Coordinator and peer Agent validate thread settings against nativ
     '  const index = args.findIndex((arg) => arg && typeof arg === "object" && !Array.isArray(arg));',
     '  if (index >= 0) {',
     '    const options = { ...args[index] };',
-    '    if (Number(options.port) === 45891) { options.port = Number(process.env.CODEX_BRIDGE_TEST_NATIVE_PORT); options.host = "127.0.0.1"; }',
+    '    if ([45891, 48889].includes(Number(options.port))) { options.port = Number(process.env.CODEX_BRIDGE_TEST_NATIVE_PORT); options.host = "127.0.0.1"; }',
     '    if (Number(options.port) === 4191 && Number(process.env.CODEX_BRIDGE_TEST_AGENT_PORT)) { options.port = Number(process.env.CODEX_BRIDGE_TEST_AGENT_PORT); options.host = "127.0.0.1"; }',
     '    args[index] = options;',
     '  }',
@@ -196,6 +218,7 @@ test('isolated Coordinator and peer Agent validate thread settings against nativ
     origin, peerUrl: 'ws://100.96.30.32:4191/peer',
   }));
   await writeFile(resolve(agentState, 'web-peer-token'), credential);
+  await cp(resolve(state, 'mobile-tailnet-hosts.json'), resolve(agentState, 'mobile-tailnet-hosts.json'));
 
   let coordinator;
   let agent;
@@ -215,6 +238,20 @@ test('isolated Coordinator and peer Agent validate thread settings against nativ
       const socket = await openBridge(coordinatorPort, hostId);
       sockets.push(socket);
       let id = hostId === '6v' ? 101 : 201;
+      const globalRules = await call(socket, id++, 'web/hostFile', {
+        method: 'workspace/hostFileRead', params: { kind: 'globalRules' },
+      });
+      assert.deepEqual(globalRules.result, { kind: 'globalRules', text: hostId, initialized: false });
+      const projectSelection = { kind: 'projectRules', projectId: 'fixture-project', rootIndex: 0 };
+      const projectRules = await call(socket, id++, 'web/hostFile', {
+        method: 'workspace/hostFileRead', params: projectSelection,
+      });
+      assert.deepEqual(projectRules.result, { kind: 'projectRules', text: hostId, initialized: true });
+      const savedRules = await call(socket, id++, 'web/hostFile', {
+        method: 'workspace/hostFileWrite', params: { ...projectSelection,
+          text: '# fixture', revision: 'missing', filename: 'AGENTS.md' },
+      });
+      assert.deepEqual(savedRules.result, { kind: 'projectRules', text: hostId, initialized: true });
       const model = await call(socket, id++, 'thread/settings/update', {
         threadId: nativeHost.threadId, model: 'gpt-6-luna', effort: 'medium',
       });
