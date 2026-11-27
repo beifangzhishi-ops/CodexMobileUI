@@ -1080,12 +1080,86 @@ test('native interrupt failures are bounded and remain visibly failed without cl
       await waitFor(() => guard.status().interrupts.some((item) =>
         item.turnId === turnId && item.state === 'failed'), 'bounded interrupt failure');
       assert.equal(interrupts, 3);
+      assert.equal(guard.status().interrupts.find((item) => item.turnId === turnId)?.reason,
+        'NATIVE_RPC_FAILED');
       assert.equal(guard.status().triggers.length, 1);
+      assert.equal(guard.admission().reason, 'QUOTA_GUARD_BLOCKED');
+      for (const socket of sockets) socket.send(JSON.stringify({ method: 'turn/completed',
+        params: { threadId, turn: { id: turnId, status: 'interrupted' } } }));
+      await waitFor(() => guard.status().interrupts.some((item) =>
+        item.turnId === turnId && item.state === 'confirmed'), 'late terminal event repairs failure');
       assert.equal(guard.admission().reason, 'QUOTA_GUARD_BLOCKED');
     } finally { guard.close(); }
   } finally {
     for (const socket of sockets) socket.terminate();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('persisted interrupt failures reconcile exact paginated terminal turns without clearing unknowns', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-reconcile-'));
+  const threadId = '019b0000-0000-7000-8000-000000000031';
+  const turnId = '019b0000-0000-7000-8000-000000000032';
+  const missingId = '019b0000-0000-7000-8000-000000000033';
+  const activeId = '019b0000-0000-7000-8000-000000000034';
+  let activeStatus = 'inProgress';
+  let interrupts = 0;
+  let historyReads = 0;
+  const native = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    native.once('listening', resolve);
+    native.once('error', reject);
+  });
+  native.on('connection', (socket) => socket.on('message', (bytes) => {
+    const frame = JSON.parse(bytes.toString()) as {
+      id?: number; method?: string; params?: Record<string, unknown>;
+    };
+    if (!frame.id || !frame.method) return;
+    let result: unknown = {};
+    if (frame.method === 'account/rateLimits/read') result = snapshot({ codex: {
+      limitId: 'codex', primary: nativeWindow(99, 300), secondary: null,
+    } });
+    else if (frame.method === 'thread/loaded/list') result = { data: [], nextCursor: null };
+    else if (frame.method === 'thread/turns/list') {
+      historyReads++;
+      assert.equal(frame.params?.threadId, threadId);
+      result = frame.params?.cursor === 'older'
+        ? { data: [{ id: turnId, status: 'interrupted' }], nextCursor: null }
+        : { data: [{ id: activeId, status: activeStatus }], nextCursor: 'older' };
+    } else if (frame.method === 'turn/interrupt') {
+      assert.equal(frame.params?.turnId, activeId);
+      interrupts++;
+      activeStatus = 'interrupted';
+    }
+    socket.send(JSON.stringify({ id: frame.id, result }));
+  }));
+  const address = native.address();
+  if (!address || typeof address === 'string') throw Error('No native test port');
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    await store.setEnabled(true, 0);
+    const now = Date.now();
+    store.writeRuntimeSync({ ...runtimeFor('6v', { now }), enabled: true,
+      interrupts: [turnId, missingId, activeId].map((id) => ({ threadId, turnId: id,
+        state: 'failed' as const, attempts: 3, requestedAt: now, confirmedAt: null,
+        reason: 'NATIVE_OFFLINE' })) });
+    store.writePeerRuntimeSync(runtimeFor('noha', { now }), 'noha', now);
+    const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
+      '6v', { pollMs: 100, retryDelaysMs: [500, 500, 500] });
+    try {
+      guard.start();
+      const state = (id: string) => guard.status().interrupts.find((item) => item.turnId === id)?.state;
+      await waitFor(() => state(turnId) === 'confirmed', 'persisted terminal history');
+      await waitFor(() => state(activeId) === 'confirmed', 'active turn retry and polling reconciliation');
+      assert.equal(state(missingId), 'failed', 'missing history does not prove termination');
+      assert.equal(interrupts, 1, 'only a verified active turn is retried');
+      assert.ok(historyReads >= 4, 'reads additional pages and periodically reconciles');
+      assert.equal(guard.admission().reason, 'QUOTA_GUARD_BLOCKED');
+    } finally { guard.close(); }
+  } finally {
+    for (const socket of native.clients) socket.terminate();
+    await new Promise<void>((resolve) => native.close(() => resolve()));
     rmSync(directory, { recursive: true, force: true });
   }
 });
