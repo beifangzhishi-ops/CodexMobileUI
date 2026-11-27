@@ -37,8 +37,7 @@ of SMB mapping.
 The 3% shared quota guard still uses the existing 6v/noha two-host protocol.
 The Coordinator rejects additional-peer model work while the guard is enabled
 and rejects enabling that guard on an expanded roster. Do not treat this as
-multi-host quota monitoring. Android background notification routing and the
-native Electron Explorer/SMB helper still recognize the original two hosts;
+multi-host quota monitoring. Android background notification routing still recognizes the original two hosts;
 the shared Web UI and private snapshot transfers use dynamic routing. Adding
 a physical third host requires verifying these native features and the
 independent Gateway setup before broad rollout.

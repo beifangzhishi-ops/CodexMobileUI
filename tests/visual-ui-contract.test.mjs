@@ -177,7 +177,7 @@ test('canonical assistant links preserve native Markdown and use opaque publicat
   assert.match(read('web/package.json'), /pdfjs-dist/);
   assert.match(preview, /复制私有链接/);
   assert.match(preview, /保存到系统/);
-  assert.match(preview, /在资源管理器中定位/);
+  assert.doesNotMatch(preview, /在资源管理器中定位/);
 });
 
 test('desktop sidebar resize and native fork controls follow the shared visual tools', () => {

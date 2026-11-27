@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { validHostId, type Conversation, type Host, type HostId, type Message } from './types';
+import { type Conversation, type Host, type HostId, type Message } from './types';
 import { fetchHosts } from './hostRegistry';
 import {
   applyNotice, obj, parseGoal, parseModels, parsePermissions, parseProjects, parseQueue,
@@ -20,7 +20,6 @@ import { desktopFileMessage } from '../../shared/desktopFileReferences';
 import { uploadDocument } from './documentUpload';
 import { hasAbsolutePaths, type PathHosts } from './pathHosts';
 import { displayOriginalPaths, readPathOverlays, storePathOverlay, type PathChange } from './pathOverlays';
-import { desktopBridge } from './desktopBridge';
 import {
   permissionFingerprint, readCustomPermission, resolveResumedPermission, storeCustomPermission,
 } from './permissionPreference';
@@ -728,25 +727,6 @@ export function useLiveCodex() {
     for (const file of documents) {
       if (options.signal?.aborted) throw Error('UPLOAD_CANCELLED');
       const base = uploadedBytes;
-      const native = desktopBridge();
-      if (native?.filePath && options.pathHosts) {
-        let path = '';
-        try { path = native.filePath(file); } catch { /* Browser File lacks a native path. */ }
-        if (/^[A-Za-z]:[\\/]/.test(path)) {
-          const localHost = await native.localHost?.().catch(() => null);
-          if (validHostId(localHost)) {
-            const resolved = obj(await request(hostId, 'web/pathFile', {
-              path, sourceHost: localHost, hosts: options.pathHosts,
-            }).catch(() => null));
-            if (typeof resolved.path === 'string' && resolved.path) {
-              uploadedDocuments.push({ name: file.name, path: resolved.path });
-              uploadedBytes += file.size;
-              options.onUploadProgress?.(uploadedBytes, totalBytes);
-              continue;
-            }
-          }
-        }
-      }
       uploadedDocuments.push(await uploadDocument(hostId, file, request,
         options.signal, (received) => options.onUploadProgress?.(base + received, totalBytes)));
       uploadedBytes += file.size;

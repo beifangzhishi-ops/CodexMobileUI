@@ -8,7 +8,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { createImageStore, isValidImageRpc } from './imageStore.mjs';
 import { validDocumentUploadRpc, documentUploadGatewayMethod } from './attachmentProtocol.mjs';
 import { webContentSecurityPolicy } from './securityPolicy.mjs';
-import { resolveSelectedFile, resolveUserTextDetailed, validatePathHosts } from './pathResolver.mjs';
+import { resolveUserTextDetailed, validatePathHosts } from './pathResolver.mjs';
 import { PathSettingsStore } from './pathSettings.mjs';
 import { PathOverlayStore } from './pathOverlays.mjs';
 import { respondLocalIdentity } from './localIdentity.mjs';
@@ -688,13 +688,6 @@ function allowedFrame(msg) {
     p.text.length <= 12000 && p.hosts && typeof p.hosts === 'object' &&
     !Array.isArray(p.hosts) && JSON.stringify(p.hosts).length <= 4096 &&
     (() => { try { const hosts = validatePathHosts(p.hosts); return !coordinator || Object.keys(hosts).every(isKnownHost); } catch { return false; } })();
-  if (msg.method === 'web/pathFile') return subset(p, ['path', 'sourceHost', 'hosts']) &&
-    Object.keys(p).length === 3 && typeof p.path === 'string' &&
-    p.path.length <= 2048 && typeof p.sourceHost === 'string' &&
-    (coordinator ? isKnownHost(p.sourceHost) : (p.sourceHost === localHostId || Object.hasOwn(p.hosts ?? {}, p.sourceHost))) &&
-    p.hosts && typeof p.hosts === 'object' && !Array.isArray(p.hosts) &&
-    JSON.stringify(p.hosts).length <= 4096 &&
-    (() => { try { const hosts = validatePathHosts(p.hosts); return !coordinator || Object.keys(hosts).every(isKnownHost); } catch { return false; } })();
   if (msg.method === 'web/automation') {
     return subset(p, ['method', 'params']) && Object.keys(p).length === 2 &&
       automationMethods.has(p.method) && p.params && typeof p.params === 'object' &&
@@ -1136,11 +1129,6 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: {
           code: -32602, message: 'PATH_RESOLVE_FAILED',
         } })));
-    } else if (msg.method === 'web/pathFile' && !remotePeer) {
-      void resolveSelectedFile(msg.params.path, msg.params.sourceHost,
-        targetHostId, validatePathHosts(msg.params.hosts))
-        .then((path) => safeSend(JSON.stringify({ id: msg.id, result: { path } })))
-        .catch(() => safeSend(JSON.stringify({ id: msg.id, result: { path: null } })));
     } else if (msg.method === 'web/publication' && !remotePeer) {
       void requestLocalGateway(msg.params.method, msg.params.params)
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))

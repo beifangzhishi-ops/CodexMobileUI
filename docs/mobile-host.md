@@ -36,8 +36,7 @@ The 6v Coordinator serves same-origin private preview/download URLs containing
 only a host and opaque 64-hex snapshot ID. The endpoint supports HEAD and one
 byte range, streams through the owning host Gateway, sends no-store/no-referrer
 headers, and verifies the completed snapshot before each read. The browser
-copies this private URL when no inline preview applies; Electron reveals the
-host path in Explorer; Android writes bounded chunks into its own storage and
+copies this private URL when no inline preview applies; Android writes bounded chunks into its own storage and
 copies to a folder selected in the system file picker under the original filename.
 
 Text preview is capped at 256 KiB and preserves whitespace. Images, audio,

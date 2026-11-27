@@ -11,27 +11,18 @@ Origin and only over loopback. The web CSP allows precisely those two local
 HTTP endpoints; both support Chromium private-network preflights. If exactly
 one response matches, the browser uses that computer for local-vs-UNC display
 path conversion. Otherwise the browser retains a manual choice, if any, or
-leaves paths unchanged; it must never silently default to 6v. Electron uses
-its native OS hostname detection instead. Android does not need a Windows
+leaves paths unchanged; it must never silently default to 6v. Android does not need a Windows
 identity; unrecognized devices do not guess one.
 
 This is deployed with the existing web static build and both loopback Web
 Bridge processes. noha's host-only bundle must copy `localIdentity.mjs` as
-`scripts/localIdentity.mjs` beside `scripts/web-bridge.mjs`. No EXE or APK
+`scripts/localIdentity.mjs` beside `scripts/web-bridge.mjs`. No APK
 rebuild is required for this shared-web-only change. Verified in actual
 headless Edge browsers on both 6v and noha after the 2026-11-23 deployment.
 
-## Windows desktop shell (first implementation)
+## Windows client delivery (retired 2026-11-27)
 
-`desktop/` adds an Electron Windows client to the existing unified UI.
-It loads only the private 6v Coordinator and never embeds a second Gateway,
-Codex App Server, browser chat implementation or native conversation store.
-Per-computer origin/host/IP/share settings and window geometry live in the
-Electron userData folder. The renderer has no Node integration and runs with
-context isolation and a Chromium sandbox. Origin-bound IPC exposes only
-reveal-in-Explorer for validated local/remote drive paths; it never accepts an
-arbitrary path or exposes a general file read.
-6v/noha Host-only gateway deployments remain unchanged; see `desktop/README.md`.
+The standalone Electron/EXE client is retired. Windows uses the browser; Android uses the shared WebView. The Windows host services and official Codex runtime remain supported.
 
 ## 单一 UI
 
@@ -98,8 +89,7 @@ download/preview 模式，提供 HEAD、单段 Range、无存储缓存和 MIME �
 HTML/SVG 预览同时由 sandboxed iframe 和外层
 `sandbox; default-src 'none'` CSP 隔离，脚本、表单和远程资源不可执行。
 Android 只消费服务端 ID，由 `src/core/nativePublicationDownload.ts` 保存到
-自己的目录并调用系统保存/分享；浏览器复制私有 URL；Electron 定位原始主机
-文件。三者都不取得任意主机文件读取能力。
+自己的目录并调用系统保存/分享；浏览器复制私有 URL。两端都不取得任意主机文件读取能力。
 
 ## 发布与验证
 
@@ -117,9 +107,7 @@ Android ARM64 安装包通过稳定构建脚本、版本与包 ID、内置 JS、
   `web/pathResolve`。请求经过现有 WebSocket 白名单；目标主机通过 Node
   受限的 stat/access 验证本机和远程 SMB 候选，唯一匹配才变换。
   相同绝对路径同时存在于两台主机则禁止自动选择，用户需提供明确 UNC。
-- Electron 文件选择优先 `webUtils.getPathForFile` 取得本机原始位置，
-  `web/pathFile` 在目标主机核验可读后直接使用原生 Desktop 文件引用格式；
-  不能读取的文件回落到现有二进制上传。其他平台不假定浏览器 File 含真实路径。
+- 浏览器和 Android 文件选择使用受限上传流程；用户输入的绝对路径仍通过跨主机路径解析。
 - 助手回复只在原有显式文件链接显示上投影本机/UNC 路径；普通文本、代码及
   Codex 原生输出均保持不变。手机沿用原始链接拥有者的文件下载服务。
 - 6v `.state/file-path-overlays.json` 仅存 user turn 与路径替换对，浏览器

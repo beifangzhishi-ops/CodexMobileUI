@@ -1,11 +1,11 @@
 # CodexMobileUI
 
-An unofficial, self-hosted client for the Codex App Server on Windows, Android and the web. It shares one React chat interface across all three clients and uses each host's existing Codex projects, conversations and model access.
+An unofficial, self-hosted client for the Codex App Server on Android and the web, with Windows hosts. It shares one React chat interface across both clients and uses each host's existing Codex projects, conversations and model access.
 
 ## Overview
 
 The Web Coordinator supports a private configuration-driven host roster. The
-browser, Android WebView and Electron renderer discover stable host IDs and
+browser and Android WebView discover stable host IDs and
 labels through the same-origin /api/hosts endpoint; publication requests and
 previews are routed to the owning host, not to the Coordinator's own Gateway.
 See [multi-host configuration](docs/multi-host.md) for registration and current
@@ -14,16 +14,15 @@ native-client and quota-protection limitations.
 - Multi-host connection through a private Tailscale network, with native Codex conversations and project management.
 - Streaming messages, tool activity, model selection, permissions, approvals, goals, side chats and context compaction.
 - File and image attachments, private file previews, inline Visualize components, notifications and quota indicators.
-- Android WebView and Windows Electron shells reuse the shared web interface.
+- Android WebView reuses the shared web interface; Windows users use a browser. The standalone EXE line was retired on 2026-11-27.
 
 ## Getting started
 
-This is a source repository, not a hosted Codex service. You need your own Windows host, a compatible Codex App Server, your own Codex authentication and a private network. The Android and desktop clients connect to a Coordinator you operate yourself; do not expose it to the public internet.
+This is a source repository, not a hosted Codex service. You need your own Windows host, a compatible Codex App Server, your own Codex authentication and a private network. The Android and browser clients connect to a Coordinator you operate yourself; do not expose it to the public internet.
 
 | Area | Documentation |
 | --- | --- |
 | Host and private network architecture | [Architecture](docs/architecture.md), [Web Coordinator](web/README.md), [host setup](docs/mobile-host.md) |
-| Windows desktop client | [Desktop setup](desktop/README.md) |
 | Android build | [Windows Android toolchain](docs/windows-android-toolchain.md) |
 | Tailscale and FlClash | [Android](docs/mobile-flclash-tailscale.md), [Windows](docs/desktop-flclash-tailnet.md) |
 | Development progress and release verification | [Roadmap](docs/roadmap.md) |
@@ -86,7 +85,7 @@ for protocol details and verification.
 
 ## 2026-11-24 Conversation file previews, resizable sidebar and forks
 
-The shared Web/Android/Electron client now handles assistant file links as
+The shared Web/Android client now handles assistant file links as
 single, deliberate publications: opening a conversation only reads history,
 while tapping one Markdown link makes the owning Gateway verify the exact native
 `agentMessage` item and link index before creating that one private snapshot.
@@ -98,8 +97,7 @@ private snapshots when the source file remains available.
 The preview supports Markdown with formulas, paged UTF-8 text, images, PDF through bundled PDF.js,
 audio/video ranges, and isolated HTML/SVG with scripts and network access
 blocked. Android saves to a user-selected system folder with the original filename;
-the browser copies an opaque private Coordinator URL; Electron reveals the
-verified host path in Explorer. The assistant message itself shows only the
+the browser copies an opaque private Coordinator URL. The assistant message itself shows only the
 native Markdown label. A 310 px desktop sidebar can be dragged within bounded
 limits and is remembered per client storage; the mobile layout remains a
 drawer. Completed assistant turns and the conversation menu can create a native
@@ -259,22 +257,9 @@ can be found by searching for one of its Skills. Native mention paths and
 submission semantics are unchanged. ChatGPT/Codex conversation mentions are
 intentionally **not** included.
 
-## Windows desktop app (2026-11-21, first implementation)
+## Windows desktop app (retired 2026-11-27)
 
-`desktop/` now contains a standalone Windows Electron client for the same
-`web/src/` React chat UI used by the browser and Android WebView. It connects
-to the existing 6v private Web Coordinator, so 6v/noha continue to own their
-own native Codex threads and tools; the desktop shell does not launch Codex
-Desktop, create a second backend or copy user sessions. It adds desktop
-menus/shortcuts, offline retry, per-PC private connection settings, native
-save dialogs, Explorer file reveal and bounded remote-drive path lookup.
-Closing the main window hides it in the Windows notification area. Use the tray
-icon to restore the window or choose Quit to exit the client.
-See [desktop/README.md](desktop/README.md) for setup and validation.
-
-This is source implementation and a Windows packaging track. Android APK
-generation remains explicitly opt-in, and 6v's live web frontend is not
-restarted by a desktop application build.
+The standalone Electron Windows client and portable EXE packaging have been retired. Windows users use the responsive Web UI in a browser; the Windows Gateway and official Codex Desktop runtime integration are unchanged.
 
 ## 2026-11-21 聊天跳转最新消息
 
@@ -718,7 +703,7 @@ The owner's original Desktop environment is needed for work during development. 
 
 6v 和 noha 各共享整个 C 盘，分别为 `\\\\100.76.74.124\\6v1f\\` 和
 `\\\\100.96.30.32\\noha\\`。在共享设置里为每台电脑维护 IP + 共享名，
-配置由 6v Web Coordinator 私有保存；Electron 的本机身份由桌面壳提供。
+配置由 6v Web Coordinator 私有保存；浏览器通过本机回环服务识别电脑。
 
 用户输入的 Windows 绝对路径由目标主机逐台检查本机 C 盘和另一电脑的 SMB 路径。
 唯一可访问匹配才改写成目标 Codex 可读的本地/UNC 路径；两台同路径都存在时

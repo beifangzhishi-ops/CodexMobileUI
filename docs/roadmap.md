@@ -1,5 +1,9 @@
 # CodexMobileUI implementation and acceptance
 
+## 2026-11-27 Windows EXE retirement
+
+- [x] Retire the standalone Windows Electron/EXE release line. Retain the browser desktop layout, Android APK, Windows host services, and official Codex runtime integration. Historical release records are retained.
+
 ## 2026-11-27 Unified follow-up release (0.2.5)
 
 - [x] Merge exclusive sidebar pin placement, nested sub-agent quota protection,
@@ -36,12 +40,11 @@
 
 ## Release version records
 
-Use `app.json` (`expo.version`) as the release version for Android and Windows.
+Use `app.json` (`expo.version`) as the release version for Android.
 Keep the root `package.json` and both root version entries in `package-lock.json`
 in sync. Increment Android's `expo.android.versionCode` for each release and use
 the stable builder to sync the generated Gradle metadata. Verify the APK's
-embedded version and version code. For Windows, use the same release version in
-the portable package name and verify the EXE's ProductVersion and FileVersion.
+embedded version and version code.
 
 ## 2026-11-24 Android Visualize readiness hotfix (0.2.2)
 
@@ -104,7 +107,7 @@ the portable package name and verify the EXE's ProductVersion and FileVersion.
   Web/Electron visual harness at wide and 390 px viewports.
 - [ ] Verify system saving on a physical Android device after the next release build.
 
-## 2026-11-21 Windows desktop first implementation
+## 2026-11-21 Windows desktop first implementation (historical; retired 2026-11-27)
 
 - [x] Reuse the unified React UI through a Windows Electron window, without a
   second client-side chat or a new backend.
@@ -113,11 +116,7 @@ the portable package name and verify the EXE's ProductVersion and FileVersion.
 - [x] Resolve host-local paths directly and remote drive paths through
   verified SMB candidate shares; no arbitrary filesystem read IPC.
 - [x] Add automated validation for private origins and host path resolution.
-- [ ] Complete native Electron runtime download, package and inspect Windows
-  x64 executable on a real Windows desktop.
-- [ ] Verify 6v and noha native window launch, full conversation controls,
-  downloads, Explorer access / sharing permissions, clipboard attachments,
-  window state and keyboard shortcuts.
+- Remaining native window acceptance was cancelled when the EXE line was retired.
 
 ## 2026-11-16 Gateway deployment and upload cancellation
 

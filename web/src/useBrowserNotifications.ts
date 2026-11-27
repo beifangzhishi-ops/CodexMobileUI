@@ -61,9 +61,9 @@ function show(event: FeedEvent) {
 export function useBrowserNotifications(active: Target | null) {
   const visibleTarget = useRef(active);
   useEffect(() => { visibleTarget.current = active; }, [active]);
-  const platform = window as Window & { ReactNativeWebView?: unknown; codexDesktop?: unknown };
+  const platform = window as Window & { ReactNativeWebView?: unknown };
   const available = window.isSecureContext && typeof Notification !== 'undefined' &&
-    !platform.ReactNativeWebView && !platform.codexDesktop;
+    !platform.ReactNativeWebView;
   const [enabled, setEnabled] = useState(() => available &&
     Notification.permission === 'granted' && localStorage.getItem(preference) === 'on');
   const [error, setError] = useState('');

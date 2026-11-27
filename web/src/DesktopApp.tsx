@@ -46,8 +46,6 @@ import { useFollowLatest } from './useFollowLatest';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import type { PermissionMode, FollowUpMode } from './useLiveCodex';
 import { copyToClipboard, localMessageId } from './browserHelpers';
-import { desktopBridge } from './desktopBridge';
-import { DesktopTitlebar } from './DesktopTitlebar';
 import { defaultPathHosts, fetchPathHosts, pathForViewer, savePathHosts, type PathHosts } from './pathHosts';
 import { detectBrowserMachine } from './browserMachine';
 import {
@@ -277,25 +275,12 @@ export default function DesktopApp() {
   });
   const [autoViewerHost, setAutoViewerHost] = useState<HostId | null>(null);
   const viewerHost = autoViewerHost ?? manualViewerHost;
-  const syncDesktopPathHosts = (hosts: PathHosts) => {
-    const native = desktopBridge();
-    if (native?.syncPathHosts) void native.syncPathHosts(hosts).catch(() => undefined);
-  };
   useEffect(() => {
-    void fetchPathHosts().then((hosts) => {
-      setPathHosts(hosts); syncDesktopPathHosts(hosts);
-    }).catch(() => undefined);
-    const native = desktopBridge();
-    if (native?.localHost) {
-      void native.localHost().then((host) => {
-        if (host === '6v' || host === 'noha') setAutoViewerHost(host);
-      }).catch(() => undefined);
-    } else {
-      void detectBrowserMachine().then(setAutoViewerHost);
-    }
+    void fetchPathHosts().then(setPathHosts).catch(() => undefined);
+    void detectBrowserMachine().then(setAutoViewerHost);
   }, []);
   const changeViewerHost = (host: HostId | null) => {
-    if (autoViewerHost || desktopBridge()) return;
+    if (autoViewerHost) return;
     setManualViewerHost(host);
     if (host) window.localStorage.setItem('codexmobileui:viewerHost', host);
     else window.localStorage.removeItem('codexmobileui:viewerHost');
@@ -524,20 +509,6 @@ export default function DesktopApp() {
     setPublicationTarget({
       hostId: active.hostId, threadId: active.id, itemId, linkIndex, path,
     });
-  }
-  async function revealPublicationFile(hostId: HostId, filePath: string) {
-    const native = desktopBridge();
-    if (!native) throw Error('DESKTOP_UNAVAILABLE');
-    const result = await native.revealFile(hostId, filePath);
-    if (!result.ok) throw Error(result.error ?? 'FILE_NOT_FOUND');
-  }
-  async function revealHostFile(hostId: HostId, filePath: string) {
-    const native = desktopBridge();
-    if (!native) return;
-    try {
-      const result = await native.revealFile(hostId, filePath);
-      if (!result.ok) setNotice(result.error ?? '无法定位该电脑的文件');
-    } catch { setNotice('无法定位文件，请检查桌面端连接设置'); }
   }
   useEffect(() => {
     if (live.status[currentHost] !== 'online') return;
@@ -1075,7 +1046,7 @@ export default function DesktopApp() {
     const target = contextTarget(event.target);
     if (!target) return;
     if (event.target instanceof Element && event.target.closest('input,textarea,[contenteditable="true"]')) return;
-    // Keep Chrome/Electron's native Copy menu for already-selected message text.
+    // Keep Chrome's native Copy menu for already-selected message text.
     if (target.kind === 'message' && window.getSelection()?.toString().trim()) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1711,7 +1682,7 @@ export default function DesktopApp() {
     window.addEventListener('resize', closeNarrowSidebar);
     return () => window.removeEventListener('resize', closeNarrowSidebar);
   }, [sidePanelOpen]);
-  return <><DesktopTitlebar/><div className={'app-shell' + (sidebarOpen ? ' sidebar-is-open' : ' sidebar-is-closed') + (desktopBridge()?.openMenu ? ' native-desktop-app' : '') + (sidePanelOpen ? ' side-chat-is-open' : '')}
+  return <div className={'app-shell' + (sidebarOpen ? ' sidebar-is-open' : ' sidebar-is-closed') + (sidePanelOpen ? ' side-chat-is-open' : '')}
     onPointerDownCapture={handleContextPointerDown}
     onPointerMoveCapture={handleContextPointerMove}
     onPointerUpCapture={stopLongPress}
@@ -1943,9 +1914,8 @@ export default function DesktopApp() {
                   data-context-kind="file" data-context-host={active.hostId} data-context-id={file.path}
                   data-context-origin="user"
                   key={file.itemId + ':' + file.fileIndex}
-                  title={desktopBridge() ? '在资源管理器中定位' : '复制文件绝对路径'}
-                  onClick={() => desktopBridge() ? void revealHostFile(active.hostId, file.path) :
-                    void copyToClipboard(file.path).then(() => setNotice('路径已复制'))
+                  title="复制文件绝对路径"
+                  onClick={() => void copyToClipboard(file.path).then(() => setNotice('路径已复制'))
                       .catch(() => setNotice('无法复制路径'))}>
                   <FileText size={19}/>
                   <span className="chat-file-path">{file.path}</span>
@@ -1997,7 +1967,7 @@ export default function DesktopApp() {
                   readAssistantImage={live.readAssistantImage} onOpenImage={setImageViewer}
                   onOpenFile={(path, linkIndex) => openAssistantFile(
                     path, linkIndex, message.id.slice(message.id.indexOf(':') + 1))}
-                  onRevealFile={desktopBridge() ? (path) => { void revealHostFile(active.hostId, path); } : undefined}
+
                   displayPath={(path) => pathForViewer(path, active.hostId, viewerHost, pathHosts)}
                   imageReady={message.complete !== false}
                   onCopyPath={(path) => void copyToClipboard(path).then(() => setNotice('路径已复制'))
@@ -2249,7 +2219,7 @@ export default function DesktopApp() {
       onSavePathHosts={async (next) => {
         const saved = await savePathHosts(next);
         setPathHosts(saved);
-        syncDesktopPathHosts(saved);
+
       }}
       viewerHost={viewerHost}
       viewerHostAuto={autoViewerHost !== null}
@@ -2396,9 +2366,7 @@ export default function DesktopApp() {
           <div className="context-menu-caption">文件操作</div>
           {contextOption('复制文件路径', Copy, () => copyContextText(
             pathForViewer(contextMenu.id, contextMenu.hostId, viewerHost, pathHosts), '文件路径'))}
-          {desktopBridge() ? contextOption('在资源管理器中定位', FolderOpen,
-            () => void revealHostFile(contextMenu.hostId, contextMenu.id)) :
-            contextMenu.origin === 'assistant' && contextOption('打开文件预览', ArrowDown,
+          {contextMenu.origin === 'assistant' && contextOption('打开文件预览', ArrowDown,
               () => openAssistantFile(contextMenu.id, contextMenu.linkIndex ?? 0, contextMenu.itemId),
               contextMenu.linkIndex === undefined || !contextMenu.itemId)}
         </> : contextMenu.kind === 'image' ? <>
@@ -2444,7 +2412,7 @@ export default function DesktopApp() {
 
     {publicationTarget && <PublicationPreview target={publicationTarget}
       request={live.request} onClose={() => setPublicationTarget(null)}
-      onRevealFile={desktopBridge() ? revealPublicationFile : undefined}
+
       onCopyLink={(url) => copyToClipboard(url)}/>}
     {notice && <div className="toast" role="status">{notice}<button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={15}/></button></div>}
     {quotaDetail && <div className="quota-dialog-layer">
@@ -2507,5 +2475,5 @@ export default function DesktopApp() {
     </div>}
     <button className="mobile-menu" aria-label="展开侧边栏" onClick={() => setSidebarOpen(true)}><Menu size={21}/></button>
     <button className="mobile-new-chat" aria-label="新建聊天" onClick={() => createNewChat()}><SquarePen size={20}/></button>
-  </div></>;
+  </div>;
 }

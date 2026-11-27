@@ -1,5 +1,9 @@
 # Codex 多电脑 Web 工作台
 
+## Production static release verification (2026-11-27)
+
+Before publishing a Web build, verify the actual loopback Coordinator listener and its scheduled-task launch path. A private release can run from an isolated directory under `.runtime/`, rather than the source checkout. Copy the new hashed assets into the running release's `web/dist` before atomically replacing its index.html. Keep old assets for connected clients. Request the private entry using the configured Host, verify that the served index references the new hashed JS, then verify HTTP 200 for that asset. A successful source build alone is not a deployment. No APK rebuild or App Server/Gateway restart is needed for shared Web-only changes.
+
 ## 2026-11-24 assistant file preview, resizable sidebar and forks
 
 Explicit assistant file links remain inline and show only their native Markdown
@@ -10,11 +14,11 @@ and new publications no longer use Quark.
 
 The same preview page now supports rendered Markdown, paged UTF-8 text, images, PDF.js, ranged
 audio/video and sandboxed HTML/SVG. Android saves through its WebView bridge
-to the selected system folder using the original filename; browsers copy a same-origin opaque private URL;
-Electron reveals the validated host path. The generated PDF worker and all
+to the selected system folder using the original filename; browsers copy a same-origin opaque private URL.
+The generated PDF worker and all
 preview frames are served under the existing Tailnet Coordinator CSP.
 
-Browser and Electron sidebars can be dragged within bounded widths and remember
+Browser sidebars can be dragged within bounded widths and remember
 the value in their own storage; narrow layouts keep the existing drawer and
 hide the resize separator. Completed assistant turns and the conversation menu
 can create a native turn-bounded fork. The source chat remains active until the
@@ -24,7 +28,7 @@ Use `npm.cmd --prefix web run check`, `npm.cmd --prefix web run test` and
 `npm.cmd --prefix web run build`. Browser checks use a local fixture. Physical Android behavior requires device verification.
 
 助手回复中的普通本地图片链接 `[截图](路径)` 使用文件入口，
-`![截图](路径)` 使用消息内预览。文件入口优先打开预览。其他文件在 Electron 中定位到资源管理器，在浏览器中复制私有链接，
+`![截图](路径)` 使用消息内预览。文件入口优先打开预览。其他文件在浏览器中复制私有链接，
 在 Android WebView 中进入系统保存。
 
 ## 2026-11-21 与 Android 统一的附件界面（双机已部署）

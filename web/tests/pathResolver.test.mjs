@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PATH_HOSTS, validatePathHosts, localToNetwork, networkToLocal,
-  pathForViewer, resolveInputPath, resolveUserText, resolveUserTextDetailed, resolveSelectedFile,
+  pathForViewer, resolveInputPath, resolveUserText, resolveUserTextDetailed,
 } from '../server/pathResolver.mjs';
 import { PathSettingsStore } from '../server/pathSettings.mjs';
 import { PathOverlayStore } from '../server/pathOverlays.mjs';
@@ -88,12 +88,6 @@ test('duplicate C files stop sending rather than silently choose target local C'
   assert.deepEqual(result.changes, []);
 });
 
-test('Electron file with known owner bypasses ambiguous C search and uploads only as fallback', async () => {
-  assert.equal(await resolveSelectedFile(local, 'noha', '6v', hosts, has(network)), network);
-  assert.equal(await resolveSelectedFile(local, 'noha', 'noha', hosts, has(local)), local);
-  assert.equal(await resolveSelectedFile(local, 'noha', '6v', hosts, has()), null);
-  assert.equal(await resolveSelectedFile('D:\\a.pdf', 'noha', '6v', hosts, has()), null);
-});
 
 test('third registered host participates in verified path resolution', async () => {
   const expanded = validatePathHosts({ ...hosts, 'third-pc': { ip: '100.90.10.11', share: 'third' } });

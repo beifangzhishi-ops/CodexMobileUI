@@ -1,6 +1,6 @@
 # CodexMobileUI native conversation activities
 
-The browser, Android WebView and Electron share web/src. Native thread/item IDs,
+The browser and Android WebView share web/src. Native thread/item IDs,
 turn ordering, actual runtime status and permissions remain authoritative on
 the owning App Server; none of the following creates artificial chat history.
 

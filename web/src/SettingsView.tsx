@@ -3,7 +3,6 @@ import { FileText, RefreshCw, Save, X } from 'lucide-react';
 import type { HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import type { PathHosts } from './pathHosts';
-import { desktopBridge } from './desktopBridge';
 
 type Kind = 'globalRules' | 'projectRules' | 'config';
 type Snapshot = {
@@ -198,14 +197,14 @@ export function SettingsView({ hosts, initialHost, initialProjectId, projects, t
             ...old, [id]: { ip: old[id]?.ip ?? '', share: event.target.value.trim() },
           }))}/></label>
       </div>)}
-      {!desktopBridge() && <label>当前浏览器所在电脑
+      <label>当前浏览器所在电脑
         <select value={viewerHost ?? ''} disabled={viewerHostAuto} onChange={(event) =>
           onViewerHost(event.target.value ? event.target.value as HostId : null)}>
           <option value="">未识别（不转换显示路径）</option>
           {hosts.map((id) => <option key={id} value={id}>{id}</option>)}
         </select>
         <small>{viewerHostAuto ? '已通过本机服务自动识别' : '本机服务不可识别时，可手动选择'}</small>
-      </label>}
+      </label>
       {networkError && <p role="alert">{networkError}</p>}
       <button type="button" disabled={!networkDirty || networkBusy}
         onClick={() => { void saveNetwork(); }}>

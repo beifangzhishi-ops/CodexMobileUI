@@ -108,16 +108,6 @@ export async function resolveInputPath(raw, destinationHost, hosts, probe = read
   return (await probeInputPath(raw, destinationHost, hosts, probe)).value;
 }
 
-/** Physical files chosen in Electron have a known owner: never cross-probe by filename. */
-export async function resolveSelectedFile(path, owner, destination, hosts, probe = readable) {
-  if (!validHost(owner) || !validHost(destination) ||
-      typeof path !== 'string' || path.length > 2048 ||
-      /[\x00-\x1f]/.test(path) || !/^[A-Za-z]:[\\/]/.test(path)) return null;
-  const normalized = win32.normalize(path);
-  const candidate = owner === destination ? normalized : localToNetwork(normalized, owner, hosts);
-  return candidate && await probe(candidate) ? candidate : null;
-}
-
 /** User input only. Assistant prose is NEVER rewritten by this parser. */
 export async function resolveUserTextDetailed(source, destinationHost, hosts, probe = readable) {
   if (typeof source !== 'string' || source.length > 12000) throw Error('INVALID_PATH_TEXT');

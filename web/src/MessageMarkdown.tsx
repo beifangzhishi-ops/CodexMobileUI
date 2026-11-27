@@ -22,11 +22,10 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: ReactNod
 
 /** Local assistant paths stay native in history and render as filenames. */
 export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
-  readAssistantImage, onOpenImage, onOpenFile, onRevealFile, displayPath, imageReady = true }: {
+  readAssistantImage, onOpenImage, onOpenFile, displayPath, imageReady = true }: {
   text: string;
   onCopyPath?: (path: string) => void;
   onOpenFile?: (path: string, linkIndex: number) => void;
-  onRevealFile?: (path: string) => void;
   displayPath?: (path: string) => string;
   hostId?: HostId;
   threadId?: string;
@@ -46,12 +45,8 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
   }
   const preview = renderAssistantImageReferences(markdown);
   const parsed = renderableLocalFileLinks(preview.markdown);
-  const mobile = hasNativePublicationDownload() && !onRevealFile;
+  const mobile = hasNativePublicationDownload();
   const copyPath = (path: string) => onCopyPath?.(displayPath?.(path) ?? path);
-  const activatePath = (path: string) => {
-    if (onRevealFile) onRevealFile(path);
-    else copyPath(path);
-  };
   function imagePreview(index: number) {
     const ref = preview.images[index];
     if (!ref) return null;
@@ -63,9 +58,7 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
             nameHint={localFileName(ref.path)}/>
         : <span className="unresolved-file-link">图片预览不可用</span>}
       {!mobile && <button className="assistant-image-path" type="button" title={displayPath?.(ref.path) ?? ref.path}
-        onClick={() => activatePath(ref.path)}>{localFileName(ref.path)}</button>}
-      {onRevealFile && <button type="button" className="assistant-file-download"
-        aria-label="复制图片路径" onClick={() => copyPath(ref.path)}>复制</button>}
+        onClick={() => copyPath(ref.path)}>{localFileName(ref.path)}</button>}
     </span>;
   }
   const renderLink = (href: string | undefined, children: ReactNode) => {
@@ -83,8 +76,8 @@ export function MessageMarkdown({ text, onCopyPath, hostId, threadId, itemId,
         data-context-origin="assistant" data-context-item={itemId}
         data-context-link-index={link.index}>
         <button className="local-file-link" type="button"
-          title={mobile ? '打开文件预览与保存' : onRevealFile ? '打开文件预览' : '打开私有文件预览'}
-          onClick={() => onOpenFile ? onOpenFile(path, link.index) : activatePath(path)}>
+          title={mobile ? '打开文件预览与保存' : '打开私有文件预览'}
+          onClick={() => onOpenFile ? onOpenFile(path, link.index) : copyPath(path)}>
           {children}
         </button>
       </span>;

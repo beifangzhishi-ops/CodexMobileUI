@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Copy, Download, FolderOpen, RotateCw } from 'lucide-react';
+import { ArrowLeft, Copy, Download, RotateCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -208,12 +208,11 @@ function PreviewContent({ file, hostId, onSaveImage, imageBusy, imageProgress }:
 }
 
 export function PublicationPreview({
-  target, request, onClose, onRevealFile, onCopyLink,
+  target, request, onClose, onCopyLink,
 }: {
   target: PublicationTarget;
   request: HostRequest;
   onClose: () => void;
-  onRevealFile?: (hostId: HostId, path: string) => Promise<void>;
   onCopyLink: (url: string) => Promise<void>;
 }) {
   const [file, setFile] = useState<PublishedFile | null>(null);
@@ -241,9 +240,6 @@ export function PublicationPreview({
           setProgress(Math.round(received / total * 100));
         }, controller.signal);
         if (!controller.signal.aborted) setLocalStatus('文件已保存');
-      } else if (onRevealFile) {
-        await onRevealFile(target.hostId, file.path);
-        setLocalStatus('已请求在资源管理器中定位文件');
       } else {
         const url = publicationUrl(target.hostId, file.id, 'download');
         await onCopyLink(url);
@@ -261,7 +257,7 @@ export function PublicationPreview({
         setBusy(false);
       }
     }
-  }, [android, onCopyLink, onRevealFile, request, target.hostId]);
+  }, [android, onCopyLink, request, target.hostId]);
   const latestAction = useRef(localAction);
   useEffect(() => { latestAction.current = localAction; }, [localAction]);
   const saveImage = useCallback(async (published: PublishedFile) => {
@@ -299,7 +295,7 @@ export function PublicationPreview({
       if (!active) return;
       if (publication.status === 'ready') {
         setFile(publication);
-        if (!canPreview(publication) && (android || onRevealFile)) void latestAction.current(publication);
+        if (!canPreview(publication) && android) void latestAction.current(publication);
       } else setError(publication.error === 'tooLarge'
         ? '文件超过 ' + Math.round(MAX_PUBLICATION_BYTES / 1024 / 1024) + ' MiB 私有快照上限'
         : publication.error === 'missing'
@@ -313,11 +309,11 @@ export function PublicationPreview({
       abortRef.current?.abort();
       imageAbortRef.current?.abort();
     };
-  }, [attempt, request, target.hostId, target.itemId, target.linkIndex, target.threadId, android, Boolean(onRevealFile)]);
+  }, [attempt, request, target.hostId, target.itemId, target.linkIndex, target.threadId, android]);
 
-  const ActionIcon = android ? Download : onRevealFile ? FolderOpen : Copy;
+  const ActionIcon = android ? Download : Copy;
   const actionLabel = android ? (progress === null ? '保存到系统' : '保存中 · ' + progress + '%') :
-    onRevealFile ? '在资源管理器中定位' : '复制私有链接';
+    '复制私有链接';
   return <section className="publication-preview-page" role="dialog" aria-modal="true"
     aria-labelledby="publication-preview-title">
     <header>

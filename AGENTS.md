@@ -1,18 +1,8 @@
 # CodexMobileUI repository rules
 
-## Current UI direction (owner approved 2026-11-21)
+## Current UI direction (updated 2026-11-27)
 
-- Windows desktop shell lives in `desktop/` and loads the existing private
-  Web Coordinator using Electron; it must reuse `web/src/` and never launch,
-  stop, or attach to the unrelated Codex Desktop user interface. It owns only
-  its per-user UI settings and browser-window lifecycle, not thread state or
-  a new App Server. Keep Electron sandbox, context isolation, Node isolation,
-  validated private Coordinator origin, and bounded origin-checked native IPC.
-  File "open" means reveal an existing path in Explorer, not executing binaries.
-- Build desktop Windows releases only in the ignored `.tmp/desktop-release`
-  area. Noha remains host-only in its CodexMobileUI project root; do not copy
-  Electron source or binaries into its host deployment. A future end-user
-  installation belongs outside that root.
+- Windows Electron/EXE delivery was retired by the owner on 2026-11-27. Maintain only the shared browser UI and Android APK; do not restore the desktop shell, build EXEs, or launch/stop the unrelated official Codex Desktop UI.
 
 - Android and browser must render the same responsive React chat UI from
   `web/src/`; the Android `App.tsx` is only an Expo/WebView container for
@@ -40,8 +30,9 @@
 - Cross-host path mapping uses the per-host C-drive SMB share IP + name, stored
   privately by the Coordinator. User-authored absolute paths are resolved on
   the Codex destination host by checking both drives; ambiguous matches must
-  not be silently rewritten or sent. Native desktop File attachments may use
-  a verified local path or matching UNC without uploading bytes. Do not
+  not be silently rewritten or sent. Browser/Android file attachments use the
+  existing verified upload flow; explicit user-entered absolute paths retain
+  host-aware resolution. Do not
   rewrite assistant prose, commands, code fences or native Codex history.
   Only explicitly clickable assistant file references receive a viewer-local
   path projection. Display-only turn/path overlays never modify inference.
