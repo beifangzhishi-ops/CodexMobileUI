@@ -20,7 +20,10 @@ type GuardOptions = {
   maxReadAgeMs?: number;
   peerPollMs?: number;
   retryDelaysMs?: readonly number[];
+  discoveryPollMs?: number;
 };
+
+const MAX_DISCOVERY_THREADS = 10_000;
 
 const object = (value: unknown): Json =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {};
@@ -62,6 +65,12 @@ export class QuotaGuardService {
   private rateGeneration = 0;
   private refreshAgain = false;
   private guardBlocked = false;
+  private readonly discoveryPollMs: number;
+  private nextDiscoveryAt = 0;
+  // Keep native child IDs independently of their parent's turn lifecycle.
+  private readonly childThreads = new Set<string>();
+  private discoveryOverflow = false;
+  private readonly discoveryRoots = new Set<string>();
 
   constructor(private readonly stateDirectory: string, private readonly upstream: string,
     private readonly hostId: QuotaHostId, options: GuardOptions = {}) {
@@ -70,6 +79,7 @@ export class QuotaGuardService {
     this.peerPollMs = options.peerPollMs ?? 1_000;
     this.peerHostId = hostId === '6v' ? 'noha' : '6v';
     this.retryDelaysMs = options.retryDelaysMs ?? [750, 1_500, 3_000];
+    this.discoveryPollMs = options.discoveryPollMs ?? 15_000;
     this.store = new QuotaGuardSettingStore(stateDirectory);
     const setting = this.store.readSettingSync(hostId);
     this.runtime = this.store.readRuntimeSync(hostId) ?? {
@@ -138,11 +148,11 @@ export class QuotaGuardService {
       enabled: setting.enabled, settingRevision: setting.revision,
     };
     this.persist(triggersChanged);
-    if (triggers.length > 0) {
+    if (this.blocked()) {
       for (const active of this.activeTurns.values()) {
-        await this.interruptTurn(active.threadId, active.turnId, 0);
+        void this.interruptTurn(active.threadId, active.turnId, 0);
       }
-      await this.recoverActiveTurns();
+      void this.recoverActiveTurns();
     }
     else if (wasBlocked) await this.recoverActiveTurns();
   }
@@ -182,9 +192,17 @@ export class QuotaGuardService {
     } catch { /* Admission handles invalid settings. */ }
     const low = this.blocked();
     if (low && !this.guardBlocked) {
+      this.nextDiscoveryAt = 0;
       for (const active of this.activeTurns.values()) {
         void this.interruptTurn(active.threadId, active.turnId, 0);
       }
+      void this.recoverActiveTurns();
+    }
+    if (!low && this.guardBlocked) {
+      this.runtime = { ...this.runtime, discovery: 'idle', updatedAt: Date.now() };
+      this.persist();
+    }
+    if (low && this.initialized && Date.now() >= this.nextDiscoveryAt) {
       void this.recoverActiveTurns();
     }
     this.guardBlocked = low;
@@ -367,6 +385,10 @@ export class QuotaGuardService {
       const turnId = object(params.turn).id;
       if (nativeId(threadId) && nativeId(turnId)) {
         this.activeTurns.set(threadId + ':' + turnId, { threadId, turnId });
+        if (this.rememberChildItems(threadId, object(params.turn).items) && this.blocked()) {
+          this.nextDiscoveryAt = 0;
+          void this.recoverActiveTurns();
+        }
       }
       if (this.blocked() && nativeId(threadId) && nativeId(turnId)) {
         await this.interruptTurn(threadId, turnId, 0);
@@ -378,16 +400,57 @@ export class QuotaGuardService {
       const turn = object(params.turn);
       const turnId = turn.id;
       if (nativeId(threadId) && nativeId(turnId)) {
+        if (this.rememberChildItems(threadId, turn.items) && this.blocked()) {
+          this.nextDiscoveryAt = 0;
+          void this.recoverActiveTurns();
+        }
         this.activeTurns.delete(threadId + ':' + turnId);
         if (terminalTurn(turn.status)) this.confirmTerminal(threadId, turnId);
+      }
+      return;
+    }
+    if (method === 'item/started' || method === 'item/completed') {
+      if (nativeId(params.threadId) && this.rememberChildItems(params.threadId, [params.item]) && this.blocked()) {
+        // A child can start after its parent's interrupt, or during a scan.
+        this.nextDiscoveryAt = 0;
+        void this.recoverActiveTurns();
       }
       return;
     }
     if ((method === 'thread/status/changed' && object(params.status).type === 'active') ||
         method === 'thread/queue/changed') {
       const threadId = params.threadId;
-      if (nativeId(threadId) && this.blocked()) await this.discoverThread(threadId);
+      if (nativeId(threadId) && this.blocked()) {
+        if (this.discoveryRoots.size < MAX_DISCOVERY_THREADS) this.discoveryRoots.add(threadId);
+        else this.discoveryOverflow = true;
+        this.nextDiscoveryAt = 0;
+        void this.recoverActiveTurns();
+      }
     }
+  }
+
+  private rememberChildItems(parentId: string, items: unknown): boolean {
+    if (!Array.isArray(items)) return false;
+    let found = false;
+    for (const value of items) {
+      const item = object(value);
+      // Only native collaboration records may identify a child, never prose or
+      // arbitrary tool output. The parent may already be terminal.
+      const candidates = item.type === 'subAgentActivity' ? [item.agentThreadId]
+        : (item.type === 'collabAgentToolCall' || item.type === 'collabToolCall') &&
+            Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : [];
+      for (const id of candidates) {
+        if (!nativeId(id) || id === parentId) continue;
+        found = true;
+        if (this.childThreads.has(id)) continue;
+        if (this.childThreads.size >= MAX_DISCOVERY_THREADS) {
+          this.discoveryOverflow = true;
+          continue;
+        }
+        this.childThreads.add(id);
+      }
+    }
+    return found;
   }
 
   private rememberTurn(threadId: string, turnId: string): void {
@@ -535,18 +598,25 @@ export class QuotaGuardService {
   }
 
   private async recoverActiveTurns(): Promise<void> {
-    if (!this.blocked() || this.discovering) return this.discovering ?? undefined;
+    if (!this.initialized || this.closed || !this.blocked() || this.discovering) return this.discovering ?? undefined;
+    this.nextDiscoveryAt = Date.now() + this.discoveryPollMs;
+    this.runtime = { ...this.runtime, discovery: 'incomplete', updatedAt: Date.now() };
+    this.persist();
     this.discovering = (async () => {
       let incomplete = false;
       try {
-        const ids: string[] = [];
+        const ids = new Set([...this.activeTurns.values()].map((active) => active.threadId));
+        for (const item of this.runtime.interrupts) ids.add(item.threadId);
+        for (const id of this.discoveryRoots) ids.add(id);
+        this.discoveryRoots.clear();
         const cursors = new Set<string>();
         let cursor: string | null = null;
         for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
           const loaded = await this.request('thread/loaded/list', {
             limit: 100, ...(cursor ? { cursor } : {}),
           });
-          if (Array.isArray(loaded.data)) ids.push(...loaded.data.filter(nativeId));
+          if (!Array.isArray(loaded.data)) throw new Error('THREAD_LOADED_INVALID');
+          for (const id of loaded.data.filter(nativeId)) ids.add(id);
           const next = loaded.nextCursor;
           if (typeof next !== 'string' || !next) {
             incomplete = false;
@@ -557,22 +627,35 @@ export class QuotaGuardService {
           cursor = next;
           incomplete = pageIndex === 99;
         }
+        for (const childId of this.childThreads) ids.add(childId);
+        let visited = 0;
+        // Set iteration also visits newly discovered children/grandchildren;
+        // duplicate links and cycles cannot cause repeated traversal.
         for (const threadId of ids) {
-          if (!this.blocked()) break;
-          await this.discoverThread(threadId);
+          if (this.closed || !this.initialized || !this.blocked() || ++visited > MAX_DISCOVERY_THREADS) {
+            incomplete = true;
+            break;
+          }
+          if (!await this.discoverThread(threadId)) incomplete = true;
+          for (const childId of this.childThreads) ids.add(childId);
         }
       } catch {
         incomplete = true;
       } finally {
-        this.runtime = { ...this.runtime,
-          discovery: incomplete ? 'incomplete' : 'complete', updatedAt: Date.now() };
-        this.persist();
+        if (!this.closed) {
+          this.runtime = { ...this.runtime,
+            discovery: !this.blocked() ? 'idle' : incomplete || this.discoveryOverflow || this.nextDiscoveryAt === 0
+              ? 'incomplete' : 'complete', updatedAt: Date.now() };
+          this.persist();
+        }
       }
     })().finally(() => { this.discovering = null; });
     return this.discovering;
   }
 
-  private async discoverThread(threadId: string): Promise<void> {
+  private async discoverThread(threadId: string): Promise<boolean> {
+    // Summary reads preserve the existing fast interrupt path. Full native
+    // history independently proves descendants, even if the parent is done.
     try {
       const page = await this.request('thread/turns/list', {
         threadId, limit: 2, sortDirection: 'desc', itemsView: 'summary',
@@ -580,7 +663,27 @@ export class QuotaGuardService {
       const active = Array.isArray(page.data)
         ? page.data.map(object).find((turn) => turn.status === 'inProgress') : undefined;
       const turnId = active?.id;
-      if (nativeId(turnId)) await this.interruptTurn(threadId, turnId, 0);
-    } catch { /* A later status, queue, poll, or reconnect retries discovery. */ }
+      if (nativeId(turnId)) void this.interruptTurn(threadId, turnId, 0);
+    } catch { /* Full history can still recover the active turn. */ }
+    try {
+      const result = await this.request('thread/read', { threadId, includeTurns: true });
+      const thread = object(result.thread);
+      if (thread.id !== threadId || !Array.isArray(thread.turns)) return false;
+      let complete = true;
+      let activeTurnFound = false;
+      for (const value of thread.turns) {
+        const turn = object(value);
+        if (!Array.isArray(turn.items)) complete = false;
+        this.rememberChildItems(threadId, turn.items);
+        if (nativeId(turn.id) && turn.status === 'inProgress') {
+          activeTurnFound = true;
+          void this.interruptTurn(threadId, turn.id, 0);
+        } else if (nativeId(turn.id) && terminalTurn(turn.status)) {
+          this.confirmTerminal(threadId, turn.id);
+        }
+      }
+      if (object(thread.status).type === 'active' && !activeTurnFound) complete = false;
+      return complete;
+    } catch { return false; /* Keep incomplete until a later scan succeeds. */ }
   }
 }

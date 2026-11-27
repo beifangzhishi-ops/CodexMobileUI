@@ -844,6 +844,133 @@ test('native reconnect discovers an already-active turn before admitting more wo
   }
 });
 
+test('quota guard traverses native child history after parent interruption and catches late descendants', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quota-guard-children-'));
+  const parent = 'parent-thread-0001';
+  const child = 'child-thread-0002';
+  const grandchild = 'grandchild-thread-0003';
+  const lateChild = 'late-child-thread-0004';
+  const unreadableChild = 'unreadable-child-0005';
+  const unrelated = 'unrelated-thread-0006';
+  const turns = new Map([parent, child, grandchild, lateChild, unreadableChild, unrelated].map((id) => [id,
+    { id: 'turn-' + id, status: 'inProgress', items: [] as Record<string, unknown>[] }]));
+  const activity = (agentThreadId: string) => ({ type: 'subAgentActivity', kind: 'started', agentThreadId });
+  turns.get(parent)!.items.push(activity(child), activity(child), activity(unreadableChild),
+    { type: 'agentMessage', agentThreadId: unrelated });
+  turns.get(child)!.items.push(activity(grandchild));
+  turns.get(grandchild)!.items.push(activity(parent)); // malformed cycle must not loop
+  let readable = false;
+  const interrupted: string[] = [];
+  const sockets = new Set<import('ws').WebSocket>();
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('message', (bytes) => {
+      const frame = JSON.parse(bytes.toString()) as {
+        id?: number; method?: string; params?: Record<string, unknown>;
+      };
+      if (!frame.id || !frame.method) return;
+      const reply = (result: unknown) => socket.send(JSON.stringify({ id: frame.id, result }));
+      const threadId = String(frame.params?.threadId ?? '');
+      const turn = turns.get(threadId);
+      const unavailable = threadId === unreadableChild && !readable;
+      switch (frame.method) {
+        case 'account/rateLimits/read':
+          reply(snapshot({ codex: { limitId: 'codex', primary: nativeWindow(98, 300), secondary: null } }));
+          break;
+        case 'thread/loaded/list': reply({ data: [parent], nextCursor: null }); break;
+        case 'thread/turns/list':
+          reply({ data: turn && !unavailable ? [{ id: turn.id, status: turn.status }] : [], nextCursor: null });
+          break;
+        case 'thread/read':
+          assert.equal(frame.params?.includeTurns, true);
+          reply(turn && !unavailable ? { thread: { id: threadId, turns: [turn] } } : {});
+          break;
+        case 'turn/interrupt':
+          assert.ok(turn);
+          assert.equal(frame.params?.turnId, turn.id);
+          assert.notEqual(threadId, unrelated);
+          if (turn.status === 'inProgress') interrupted.push(threadId);
+          turn.status = 'interrupted';
+          reply({});
+          // Grandchild deliberately emits no terminal event: exact history
+          // must still verify its real terminal state.
+          if (threadId !== grandchild) socket.send(JSON.stringify({ method: 'turn/completed',
+            params: { threadId, turn } }));
+          break;
+        default: reply({});
+      }
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw Error('No native test port');
+  try {
+    const store = new QuotaGuardSettingStore(directory);
+    await store.setEnabled(true, 0);
+    store.writePeerRuntimeSync(runtimeFor('noha'), 'noha');
+    const guard = new QuotaGuardService(directory, 'ws://127.0.0.1:' + address.port,
+      '6v', { pollMs: 60_000, peerPollMs: 20, discoveryPollMs: 80, retryDelaysMs: [80, 160, 320] });
+    try {
+      guard.start();
+      await waitFor(() => [parent, child, grandchild].every((id) => interrupted.includes(id)), 'recursive interruption');
+      await waitFor(() => guard.status().interrupts.filter((entry) => entry.state === 'confirmed').length === 3,
+        'exact child terminal confirmation');
+      assert.equal(guard.status().discovery, 'incomplete');
+      assert.equal(buildQuotaGuardState(store.readSettingSync('6v'), false, null, Date.now(),
+        { '6v': guard.status(), noha: runtimeFor('noha') }).status, 'guarded');
+      readable = true;
+      await waitFor(() => interrupted.includes(unreadableChild), 'retry unavailable child');
+      await waitFor(() => guard.status().discovery === 'complete' && guard.status().interrupts.every((entry) => entry.state === 'confirmed'),
+        'recursive discovery complete');
+      assert.equal(buildQuotaGuardState(store.readSettingSync('6v'), false, null, Date.now(),
+        { '6v': guard.status(), noha: runtimeFor('noha') }).status, 'confirmed');
+      for (const socket of sockets) socket.send(JSON.stringify({ method: 'item/started', params: {
+        threadId: parent, turnId: turns.get(parent)!.id, item: activity(lateChild),
+      } }));
+      await waitFor(() => interrupted.includes(lateChild), 'late child without loaded-list or turn/started event');
+      await waitFor(() => guard.status().interrupts.some((entry) => entry.threadId === lateChild && entry.state === 'confirmed'),
+        'late child confirmed');
+      assert.equal(new Set(interrupted).size, 5);
+      assert.equal(turns.get(unrelated)!.status, 'inProgress');
+    } finally { guard.close(); }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('shared quota status waits for the peer descendant scan and exact terminal confirmation', () => {
+  const now = Date.now();
+  const setting = { enabled: true, thresholdPercent: 3, revision: 1, updatedAt: now,
+    syncedAt: now, pending: false, reason: null };
+  const triggers = mergeQuotaGuardTriggers([], parseNativeQuotaWindows(snapshot({
+    codex: { limitId: 'codex', primary: nativeWindow(98, 300), secondary: null },
+  })), now);
+  const local = runtimeFor('6v', { now, triggers });
+  local.interrupts.push({ threadId: 'parent-thread', turnId: 'parent-turn', state: 'confirmed',
+    attempts: 1, requestedAt: now, confirmedAt: now, reason: null });
+  const peer = runtimeFor('noha', { now, discovery: 'incomplete' });
+  const state = () => buildQuotaGuardState(setting, false, null, now, { '6v': local, noha: peer });
+  assert.equal(state().status, 'guarded');
+  assert.equal(state().hosts.noha?.status, 'guarded');
+  peer.interrupts.push({ threadId: 'child-thread', turnId: 'child-turn', state: 'requested',
+    attempts: 1, requestedAt: now, confirmedAt: null, reason: null });
+  assert.equal(state().status, 'interrupting');
+  peer.interrupts[0].state = 'failed';
+  assert.equal(state().status, 'failed');
+  peer.interrupts[0].state = 'confirmed';
+  peer.interrupts[0].confirmedAt = now;
+  assert.equal(state().status, 'guarded');
+  peer.discovery = 'complete';
+  assert.equal(state().status, 'confirmed');
+});
+
 test('enabling protection interrupts an already active turn for a retained peer low', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'quota-guard-enable-peer-'));
   const threadId = '019b0000-0000-7000-8000-000000000061';

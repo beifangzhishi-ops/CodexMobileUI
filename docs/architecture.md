@@ -78,6 +78,8 @@ Web Coordinator 只接受配置的 Tailnet HTTPS 主机与端口 和同源 WebSo
 
 3% 额度保护默认关闭，设置只由 6v 持久化，并通过现有带凭据的私网 peer 镜像到 noha。每台电脑的 Gateway 有独立原生监控连接，不依赖网页或 UI；任一有效原生额度窗口的原始剩余比例不高于 3% 时，本机立即阻止新工作并中断已确认的精确 thread/turn。noha 设置镜像过期或尚未确认时按待同步处理，不接收新的模型工作。原生协议没有暂停队列的 RPC，因此保护不会删除或重建队列，已中断的队列项仍由用户手动恢复。
 
+When the shared quota guard is triggered, each Gateway also follows native sub-agent activity links recursively, including descendants of already-terminal parent turns. It interrupts only verified active thread/turn pairs, repeats discovery while blocked, and does not report confirmed termination while a host or descendant scan remains unverified.
+
 ## 消息和文件
 
 图片作为原生 `localImage` 消息部分上传；普通用户文件通过 `web/attachment/*` 在实际主机写入服务器管理目录，以 Codex Desktop 原生文件引用格式发送，绝不添加 MobileUI 自造的读文件提示词。图片和普通文件合计最多 4 个，普通文件单个 8 MiB。上传分块并提供进度及取消，上传标识仅归当前连接拥有。
