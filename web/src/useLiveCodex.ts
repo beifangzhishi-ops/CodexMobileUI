@@ -136,10 +136,10 @@ export function useLiveCodex() {
     return state;
   }, [request]);
 
-  const setQuotaGuardEnabled = useCallback(async (enabled: boolean) => {
+  const setQuotaGuardSettings = useCallback(async (enabled: boolean, thresholdPercent: number) => {
     const state = quotaGuard ?? await refreshQuotaGuard();
     const response = obj(await request('6v', 'quotaGuard/set', {
-      enabled, expectedRevision: state.revision,
+      enabled, thresholdPercent, expectedRevision: state.revision,
     }, 20_000));
     const updated = parseQuotaGuardSharedState(response.state);
     if (!updated) throw Error('QUOTA_GUARD_STATE_INVALID');
@@ -1017,7 +1017,7 @@ export function useLiveCodex() {
 
   return {
     prepareAttachments,
-    status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
+    status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardSettings,
     projects, conversations, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
     contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
     listSideChats, createSideChat, loadSideChat, readSubAgent,

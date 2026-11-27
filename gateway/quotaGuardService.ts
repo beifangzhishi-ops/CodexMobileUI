@@ -116,9 +116,7 @@ export class QuotaGuardService {
   }
 
   status(): QuotaGuardRuntime {
-    const setting = this.store.readSettingSync(this.hostId);
-    return { ...this.runtime, enabled: setting.enabled,
-      settingRevision: setting.revision, updatedAt: this.runtime.updatedAt };
+    return this.runtime;
   }
 
   async observeRateLimitResponse(input: unknown, observedAt = Date.now()): Promise<void> {
@@ -129,14 +127,15 @@ export class QuotaGuardService {
       this.persist();
       return;
     }
-    const triggers = mergeQuotaGuardTriggers(this.runtime.triggers, readings, observedAt);
+    const setting = this.store.readSettingSync(this.hostId);
+    const triggers = mergeQuotaGuardTriggers(this.runtime.triggers, readings, observedAt,
+      setting.thresholdPercent);
     const wasBlocked = this.runtime.triggers.length > 0;
     const triggersChanged = JSON.stringify(triggers) !== JSON.stringify(this.runtime.triggers);
     this.runtime = {
       ...this.runtime, triggers, nativeStatus: 'online', lastReadAt: observedAt,
       lastReadError: null, updatedAt: observedAt,
-      enabled: this.settingEnabled(),
-      settingRevision: this.store.readSettingSync(this.hostId).revision,
+      enabled: setting.enabled, settingRevision: setting.revision,
     };
     this.persist(triggersChanged);
     if (triggers.length > 0) {
@@ -148,15 +147,14 @@ export class QuotaGuardService {
     else if (wasBlocked) await this.recoverActiveTurns();
   }
 
-  private settingEnabled(): boolean {
-    try { return this.store.readSettingSync(this.hostId).enabled; }
-    catch { return false; }
-  }
-
   private blocked(): boolean {
-    if (!this.settingEnabled()) return false;
-    if (this.runtime.triggers.length > 0) return true;
-    return (this.store.readPeerRuntimeSync(this.peerHostId)?.runtime.triggers.length ?? 0) > 0;
+    try {
+      const setting = this.store.readSettingSync(this.hostId);
+      if (!setting.enabled) return false;
+      const peer = this.store.readPeerRuntimeSync(this.peerHostId)?.runtime;
+      return (this.runtime.settingRevision === setting.revision && this.runtime.triggers.length > 0) ||
+        (peer?.settingRevision === setting.revision && peer.triggers.length > 0);
+    } catch { return false; }
   }
 
   private persist(advanceRevision = false): void {
@@ -175,9 +173,14 @@ export class QuotaGuardService {
 
   private checkGuardLatches(): void {
     if (this.closed) return;
-    const low = this.settingEnabled() &&
-      (this.runtime.triggers.length > 0 ||
-        (this.store.readPeerRuntimeSync(this.peerHostId)?.runtime.triggers.length ?? 0) > 0);
+    try {
+      const setting = this.store.readSettingSync(this.hostId);
+      if (!setting.pending && setting.revision !== this.runtime.settingRevision &&
+          this.initialized && !this.refreshing && !this.readRetryTimer) {
+        void this.refreshRateLimits();
+      }
+    } catch { /* Admission handles invalid settings. */ }
+    const low = this.blocked();
     if (low && !this.guardBlocked) {
       for (const active of this.activeTurns.values()) {
         void this.interruptTurn(active.threadId, active.turnId, 0);

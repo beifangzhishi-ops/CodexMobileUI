@@ -29,7 +29,7 @@ const { WebTitleService } =
   await import(pathToFileURL(resolve('dist/gateway/webTitleService.js')).href);
 const { QuotaGuardSettingStore, quotaGuardFileAdmission } =
   await import(pathToFileURL(resolve('dist/gateway/quotaGuardState.js')).href);
-const { buildQuotaGuardState, parseQuotaGuardRuntime, quotaGuardGuardedMethod } =
+const { buildQuotaGuardState, isQuotaGuardThreshold, parseQuotaGuardRuntime, quotaGuardGuardedMethod } =
   await import(pathToFileURL(resolve('dist/shared/quotaGuard.js')).href);
 const {
   handleQuotaGuardPeerSync, parseQuotaGuardPeerSyncRequest, synchronizeQuotaGuardPeer,
@@ -234,12 +234,11 @@ function currentQuotaGuardState() {
   const persistedRemote = quotaGuardStore.readPeerRuntimeSync('noha')?.runtime ?? null;
   const remoteValue = persistedRemote ?? (remoteQuotaGuardReachable
     ? parseQuotaGuardRuntime(remoteQuotaGuardRuntime, 'noha') : remoteQuotaGuardRuntime);
-  const local = localValue ? { ...localValue, enabled: setting.enabled,
-    settingRevision: setting.revision } : null;
-  const remote = remoteValue ? { ...remoteValue, enabled: setting.enabled,
-    settingRevision: setting.revision } : null;
-  return buildQuotaGuardState(setting, !remoteQuotaGuardReachable,
-    remoteQuotaGuardReachable ? null : 'noha 离线或尚未确认共享设置',
+  const local = localValue?.settingRevision === setting.revision ? localValue : null;
+  const remote = remoteValue?.settingRevision === setting.revision ? remoteValue : null;
+  const syncPending = !remoteQuotaGuardReachable || !remote;
+  return buildQuotaGuardState(setting, syncPending,
+    syncPending ? 'noha 离线或尚未确认共享设置' : null,
     remoteQuotaGuardSyncedAt, { '6v': local, noha: remote });
 }
 
@@ -610,7 +609,8 @@ function allowedFrame(msg) {
   const p = msg.params;
   if (msg.method === 'quotaGuard/state') return coordinator && Object.keys(p).length === 0;
   if (msg.method === 'quotaGuard/set') return coordinator &&
-    subset(p, ['enabled', 'expectedRevision']) && Object.keys(p).length === 2 &&
+    subset(p, ['enabled', 'expectedRevision', 'thresholdPercent']) &&
+    (!('thresholdPercent' in p) || isQuotaGuardThreshold(p.thresholdPercent)) &&
     typeof p.enabled === 'boolean' && Number.isSafeInteger(p.expectedRevision) &&
     p.expectedRevision >= 0;
   if (msg.method === 'web/quotaGuard') return !coordinator &&
@@ -965,7 +965,8 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       void (async () => {
         let state;
         if (msg.method === 'quotaGuard/set') {
-          await quotaGuardStore.setEnabled(msg.params.enabled, msg.params.expectedRevision);
+          await quotaGuardStore.setEnabled(msg.params.enabled, msg.params.expectedRevision,
+            Date.now(), msg.params.thresholdPercent);
           await syncPeerQuotaGuard();
         }
         state = currentQuotaGuardState();

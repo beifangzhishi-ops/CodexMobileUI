@@ -338,11 +338,12 @@ export default function DesktopApp() {
     void live.refreshQuotaGuard().catch(() => undefined);
     void live.refreshRateQuota(currentHost).catch(() => undefined);
   }, [quotaDetail, currentHost, live.refreshQuotaGuard, live.refreshRateQuota]);
-  async function toggleQuotaGuard() {
-    if (!quotaGuardState || quotaGuardWorking || live.status['6v'] !== 'online') return;
+  const quotaGuardEditable = !!quotaGuardState && !quotaGuardWorking && live.status['6v'] === 'online';
+  async function saveQuotaGuardSettings(enabled: boolean, thresholdPercent: number) {
+    if (!quotaGuardEditable) return;
     setQuotaGuardWorking(true);
     try {
-      await live.setQuotaGuardEnabled(!quotaGuardState.enabled);
+      await live.setQuotaGuardSettings(enabled, thresholdPercent);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (message === 'QUOTA_GUARD_CONFLICT') {
@@ -2313,18 +2314,31 @@ export default function DesktopApp() {
         <div className="quota-guard" data-state={quotaGuardState?.status ?? 'loading'}>
           <div className="quota-guard-heading">
             <ShieldCheck size={16}/>
-            <span>3% 额度保护</span>
+            <span>额度保护</span>
           </div>
           <label className="quota-guard-toggle">
             <input type="checkbox" checked={quotaGuardState?.enabled === true}
-              disabled={quotaGuardWorking || !quotaGuardState || live.status['6v'] !== 'online'}
-              onChange={() => void toggleQuotaGuard()}
-              aria-label="任一额度窗口剩余不超过 3% 时启用自动保护" />
+              disabled={!quotaGuardEditable}
+              onChange={event => {
+                if (quotaGuardState) void saveQuotaGuardSettings(event.currentTarget.checked, quotaGuardState.thresholdPercent);
+              }} />
             <span className="quota-guard-switch" aria-hidden="true"/>
-            <span>{quotaGuardWorking ? '正在保存…' : '任一电脑额度剩余 ≤3% 时自动保护'}</span>
+            <span>{quotaGuardWorking ? '正在保存…' : '启用自动保护'}</span>
           </label>
+          {quotaGuardState && <form key={quotaGuardState.revision} className="quota-guard-threshold"
+            onSubmit={event => {
+              event.preventDefault();
+              const value = new FormData(event.currentTarget).get('threshold');
+              if (typeof value === 'string' && value !== '' && Number(value) !== quotaGuardState.thresholdPercent) {
+                void saveQuotaGuardSettings(quotaGuardState.enabled, Number(value));
+              }
+            }}>
+            <label>剩余额度阈值 <input name="threshold" type="number" min={0} max={100} step={1} required
+              defaultValue={quotaGuardState.thresholdPercent} disabled={!quotaGuardEditable}/> %</label>
+            <button type="submit" disabled={!quotaGuardEditable}>保存</button>
+          </form>}
           <div className="quota-guard-note">
-            按原生原始比例判断。触发后阻止新回合、引导、队列、目标和定时任务；读取与手动停止不受影响。
+            任一额度窗口剩余量达到或低于已保存的阈值时触发。触发后阻止新回合、引导、队列、目标和定时任务；读取与手动停止不受影响。
           </div>
           <div className="quota-guard-status" role="status">
             <strong>{quotaGuardStatusLabel(quotaGuardState?.status)}</strong>

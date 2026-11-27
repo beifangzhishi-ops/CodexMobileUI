@@ -241,12 +241,30 @@ test('authoritative default is off on 6v while an unsynced or stale noha mirror 
     assert.equal(replica.readSettingSync('noha').pending, true);
     assert.equal(quotaGuardFileAdmission(replica, 'noha', 135_000).reason, 'QUOTA_GUARD_SYNC_PENDING');
 
-    const changed = await store.setEnabled(true, 0, 100_000);
+    writeFileSync(store.settingFile, JSON.stringify({
+      version: 1, enabled: false, revision: 0, updatedAt: 1, syncedAt: 1,
+    }));
+    assert.equal(store.readAuthoritativeSync().thresholdPercent, 3);
+    await assert.rejects(store.setEnabled(true, 0, 100_000, 101), /QUOTA_GUARD_INVALID_PARAMS/);
+    const changed = await store.setEnabled(true, 0, 100_000, 8);
     assert.equal(changed.enabled, true);
     assert.equal(changed.revision, 1);
+    assert.equal(changed.thresholdPercent, 8);
+    assert.equal(store.readAuthoritativeSync().thresholdPercent, 8);
+    await synchronizeQuotaGuardPeer(store, '6v', 'noha', async (params) =>
+      handleQuotaGuardPeerSync(replica, params, '6v', 'noha', 100_000), 100_000);
+    assert.equal(replica.readMirrorSync(100_000).thresholdPercent, 8);
+    const readings = parseNativeQuotaWindows(snapshot({
+      codex: { limitId: 'codex', primary: nativeWindow(92, 300), secondary: null },
+    }));
+    const triggers = mergeQuotaGuardTriggers([], readings, 100_000, changed.thresholdPercent);
+    assert.equal(triggers.length, 1);
+    assert.deepEqual(mergeQuotaGuardTriggers(triggers, readings, 101_000, 7), []);
+    await store.setEnabled(true, 1, 101_000, 7);
+    await assert.rejects(store.setEnabled(true, 1, 102_000, 6), /QUOTA_GUARD_CONFLICT/);
     assert.equal(store.readSettingSync('6v').enabled, true);
 
-    replica.writeMirrorSync(false, 0, 1, 100_000);
+    replica.writeMirrorSync(false, 2, 101_000, 100_000, 7);
     assert.equal(replica.readSettingSync('noha', 110_000).pending, false);
     assert.equal(quotaGuardFileAdmission(replica, 'noha', 135_000, 110_000).allowed, true);
     assert.equal(replica.readSettingSync('noha', 131_000).pending, true);
@@ -419,7 +437,7 @@ test('authenticated peer sync carries each host latch in both directions and sur
 });
 
 test('shared state keeps observed trigger reasons visible when the peer is offline', () => {
-  const setting = { enabled: true, revision: 2, updatedAt: 100,
+  const setting = { enabled: true, thresholdPercent: 3, revision: 2, updatedAt: 100,
     syncedAt: 100, pending: false, reason: null };
   const local = parseQuotaGuardRuntime(runtimeFor('6v', {
     revision: 2,
