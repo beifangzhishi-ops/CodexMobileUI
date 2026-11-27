@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { TaskSchedule, TaskInput, Task, TaskRun } from '../shared/automation.js';
+import { taskName, type TaskSchedule, type NamedTaskInput, type Task, type TaskRun } from '../shared/automation.js';
 import { nextCustomOccurrence, parseTaskRrule } from './schedulerRrule.js';
 export type { TaskSchedule, TaskInput, Task, TaskRun } from '../shared/automation.js';
 
@@ -17,13 +17,13 @@ const hhmm = (h: unknown, m: unknown): boolean =>
   Number.isInteger(h) && Number(h) >= 0 && Number(h) <= 23 &&
   Number.isInteger(m) && Number(m) >= 0 && Number(m) <= 59;
 
-export function validateTaskInput(value: unknown): TaskInput {
+export function validateTaskInput(value: unknown): NamedTaskInput {
   if (!plain(value) || !plain(value.schedule)) throw new Error('INVALID_TASK');
   const accepted = ['name', 'prompt', 'projectId', 'schedule', 'timeZone',
     'conversationMode', 'threadId', 'model', 'modelMode', 'effort', 'permissionMode', 'workspaceMode'];
   if (Object.keys(value).some((key) => !accepted.includes(key))) throw new Error('INVALID_TASK');
   const reminder = value.modelMode === 'none';
-  if (!str(value.name, 80) || !value.name.trim() ||
+  if ((value.name !== undefined && value.name !== '' && !str(value.name, 80)) ||
       !str(value.prompt, 12000) || !value.prompt.trim() ||
       (!str(value.projectId, 200) && !(reminder && value.projectId === '')) ||
       !str(value.timeZone, 100) ||
@@ -69,7 +69,7 @@ export function validateTaskInput(value: unknown): TaskInput {
         !Number.isFinite(Date.parse(s.startAt))) throw new Error('INVALID_SCHEDULE');
     parseTaskRrule(s.rule);
   } else throw new Error('INVALID_SCHEDULE');
-  return value as TaskInput;
+  return { ...value, name: taskName(value.name as string | undefined, value.prompt) } as NamedTaskInput;
 }
 
 /** Compute in the task's own time zone; minute scanning handles half-hour offsets and DST. */

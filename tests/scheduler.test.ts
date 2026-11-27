@@ -88,6 +88,26 @@ test('task validation rejects arbitrary fields and invalid recurrence', () => {
   assert.throws(() => validateTaskInput({ ...valid, workspaceMode: 'full-access' }), /INVALID_TASK/);
 });
 
+test('omitted or blank task names default to the first six characters of the content', () => {
+  const store = new SchedulerStore(':memory:');
+  try {
+    const { name: _name, ...input } = taskInput();
+    const prompt = '  每天检查项目状态  ';
+    const task = store.create({ ...input, prompt });
+    assert.equal(task.name, '每天检查项目');
+    assert.equal(task.prompt, prompt);
+    assert.equal(store.get(task.id)?.name, task.name);
+    assert.equal(store.update(task.id, { prompt: '新内容' }).name, task.name);
+    assert.equal(store.update(task.id, { name: '  ' }).name, '新内容');
+    assert.equal(validateTaskInput({ ...input, name: '', prompt: '😀一二三四五六' }).name, '😀一二三四五');
+    assert.equal(validateTaskInput({ ...input, name: '自定义名称', prompt }).name, '自定义名称');
+    assert.throws(() => validateTaskInput({ ...input, name: null }), /INVALID_TASK/);
+    assert.throws(() => validateTaskInput({ ...input, name: '', prompt: '  ' }), /INVALID_TASK/);
+    const reminder = store.create({ ...input, prompt, modelMode: 'none', projectId: '', permissionMode: 'read-only' });
+    assert.equal(store.beginRun(reminder.id, 'manual').reminder?.title, '每天检查项目');
+  } finally { store.close(); }
+});
+
 test('bounded custom RRULE supports calendar intervals without accepting unsafe grammar', () => {
   assert.equal(nextOccurrence({ kind: 'rrule',
     rule: 'FREQ=DAILY;INTERVAL=2;BYHOUR=9;BYMINUTE=0',
@@ -244,7 +264,7 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
       assert.equal(method, 'thread/read');
       return { thread: { id: params.threadId, projectId: 'p1' } };
     }, (method, params) => service.handle(method, params));
-    const args = { name: input.name, prompt: input.prompt, timeZone: input.timeZone,
+    const args = { prompt: input.prompt, timeZone: input.timeZone,
       schedule: input.schedule, conversationMode: 'new' };
     const callback = { namespace: null, tool: 'schedule_task', threadId: 't1',
       turnId: 'turn2', callId: 'call1', arguments: args };
@@ -266,6 +286,7 @@ test('native scheduler starts a real RPC-shaped turn, awaits completion and expo
     const output = await creation;
     assert.equal(output?.success, true);
     const saved = JSON.parse(output!.contentItems[0].text);
+    assert.equal(saved.name, 'Read o');
     assert.equal(saved.nextRunAt, input.schedule.kind === 'once' && input.schedule.at);
     assert.equal(saved.model, 'test-model');
     assert.equal(saved.effort, 'high');

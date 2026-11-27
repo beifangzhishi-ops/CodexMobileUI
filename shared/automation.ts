@@ -7,7 +7,7 @@ export type TaskSchedule =
   | { kind: 'rrule'; rule: string; startAt: string };
 
 export type TaskInput = {
-  name: string;
+  name?: string;
   prompt: string;
   projectId: string;
   schedule: TaskSchedule;
@@ -21,7 +21,14 @@ export type TaskInput = {
   workspaceMode: 'project' | 'worktree';
 };
 
-export type Task = TaskInput & {
+/** Saved tasks always have a title, even when the creator omits it. */
+export type NamedTaskInput = TaskInput & { name: string };
+
+export function taskName(name: string | undefined, prompt: string): string {
+  return name?.trim() || Array.from(prompt.trim()).slice(0, 6).join('');
+}
+
+export type Task = NamedTaskInput & {
   id: string;
   enabled: boolean;
   completed: boolean;

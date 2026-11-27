@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CalendarClock, Check, ChevronLeft, Clock3, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import type { Task, TaskInput, TaskRun, TaskSchedule } from '../../shared/automation';
+import { taskName, type Task, type TaskInput, type NamedTaskInput, type TaskRun, type TaskSchedule } from '../../shared/automation';
 import type { HostId } from './types';
 import type { NativeProject, NativeModel } from './nativeProtocol';
 
@@ -32,7 +32,7 @@ const localDateTime = (iso: string) => {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
   return Number.isFinite(local.getTime()) ? local.toISOString().slice(0, 16) : '';
 };
-const defaultInput = (projectId: string): TaskInput => ({
+const defaultInput = (projectId: string): NamedTaskInput => ({
   name: '', prompt: '', projectId, schedule: { kind: 'daily', hour: 9, minute: 0 },
   timeZone: zone, conversationMode: 'new', threadId: null,
   model: null, effort: null, permissionMode: 'workspace-write', workspaceMode: 'project',
@@ -63,7 +63,7 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [openedReminder, setOpenedReminder] = useState<TaskRun | null>(null);
   const [selected, setSelected] = useState<Task | null>(null);
-  const [draft, setDraft] = useState<TaskInput>(() => defaultInput(''));
+  const [draft, setDraft] = useState<NamedTaskInput>(() => defaultInput(''));
   const [clock, setClock] = useState('09:00');
   const [once, setOnce] = useState(() => localDateTime(new Date(Date.now() + 86400000).toISOString()));
   const [weekday, setWeekday] = useState(1);
@@ -151,10 +151,10 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
     catch { setError('无法读取执行历史'); }
   }
   const save = () => {
-    if (!draft.name.trim() || !draft.prompt.trim() ||
+    if (!draft.prompt.trim() ||
         (!reminder && !hostProjects.some((project) => project.id === draft.projectId))) {
-      setError(reminder ? '请填写任务名称和提醒内容。' :
-        '请填写任务名称、指令，并选择当前电脑上的项目。'); return;
+      setError(reminder ? '请填写提醒内容。' :
+        '请填写指令，并选择当前电脑上的项目。'); return;
     }
     let schedule: TaskSchedule = draft.schedule;
     const [hour, minute] = clock.split(':').map(Number);
@@ -173,7 +173,7 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
       schedule = { kind: 'weekly', hour, minute,
         days: weekday === draft.schedule.days[0] ? draft.schedule.days : [weekday] };
     }
-    const task: TaskInput = { ...draft, name: draft.name.trim(), schedule, modelMode: 'default',
+    const task: TaskInput = { ...draft, name: taskName(draft.name, draft.prompt), schedule, modelMode: 'default',
       prompt: draft.prompt.trim(), ...(reminder && {
         modelMode: 'none', projectId: '', prompt: draft.prompt, threadId: null, model: null, effort: null,
         conversationMode: 'new', permissionMode: 'read-only', workspaceMode: 'project',
@@ -240,7 +240,8 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
     </>}
     {mode === 'editor' && <div className="automations-editor">
       <button className="automations-back" onClick={() => setMode('list')}><ChevronLeft size={18}/>返回列表</button>
-      <label>任务名称<input value={draft.name} maxLength={80} disabled={busy}
+      <label>任务名称（选填）<input value={draft.name} maxLength={80} disabled={busy}
+        placeholder="留空则取内容前六个字"
         onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))}/></label>
       <label>模型<select value={reminder ? reminderOption : draft.model ?? ''} disabled={busy} onChange={(event) => {
         const value = event.target.value;

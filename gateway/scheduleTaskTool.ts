@@ -28,9 +28,10 @@ export const scheduleTaskTool = {
   inputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['name', 'prompt', 'timeZone', 'conversationMode', 'schedule'],
+    required: ['prompt', 'timeZone', 'conversationMode', 'schedule'],
     properties: {
-      name: { type: 'string', minLength: 1, maxLength: 80 },
+      name: { type: 'string', maxLength: 80,
+        description: 'Optional title; if omitted or blank, use the first six characters of the prompt.' },
       prompt: { type: 'string', minLength: 1, maxLength: 12000,
         description: 'Instructions to execute on each run, without scheduling another task.' },
       timeZone: { type: 'string', maxLength: 100, description: 'IANA time zone, e.g. Asia/Shanghai.' },
