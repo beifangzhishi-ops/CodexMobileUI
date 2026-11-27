@@ -85,6 +85,10 @@
 - Interactive native Codex authentication inside each dedicated home remains required for model turns. The Android WebView reaches the existing private Tailnet Web Coordinator; it does not perform a separate Gateway OAuth flow.
 
 ## Quality and delivery
+- Use `gpt-6-luna` (GPT-6-Luna) for tests that require actual model inference (including live
+  App Server turns and end-to-end inference smoke tests). Use another model
+  only when the owner explicitly requests a test of that model. This rule
+  does not change production model selection or offline/mock tests.
 - Before packaging a release, check the release version records in `docs/roadmap.md` and follow any one-time entry there. Remove that entry only after its packages are verified and delivered.
 - This project is developed in parallel across multiple conversations and machines. Do not build/package the Android App, generate an APK, or trigger APK delivery as an automatic follow-up to code changes, tests, or completion of another task. Only do so when the user explicitly requests an App build. Preserve concurrent work and do not overwrite other developers' uncommitted changes.
 - For Web changes, run `npm.cmd --prefix web run build` as well as the existing repository checks. Do not claim visual acceptance without a real browser rendering check.

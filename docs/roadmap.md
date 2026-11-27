@@ -1,5 +1,14 @@
 # CodexMobileUI implementation and acceptance
 
+## 2026-11-27 Unified follow-up release (0.2.5)
+
+- [x] Merge exclusive sidebar pin placement, nested sub-agent quota protection,
+  and compact live sub-agent activity into the current mainline.
+- [x] Preserve the model-free reminder and native notification changes already
+  integrated upstream; restore the explicit GPT-6-Luna inference-test rule.
+- [ ] Validate the consolidated source and deploy both private hosts.
+- [ ] Build and verify the Android 0.2.5 ARM64 Release (versionCode 32).
+
 ## 2026-11-27 Config-driven multi-host Web release
 
 - [x] Route publication preparation and download by registered host identity.
