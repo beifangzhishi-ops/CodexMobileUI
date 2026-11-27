@@ -18,6 +18,7 @@ import {
   ISOLATED_MARKUP_CSP, parsePublicationRange, streamPublicationRange,
 } from './publicationPreview.mjs';
 import { VISUALIZE_FRAME_CSP, VISUALIZE_FRAME_VERSION, visualizeFrame } from './visualizeFrame.mjs';
+import { createHostRegistry } from './hostRegistry.mjs';
 
 // This file is copied unchanged to noha's host-only bundle for agent mode.
 // Neither endpoint ever listens on a non-loopback interface.
@@ -61,11 +62,19 @@ const { handleThreadCompletionsHttp } = mode === 'coordinator'
   ? await import(pathToFileURL(resolve('dist/gateway/threadCompletionsHttp.js')).href)
   : { handleThreadCompletionsHttp: null };
 const config = JSON.parse(readFileSync(resolve('.state/web-bridge.json'), 'utf8').replace(/^\uFEFF/, ''));
-const credential = readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
-if (!/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');
 const coordinator = mode === 'coordinator';
+const credential = coordinator ? null : readFileSync(resolve('.state/web-peer-token'), 'utf8').trim();
+if (!coordinator && !/^[a-f0-9]{64}$/.test(credential)) throw Error('Missing strong peer credential');
+const hostRegistry = coordinator ? createHostRegistry(config) : null;
+const configuredLocalHostId = config.hostId ?? 'noha';
+if (!coordinator && (typeof configuredLocalHostId !== 'string' ||
+    !/^[a-z0-9][a-z0-9-]{0,31}$/.test(configuredLocalHostId) ||
+    configuredLocalHostId === 'all' || configuredLocalHostId === '6v'))
+  throw Error('Invalid local host identity');
+const localHostId = coordinator ? '6v' : configuredLocalHostId;
+const isKnownHost = (id) => coordinator ? hostRegistry.has(id) : id === localHostId;
 const quotaGuardStore = new QuotaGuardSettingStore(resolve('.state'));
-const titleService = new WebTitleService(resolve('.state'), coordinator ? '6v' : 'noha');
+const titleService = new WebTitleService(resolve('.state'), localHostId);
 const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state')) : null;
 const threadCompletions = coordinator ? new ThreadCompletionStore(resolve('.state')) : null;
 const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json')) : null;
@@ -80,8 +89,8 @@ let quotaGuardSyncPromise = null;
 let quotaGuardSyncRequested = false;
 let quotaGuardSyncTimer = null;
 let lastQuotaGuardStateJson = '';
-if (coordinator && (!/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net:4190$/.test(config.origin) ||
-  config.peerUrl !== 'ws://100.96.30.32:4191/peer')) throw Error('Invalid private IP configuration');
+if (coordinator && !/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net:4190$/.test(config.origin))
+  throw Error('Invalid private IP configuration');
 const port = coordinator ? 4190 : 4191;
 const automationMethods = new Set([
   'automation/list', 'automation/inbox', 'automation/runs', 'automation/read',
@@ -94,7 +103,7 @@ const automationMethods = new Set([
  */
 async function requestLocalGateway(method, params) {
   const roster = JSON.parse(readFileSync(resolve('.state/mobile-tailnet-hosts.json'), 'utf8'));
-  const machine = coordinator ? '6v' : 'noha';
+  const machine = localHostId;
   const entry = Array.isArray(roster) && roster.find((item) => item?.name === machine);
   const target = new URL(entry?.url ?? '');
   const parts = target.hostname.split('.').map(Number);
@@ -161,11 +170,13 @@ function gatewayTarget(hostId) {
 }
 
 function openGatewaySession(hostId) {
-  const remote = hostId === 'noha';
-  const target = remote ? new URL(config.peerUrl) : gatewayTarget(hostId);
+  const host = hostRegistry.get(hostId);
+  if (!host) throw Error('UNKNOWN_HOST');
+  const remote = !host.primary;
+  const target = remote ? new URL(host.peerUrl) : gatewayTarget(hostId);
   return new Promise((resolvePromise, rejectPromise) => {
     const ws = new WebSocket(remote ? target.href : 'ws://' + target.host + '/connect?host=' + hostId, {
-      headers: remote ? { Authorization: 'Bearer ' + credential } : {},
+      headers: remote ? { Authorization: 'Bearer ' + host.credential } : {},
       handshakeTimeout: 10000, perMessageDeflate: false,
     });
     let sequence = 1;
@@ -295,10 +306,10 @@ async function syncPeerQuotaGuard() {
 }
 
 async function requestHostPublication(hostId, method, params, session) {
-  if (!['6v', 'noha'].includes(hostId)) throw Error('UNKNOWN_HOST');
+  if (!hostRegistry.has(hostId)) throw Error('UNKNOWN_HOST');
   if (session) return session.request(method, params);
   if (hostId === '6v') return requestLocalGateway(method, params);
-  const peer = await openGatewaySession('noha');
+  const peer = await openGatewaySession(hostId);
   try { return await peer.request(method, params); }
   finally { peer.close(); }
 }
@@ -342,13 +353,18 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok'); return;
   }
   if (respondLocalIdentity(req, res, {
-    hostId: coordinator ? '6v' : 'noha', port, origin: config.origin ?? 'http://100.76.74.124:4190',
+    hostId: localHostId, port, origin: config.origin ?? 'http://100.76.74.124:4190',
   })) return;
   if (!coordinator || !browserAuthorized(req)) {
     res.writeHead(403); res.end(); return;
   }
   const requestUrl = new URL(req.url ?? '/', 'http://localhost');
   const name = requestUrl.pathname;
+  if (name === '/api/hosts' && req.method === 'GET' && requestUrl.search === '') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ primaryHostId: hostRegistry.primaryHostId, hosts: hostRegistry.list() }));
+    return;
+  }
   if (name === '/api/visualize' && req.method === 'GET') {
     const hostId = requestUrl.searchParams.get('host');
     const selection = {
@@ -356,7 +372,7 @@ const server = http.createServer((req, res) => {
       itemId: requestUrl.searchParams.get('item'),
       index: Number(requestUrl.searchParams.get('index')),
     };
-    if (!['6v', 'noha'].includes(hostId) || requestUrl.searchParams.size !== 4 ||
+    if (!hostRegistry.has(hostId) || requestUrl.searchParams.size !== 4 ||
         !/^[0-7]$/.test(requestUrl.searchParams.get('index') ?? '') ||
         !validVisualizeSelection(selection)) {
       res.writeHead(400); res.end(); return;
@@ -370,7 +386,7 @@ const server = http.createServer((req, res) => {
         const known = new RegExp('^"v' + VISUALIZE_FRAME_VERSION + '-([a-f0-9]{64})"$')
           .exec(typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'] : '');
         const params = known ? { ...selection, etag: '"' + known[1] + '"' } : selection;
-        if (hostId === 'noha') session = await openGatewaySession(hostId);
+        if (hostId !== '6v') session = await openGatewaySession(hostId);
         const method = 'workspace/visualize/read';
         const result = await (session ? session.request(method, params) : requestLocalGateway(method, params));
         if (!/^"[a-f0-9]{64}"$/.test(result?.etag)) throw Error('VISUALIZE_UNAVAILABLE');
@@ -399,7 +415,7 @@ const server = http.createServer((req, res) => {
       const hostId = requestUrl.searchParams.get('host');
       const id = requestUrl.searchParams.get('id');
       const mode = requestUrl.searchParams.get('mode') ?? 'download';
-      if (!['6v', 'noha'].includes(hostId ?? '') || !isValidPublicationId(id) ||
+      if (!hostRegistry.has(hostId) || !isValidPublicationId(id) ||
           !['download', 'preview'].includes(mode) || requestUrl.searchParams.size !== 3) {
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Invalid publication request');
@@ -637,7 +653,7 @@ function allowedFrame(msg) {
     (() => { try { validatePathHosts(p.hosts); return true; } catch { return false; } })();
   if (msg.method === 'web/pathFile') return subset(p, ['path', 'sourceHost', 'hosts']) &&
     Object.keys(p).length === 3 && typeof p.path === 'string' &&
-    p.path.length <= 2048 && ['6v', 'noha'].includes(p.sourceHost) &&
+    p.path.length <= 2048 && isKnownHost(p.sourceHost) &&
     p.hosts && typeof p.hosts === 'object' && !Array.isArray(p.hosts) &&
     JSON.stringify(p.hosts).length <= 512 &&
     (() => { try { validatePathHosts(p.hosts); return true; } catch { return false; } })();
@@ -798,11 +814,11 @@ function allowedFrame(msg) {
   return false;
 }
 
-function attachRelay(browser, upstreamUrl, headers = {}) {
+function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHostId) {
   // Headers identify the Coordinator's outbound relay to an Agent. The Agent's
   // inner relay to its own native App Server omits them and owns mobile transforms.
   const remotePeer = typeof headers.Authorization === 'string';
-  const relayHostId = remotePeer ? null : coordinator ? '6v' : 'noha';
+  const relayHostId = remotePeer ? null : targetHostId;
   const upstream = new WebSocket(upstreamUrl, { headers, perMessageDeflate: false, handshakeTimeout: 10000, maxPayload: 16 * 1024 * 1024 });
   let upstreamReady = false;
   const pendingApprovals = new Set();
@@ -924,8 +940,9 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
       interactiveTurns.delete(turnId);
       scheduleCalls.finish(msg.params?.threadId, turnId);
     }
-    if (notificationFeed && msg?.method === 'turn/completed') {
-      const hostId = remotePeer ? 'noha' : '6v';
+    if (notificationFeed && msg?.method === 'turn/completed' &&
+        (!remotePeer || targetHostId === 'noha')) {
+      const hostId = targetHostId;
       void notificationFeed.observe(hostId, msg.params,
         (host, thread, turnId) => notificationFeed.titleReaders.get(host)?.(host, thread, turnId)
           ?? internalRequest('thread/read', { threadId: thread, includeTurns: true }))
@@ -1049,7 +1066,7 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
           code: -32602, message: 'DOCUMENT_UPLOAD_REJECTED',
         } })));
     } else if (msg.method === 'web/pathResolve' && !remotePeer) {
-      void resolveUserTextDetailed(msg.params.text, coordinator ? '6v' : 'noha',
+      void resolveUserTextDetailed(msg.params.text, targetHostId,
         validatePathHosts(msg.params.hosts))
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, error: {
@@ -1057,10 +1074,10 @@ function attachRelay(browser, upstreamUrl, headers = {}) {
         } })));
     } else if (msg.method === 'web/pathFile' && !remotePeer) {
       void resolveSelectedFile(msg.params.path, msg.params.sourceHost,
-        coordinator ? '6v' : 'noha', validatePathHosts(msg.params.hosts))
+        targetHostId, validatePathHosts(msg.params.hosts))
         .then((path) => safeSend(JSON.stringify({ id: msg.id, result: { path } })))
         .catch(() => safeSend(JSON.stringify({ id: msg.id, result: { path: null } })));
-    } else if (msg.method === 'web/publication') {
+    } else if (msg.method === 'web/publication' && !remotePeer) {
       void requestLocalGateway(msg.params.method, msg.params.params)
         .then((result) => safeSend(JSON.stringify({ id: msg.id, result })))
         .catch((error) => safeSend(JSON.stringify({ id: msg.id, error: {
@@ -1188,7 +1205,7 @@ server.on('upgrade', (req, socket, head) => {
   if (coordinator) {
     if (!browserAuthorized(req) || req.headers.origin !== config.origin ||
         (url.pathname === '/api/connect'
-          ? !['6v', 'noha'].includes(url.searchParams.get('host'))
+          ? !hostRegistry.has(url.searchParams.get('host')) || url.searchParams.size !== 1
           : url.pathname !== '/api/notifications')) { reject(socket); return; }
   } else if (url.pathname !== '/peer' || !privatePeerAuthorized(req)) { reject(socket); return; }
   wss.handleUpgrade(req, socket, head, (client) => {
@@ -1198,17 +1215,19 @@ server.on('upgrade', (req, socket, head) => {
       notificationFeed.subscribe(client);
       return;
     }
-    if (coordinator && url.searchParams.get('host') === 'noha') {
-      attachRelay(client, config.peerUrl, { Authorization: 'Bearer ' + credential });
-    } else attachRelay(client, 'ws://127.0.0.1:45891');
+    if (coordinator && url.pathname === '/api/connect' && url.searchParams.get('host') !== '6v') {
+      const host = hostRegistry.get(url.searchParams.get('host'));
+      attachRelay(client, host.peerUrl, { Authorization: 'Bearer ' + host.credential }, host.id);
+    } else attachRelay(client, 'ws://127.0.0.1:45891', {}, localHostId);
   });
 });
 
 server.listen(port, '127.0.0.1', () => { console.log('Web bridge mode=' + mode + ' listening on loopback port ' + port); });
 if (notificationFeed) {
   watchNativeCompletions(notificationFeed, '6v', 'ws://127.0.0.1:45891');
-  watchNativeCompletions(notificationFeed, 'noha', config.peerUrl, {
-    Authorization: 'Bearer ' + credential,
+  const legacyPeer = hostRegistry.get('noha');
+  if (legacyPeer) watchNativeCompletions(notificationFeed, 'noha', legacyPeer.peerUrl, {
+    Authorization: 'Bearer ' + legacyPeer.credential,
   });
 }
 if (coordinator) void syncPeerQuotaGuard();
