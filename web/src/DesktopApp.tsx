@@ -614,10 +614,9 @@ export default function DesktopApp() {
   const recents = useMemo(() => [...sidebarConversations].filter((item) =>
     (hostFilter === 'all' || item.hostId === hostFilter) &&
     Boolean(item.archived) === showArchived &&
+    (showArchived || !pinnedIds.includes(conversationKey(item.hostId, item.id))) &&
     (showAllRecent || !item.project || showArchived)
-  ).sort((a, b) => Number(pinnedIds.includes(conversationKey(b.hostId, b.id))) -
-    Number(pinnedIds.includes(conversationKey(a.hostId, a.id))) ||
-    b.updatedAt - a.updatedAt), [sidebarConversations, hostFilter, showAllRecent, showArchived, pinnedIds]);
+  ).sort((a, b) => b.updatedAt - a.updatedAt), [sidebarConversations, hostFilter, showAllRecent, showArchived, pinnedIds]);
   const showRecentRefreshStatus = sidebarRefreshing && !collapsedSections.includes('recent') && recents.length > recentLimit;
   const pinnedProjects = useMemo(() => projects.filter((item) =>
     pinnedProjectIds.includes(conversationKey(item.hostId, item.id)) &&
@@ -1540,7 +1539,8 @@ export default function DesktopApp() {
     const threadLimit = projectThreadLimits[key] ?? PROJECT_THREAD_PREVIEW_LIMIT;
     const pinned = pinnedProjectIds.includes(key);
     const children = sidebarConversations.filter((item) =>
-      item.project === project.id && item.hostId === project.hostId && !item.archived);
+      item.project === project.id && item.hostId === project.hostId && !item.archived &&
+      !pinnedIds.includes(conversationKey(item.hostId, item.id)));
     const visibleChildren = visibleProjectThreads(children, threadLimit);
     return <div className="tree-project" key={key}>
       <div className="project-line context-press-target" data-context-kind="project"
@@ -1765,7 +1765,8 @@ export default function DesktopApp() {
                   <ChevronRight size={17} className={collapsed ? '' : 'chevron-open'} />
                   <Monitor size={19} /><strong>{host.displayName}</strong><span className={'host-demo-dot ' + live.status[host.id]} title={'连接状态：' + live.status[host.id]} />
                 </button>
-                {!collapsed && <div className="tree-projects">{projects.filter((p) => p.hostId === host.id).map(projectRow)}</div>}
+                {!collapsed && <div className="tree-projects">{projects.filter((p) => p.hostId === host.id &&
+                  !pinnedProjectIds.includes(conversationKey(p.hostId, p.id))).map(projectRow)}</div>}
               </div>;
             })}
             </>}
