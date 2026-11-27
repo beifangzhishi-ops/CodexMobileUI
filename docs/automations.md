@@ -21,7 +21,7 @@ tasks, missed occurrences are recorded and skipped. Each host owns its local
 scheduling clock; calendar triggers use the task's IANA time zone.
 
 Select **不使用模型（仅提醒）** in the task editor to create a reminder on the
-selected host. It needs a title, reminder text and a schedule. At trigger time
+primary Coordinator host (6v) when created in the shared task page. The name is optional; it needs reminder text and a schedule. Existing reminders retain their original execution host and history. The page aggregates the task list and inbox from all registered hosts, hides machine and project for reminders, and shows the owning machine and available project name for model tasks. Editing and running saved tasks use their original host; changing the execution machine of an existing task is not supported. At trigger time
 the Gateway stores the reminder in the task inbox and advances the schedule in
 the same transaction. The reminder path makes no native RPC or model call. The
 Gateway emits at most one overdue reminder per task on recovery and records its

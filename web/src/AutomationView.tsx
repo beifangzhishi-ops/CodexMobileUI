@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CalendarClock, Check, ChevronLeft, Clock3, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { taskName, type Task, type TaskInput, type NamedTaskInput, type TaskRun, type TaskSchedule } from '../../shared/automation';
-import type { HostId } from './types';
+import type { Host, HostId } from './types';
 import type { NativeProject, NativeModel } from './nativeProtocol';
 
 type Props = {
-  hosts: readonly HostId[];
+  hosts: readonly Host[];
   initialHost: HostId;
   initialReminder?: { taskId: string; runId: string };
   projects: readonly NativeProject[];
@@ -15,6 +15,9 @@ type Props = {
   onOpenThread: (host: HostId, threadId: string) => void;
   onNewChat: () => void;
 };
+type OwnedTask = Task & { hostId: HostId };
+type OwnedRun = TaskRun & { hostId: HostId };
+type HostRows = { tasks: OwnedTask[]; inbox: OwnedRun[] };
 type Mode = 'list' | 'editor' | 'details';
 type Tab = 'active' | 'paused' | 'done';
 const effortLabels: Record<string, string> = {
@@ -58,11 +61,14 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
   const [host, setHost] = useState<HostId>(initialHost);
   const [mode, setMode] = useState<Mode>('list');
   const [tab, setTab] = useState<Tab>('active');
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [inbox, setInbox] = useState<TaskRun[]>([]);
+  const [rows, setRows] = useState<Record<HostId, HostRows>>({});
+  const [unavailable, setUnavailable] = useState<HostId[]>([]);
+  const refreshVersion = useRef(0);
+  const detailsVersion = useRef(0);
+  const openedInitial = useRef(false);
   const [runs, setRuns] = useState<TaskRun[]>([]);
-  const [openedReminder, setOpenedReminder] = useState<TaskRun | null>(null);
-  const [selected, setSelected] = useState<Task | null>(null);
+  const [openedReminder, setOpenedReminder] = useState<OwnedRun | null>(null);
+  const [selected, setSelected] = useState<OwnedTask | null>(null);
   const [draft, setDraft] = useState<NamedTaskInput>(() => defaultInput(''));
   const [clock, setClock] = useState('09:00');
   const [once, setOnce] = useState(() => localDateTime(new Date(Date.now() + 86400000).toISOString()));
@@ -71,57 +77,82 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const online = status[host] === 'online';
+  const hostName = (id: HostId) => hosts.find((item) => item.id === id)?.displayName ?? id;
+  const tasks = hosts.flatMap(({ id }) => rows[id]?.tasks ?? [])
+    .sort((a, b) => (a.nextRunAt ?? '\uffff').localeCompare(b.nextRunAt ?? '\uffff') ||
+      b.updatedAt.localeCompare(a.updatedAt));
+  const inbox = hosts.flatMap(({ id }) => rows[id]?.inbox ?? [])
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  const ownerLabel = (task: OwnedTask) => [hostName(task.hostId), task.projectId &&
+    projects.find((p) => p.hostId === task.hostId && p.id === task.projectId)?.name]
+    .filter(Boolean).join(' · ');
   const hostProjects = projects.filter((project) => project.hostId === host);
   const hostModels = models[host] ?? [];
   const draftModel = hostModels.find((model) => modelValue(model) === draft.model);
   const selectedModel = hostModels.find((model) => modelValue(model) === selected?.model);
   const reminder = draft.modelMode === 'none';
-  const call = useCallback((method: string, params: Record<string, unknown> = {}) =>
-    request(host, 'web/automation', { method, params }), [request, host]);
+  const call = useCallback((target: HostId, method: string, params: Record<string, unknown> = {}) =>
+    request(target, 'web/automation', { method, params }), [request]);
 
   const refresh = useCallback(async () => {
-    if (!online) { setError('目标电脑未连接'); return; }
+    const version = ++refreshVersion.current;
     setLoading(true);
-    try {
-      const [tasksData, inboxData] = await Promise.all([
-        call('automation/list'), call('automation/inbox'),
-      ]);
-      setTasks(dataRows<Task>(tasksData));
-      setInbox(dataRows<TaskRun>(inboxData));
-      setError('');
-    } catch {
-      setError('无法读取定时任务，请检查该电脑的 Gateway 服务。');
-    } finally { setLoading(false); }
-  }, [online, call]);
+    const results = await Promise.all(hosts.map(async ({ id }) => {
+      if (status[id] !== 'online') return { id, rows: null };
+      try {
+        const [tasksData, inboxData] = await Promise.all([
+          call(id, 'automation/list'), call(id, 'automation/inbox'),
+        ]);
+        return { id, rows: {
+          tasks: dataRows<Task>(tasksData).map((task) => ({ ...task, hostId: id })),
+          inbox: dataRows<TaskRun>(inboxData).map((run) => ({ ...run, hostId: id })),
+        } };
+      } catch { return { id, rows: null }; }
+    }));
+    if (version !== refreshVersion.current) return;
+    setRows((previous) => {
+      const next: Record<HostId, HostRows> = {};
+      for (const result of results) {
+        const value = result.rows ?? previous[result.id];
+        if (value) next[result.id] = value;
+      }
+      return next;
+    });
+    setUnavailable(results.filter((result) => !result.rows).map(({ id }) => id));
+    setLoading(false);
+  }, [hosts, status, call]);
   useEffect(() => {
-    setMode('list'); setSelected(null); setTasks([]); setInbox([]);
     void refresh();
-    const timer = window.setInterval(() => { if (online) void refresh(); }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [host, refresh, online]);
+    const timer = window.setInterval(() => { void refresh(); }, 30_000);
+    return () => { ++refreshVersion.current; window.clearInterval(timer); };
+  }, [refresh]);
 
+  const latestRefresh = useRef(refresh);
+  latestRefresh.current = refresh;
+  const reminderOnline = status[initialHost] === 'online';
   useEffect(() => {
-    if (!initialReminder || !online || host !== initialHost) return;
+    if (!initialReminder || !reminderOnline || openedInitial.current) return;
     let current = true;
-    void call('automation/runs', { taskId: initialReminder.taskId }).then((data) => {
+    void call(initialHost, 'automation/runs', { taskId: initialReminder.taskId }).then((data) => {
       if (!current) return;
       const run = dataRows<TaskRun>(data).find((item) => item.id === initialReminder.runId);
       if (run?.reminder) {
-        setOpenedReminder(run);
-        return call('automation/read', { runId: run.id }).then(refresh);
+        openedInitial.current = true;
+        setOpenedReminder({ ...run, hostId: initialHost });
+        return call(initialHost, 'automation/read', { runId: run.id }).then(() => latestRefresh.current());
       }
       setError('找不到这条提醒记录。');
     }).catch(() => { if (current) setError('无法读取这条提醒。'); });
     return () => { current = false; };
-  }, [initialReminder, initialHost, host, online, call, refresh]);
+  }, [initialReminder, initialHost, reminderOnline, call]);
 
-  async function mutate(method: string, params: Record<string, unknown>) {
+  async function mutate(target: HostId, method: string, params: Record<string, unknown>) {
     if (busy) return;
     setBusy(true); setError('');
     try {
-      await call(method, params);
+      await call(target, method, params);
       setMode('list'); setSelected(null);
-      await refresh();
+      await latestRefresh.current();
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       setError(message === 'MODEL_NOT_FOUND' ? '所选模型在目标电脑上不可用。' :
@@ -131,8 +162,11 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
         : '电脑未确认操作结果，请刷新后重试。');
     } finally { setBusy(false); }
   }
-  function edit(task?: Task) {
-    const value = task ?? defaultInput(hostProjects[0]?.id ?? '');
+  function edit(task?: OwnedTask) {
+    ++detailsVersion.current;
+    const target = task?.hostId ?? initialHost;
+    setHost(target);
+    const value = task ?? defaultInput(projects.find((p) => p.hostId === target)?.id ?? '');
     const s = value.schedule;
     setSelected(task ?? null);
     setDraft({ name: value.name, prompt: value.prompt, projectId: value.projectId,
@@ -145,11 +179,16 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
     if (s.kind === 'weekly') setWeekday(s.days[0] ?? 1);
     setError(''); setMode('editor');
   }
-  async function details(task: Task) {
+  async function details(task: OwnedTask) {
+    const version = ++detailsVersion.current;
+    setHost(task.hostId);
     setSelected(task); setMode('details'); setRuns([]); setError('');
-    try { setRuns(dataRows<TaskRun>(await call('automation/runs', { taskId: task.id }))); }
-    catch { setError('无法读取执行历史'); }
+    try {
+      const result = dataRows<TaskRun>(await call(task.hostId, 'automation/runs', { taskId: task.id }));
+      if (version === detailsVersion.current) setRuns(result);
+    } catch { if (version === detailsVersion.current) setError('无法读取执行历史'); }
   }
+  const saveHost = selected?.hostId ?? (reminder ? '6v' : host);
   const save = () => {
     if (!draft.prompt.trim() ||
         (!reminder && !hostProjects.some((project) => project.id === draft.projectId))) {
@@ -178,7 +217,7 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
         modelMode: 'none', projectId: '', prompt: draft.prompt, threadId: null, model: null, effort: null,
         conversationMode: 'new', permissionMode: 'read-only', workspaceMode: 'project',
       }) };
-    void mutate(selected ? 'automation/update' : 'automation/create',
+    void mutate(saveHost, selected ? 'automation/update' : 'automation/create',
       selected ? { id: selected.id, patch: task } : { task });
   };
   const shown = tasks.filter((task) => tab === 'done' ? task.completed :
@@ -187,16 +226,13 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
   return <div className="automations-view">
     <div className="automations-toolbar">
       <strong><CalendarClock size={20}/>定时任务</strong>
-      <select aria-label="选择电脑" value={host} disabled={busy}
-        onChange={(event) => { setOpenedReminder(null); setHost(event.target.value as HostId); }}>
-        {hosts.map((item) => <option key={item} value={item}>{item}</option>)}
-      </select>
       <button title="刷新" aria-label="刷新任务" disabled={loading} onClick={() => { void refresh(); }}>
         <RefreshCw size={18}/></button>
-      <button className="automations-create" disabled={!online} onClick={() => { setOpenedReminder(null); edit(); }}>
+      <button className="automations-create" disabled={!hosts.some(({ id }) => status[id] === 'online')} onClick={() => { setOpenedReminder(null); edit(); }}>
         <Plus size={17}/>新建
       </button>
     </div>
+    {unavailable.length > 0 && mode === 'list' && <p role="status" className="automations-error">部分机器的任务暂时无法刷新：{unavailable.map(hostName).join('、')}（如有缓存则继续显示）</p>}
     {error && <p role="alert" className="automations-error">{error}</p>}
     {openedReminder?.reminder && <div className="automations-details">
       <button className="automations-back" onClick={() => setOpenedReminder(null)}>
@@ -212,12 +248,12 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
     {mode === 'list' && <>
       {inbox.length > 0 && <div className="automations-inbox">
         {inbox.length} 条任务消息待查看
-        {inbox.map((run) => <button key={run.id} onClick={() => {
+        {inbox.map((run) => <button key={JSON.stringify([run.hostId, run.id])} onClick={() => {
           if (run.reminder) setOpenedReminder(run);
-          void call('automation/read', { runId: run.id }).then(refresh)
+          void call(run.hostId, 'automation/read', { runId: run.id }).then(refresh)
             .catch(() => setError('无法标记为已读。'));
-          if (run.threadId) onOpenThread(host, run.threadId);
-        }}>{run.reminder?.title ?? run.state} · {new Date(run.startedAt).toLocaleString()}</button>)}
+          if (run.threadId) onOpenThread(run.hostId, run.threadId);
+        }}>{run.reminder?.title ?? [tasks.find((task) => task.hostId === run.hostId && task.id === run.taskId)?.name ?? run.state, hostName(run.hostId)].join(' · ')} · {new Date(run.startedAt).toLocaleString()}</button>)}
       </div>}
       <div className="automations-tabs">
         {(['active', 'paused', 'done'] as const).map((item) => <button key={item}
@@ -226,23 +262,32 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
         </button>)}
       </div>
       {shown.length === 0 && <p className="automations-empty">{loading ? '正在加载…' : '这里还没有任务'}</p>}
-      <div className="automations-list">{shown.map((task) => <article key={task.id}>
+      <div className="automations-list">{shown.map((task) => <article key={JSON.stringify([task.hostId, task.id])}>
         <button className="automations-task" onClick={() => { void details(task); }}>
           <strong>{task.name}</strong>
           <span>{scheduleLabel(task.schedule)} · {task.modelMode === 'none' ? '仅提醒' :
-            hostProjects.find((p) => p.id === task.projectId)?.name ?? '项目'}</span>
+            ownerLabel(task)}</span>
           <span>{task.nextRunAt ? '下次：' + new Date(task.nextRunAt).toLocaleString() : '暂无下次执行时间'}</span>
         </button>
-        <button aria-label={task.enabled ? '暂停任务' : '启用任务'} disabled={busy}
-          onClick={() => { void mutate('automation/toggle', { id: task.id, enabled: !task.enabled }); }}>
+        <button aria-label={task.enabled ? '暂停任务' : '启用任务'} disabled={busy || status[task.hostId] !== 'online'}
+          onClick={() => { void mutate(task.hostId, 'automation/toggle', { id: task.id, enabled: !task.enabled }); }}>
           {task.enabled ? <Pause size={17}/> : <Play size={17}/>}</button>
       </article>)}</div>
     </>}
     {mode === 'editor' && <div className="automations-editor">
-      <button className="automations-back" onClick={() => setMode('list')}><ChevronLeft size={18}/>返回列表</button>
+      <button className="automations-back" onClick={() => { ++detailsVersion.current; setMode('list'); }}><ChevronLeft size={18}/>返回列表</button>
       <label>任务名称（选填）<input value={draft.name} maxLength={80} disabled={busy}
         placeholder="留空则取内容前六个字"
         onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))}/></label>
+      {!reminder && <label>运行机器<select value={host} disabled={busy || !!selected}
+        onChange={(event) => {
+          const target = event.target.value as HostId;
+          setHost(target);
+          setDraft((old) => ({ ...old, projectId: projects.find((p) => p.hostId === target)?.id ?? '',
+            model: null, effort: null, threadId: null }));
+        }}>
+        {hosts.map(({ id, displayName }) => <option key={id} value={id}>{displayName}</option>)}
+      </select></label>}
       <label>模型<select value={reminder ? reminderOption : draft.model ?? ''} disabled={busy} onChange={(event) => {
         const value = event.target.value;
         setDraft((old) => ({ ...old, modelMode: value === reminderOption ? 'none' : 'default',
@@ -306,26 +351,28 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
           <option key={effort} value={effort}>{effortLabels[effort] ?? effort}</option>)}
       </select></label>
       </>}
-      <button className="automations-save" disabled={busy} onClick={save}>
+      {status[saveHost] !== 'online' && <p role="status" className="automations-error">当前调度服务未连接，暂时无法保存。</p>}
+      <button className="automations-save" disabled={busy || status[saveHost] !== 'online'} onClick={save}>
         <Check size={17}/>{busy ? '保存中…' : selected ? '保存任务' : '创建任务'}
       </button>
     </div>}
     {mode === 'details' && selected && <div className="automations-details">
-      <button className="automations-back" onClick={() => setMode('list')}><ChevronLeft size={18}/>返回列表</button>
+      <button className="automations-back" onClick={() => { ++detailsVersion.current; setMode('list'); }}><ChevronLeft size={18}/>返回列表</button>
       <h2>{selected.name}</h2>
       <p>{scheduleLabel(selected.schedule)} · {selected.timeZone}</p>
       {selected.modelMode === 'none' ? <p>仅提醒</p> : <p>
         模型 {selectedModel?.name ?? selected.model ?? '默认'} · 思考强度 {selected.effort
           ? effortLabels[selected.effort] ?? selected.effort : '默认'}</p>}
+      {selected.modelMode !== 'none' && <p>{ownerLabel(selected)}</p>}
       <p className="automations-prompt">{selected.prompt}</p>
       <div className="automations-buttons">
         <button onClick={() => edit(selected)}>编辑</button>
-        <button disabled={busy} onClick={() => { void mutate('automation/run', { id: selected.id }); }}>
+        <button disabled={busy || !online} onClick={() => { void mutate(selected.hostId, 'automation/run', { id: selected.id }); }}>
           <Play size={16}/>{selected.modelMode === 'none' ? '立即提醒' : '立即运行'}
         </button>
-        <button disabled={busy} onClick={() => {
+        <button disabled={busy || !online} onClick={() => {
           if (window.confirm(selected.modelMode === 'none' ? '删除此提醒任务？' : '删除任务定义？已生成的聊天会保留。')) {
-            void mutate('automation/delete', { id: selected.id });
+            void mutate(selected.hostId, 'automation/delete', { id: selected.id });
           }
         }}><Trash2 size={16}/>删除任务</button>
       </div>
@@ -333,10 +380,10 @@ export function AutomationView({ hosts, initialHost, initialReminder, projects, 
       {runs.map((run) => <button key={run.id} className="automations-run"
         onClick={() => {
           if (run.reminder) {
-            setOpenedReminder(run);
-            if (!run.seen) void call('automation/read', { runId: run.id }).then(refresh)
+            setOpenedReminder({ ...run, hostId: selected.hostId });
+            if (!run.seen) void call(selected.hostId, 'automation/read', { runId: run.id }).then(refresh)
               .catch(() => setError('无法标记为已读。'));
-          } else if (run.threadId) onOpenThread(host, run.threadId);
+          } else if (run.threadId) onOpenThread(selected.hostId, run.threadId);
         }}>
         {run.reminder ? '已触发' : run.state} · {new Date(run.startedAt).toLocaleString()}
         {run.reason && <span> · {run.reason}</span>}

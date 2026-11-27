@@ -1868,7 +1868,7 @@ export default function DesktopApp() {
 
       {view === 'tasks' ? <AutomationView
           key={reminderTarget ? reminderTarget.navigation : 'tasks'}
-          hosts={hosts.map((host) => host.id)}
+          hosts={hosts}
           initialHost={reminderTarget?.hostId ?? currentHost}
           initialReminder={reminderTarget ?? undefined}
           projects={projects}
