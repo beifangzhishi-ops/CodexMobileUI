@@ -7,11 +7,12 @@ import { dirname, join } from 'node:path';
 import type {
   QuotaGuardRuntime, QuotaGuardSetting, QuotaHostId,
 } from '../shared/quotaGuard.js';
-import { parseQuotaGuardRuntime } from '../shared/quotaGuard.js';
+import { isQuotaGuardThreshold, parseQuotaGuardRuntime, QUOTA_GUARD_THRESHOLD_PERCENT } from '../shared/quotaGuard.js';
 
 type StoredSetting = {
   version: 1;
   enabled: boolean;
+  thresholdPercent: number;
   revision: number;
   updatedAt: number;
   syncedAt: number | null;
@@ -32,11 +33,14 @@ function parseStoredSetting(raw: string, expectedHost: QuotaHostId,
       typeof data.updatedAt !== 'number' || !Number.isFinite(data.updatedAt) ||
       !(data.syncedAt === null || typeof data.syncedAt === 'number' &&
         Number.isFinite(data.syncedAt))) throw new Error('QUOTA_GUARD_STATE_INVALID');
+  const thresholdPercent = data.thresholdPercent === undefined
+    ? QUOTA_GUARD_THRESHOLD_PERCENT : data.thresholdPercent;
+  if (!isQuotaGuardThreshold(thresholdPercent)) throw new Error('QUOTA_GUARD_STATE_INVALID');
   const syncedAt = data.syncedAt as number | null;
   const pending = expectedHost === 'noha' &&
     (syncedAt === null || syncedAt > now + 30_000 || now - syncedAt > maxSyncAgeMs);
   return {
-    enabled: data.enabled, revision: Number(data.revision), updatedAt: data.updatedAt,
+    enabled: data.enabled, thresholdPercent, revision: Number(data.revision), updatedAt: data.updatedAt,
     syncedAt, pending,
     reason: pending ? '等待 6v 同步共享保护设置' : null,
   };
@@ -56,7 +60,7 @@ export class QuotaGuardSettingStore {
 
   readAuthoritativeSync(now = Date.now()): QuotaGuardSetting {
     if (!existsSync(this.settingFile)) {
-      return { enabled: false, revision: 0, updatedAt: 0,
+      return { enabled: false, thresholdPercent: QUOTA_GUARD_THRESHOLD_PERCENT, revision: 0, updatedAt: 0,
         syncedAt: now, pending: false, reason: null };
     }
     try {
@@ -69,14 +73,14 @@ export class QuotaGuardSettingStore {
 
   readMirrorSync(now = Date.now()): QuotaGuardSetting {
     if (!existsSync(this.settingFile)) {
-      return { enabled: false, revision: 0, updatedAt: 0, syncedAt: null,
+      return { enabled: false, thresholdPercent: QUOTA_GUARD_THRESHOLD_PERCENT, revision: 0, updatedAt: 0, syncedAt: null,
         pending: true, reason: '等待 6v 同步共享保护设置' };
     }
     try {
       return parseStoredSetting(readFileSync(this.settingFile, 'utf8'), 'noha',
         this.maxSyncAgeMs, now);
     } catch {
-      return { enabled: false, revision: 0, updatedAt: 0, syncedAt: null,
+      return { enabled: false, thresholdPercent: QUOTA_GUARD_THRESHOLD_PERCENT, revision: 0, updatedAt: 0, syncedAt: null,
         pending: true, reason: '共享保护设置无法校验，等待 6v 重新同步' };
     }
   }
@@ -106,9 +110,10 @@ export class QuotaGuardSettingStore {
   }
 
   async setEnabled(enabled: unknown, expectedRevision: unknown,
-    now = Date.now()): Promise<QuotaGuardSetting> {
+    now = Date.now(), thresholdPercent?: unknown): Promise<QuotaGuardSetting> {
     if (typeof enabled !== 'boolean' || !Number.isSafeInteger(expectedRevision) ||
-        Number(expectedRevision) < 0) throw new Error('QUOTA_GUARD_INVALID_PARAMS');
+        Number(expectedRevision) < 0 ||
+        (thresholdPercent !== undefined && !isQuotaGuardThreshold(thresholdPercent))) throw new Error('QUOTA_GUARD_INVALID_PARAMS');
     mkdirSync(this.stateDirectory, { recursive: true });
     const lockPath = this.settingFile + '.lock';
     let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -128,9 +133,10 @@ export class QuotaGuardSettingStore {
     try {
       const current = this.readAuthoritativeSync(now);
       if (current.revision !== Number(expectedRevision)) throw new Error('QUOTA_GUARD_CONFLICT');
-      if (current.enabled === enabled) return current;
+      const nextThreshold = thresholdPercent === undefined ? current.thresholdPercent : thresholdPercent;
+      if (current.enabled === enabled && current.thresholdPercent === nextThreshold) return current;
       const next: StoredSetting = {
-        version: 1, enabled, revision: current.revision + 1, updatedAt: now,
+        version: 1, enabled, thresholdPercent: nextThreshold, revision: current.revision + 1, updatedAt: now,
         syncedAt: now,
       };
       const temporary = this.settingFile + '.' + randomUUID() + '.tmp';
@@ -146,14 +152,14 @@ export class QuotaGuardSettingStore {
   }
 
   writeMirrorSync(enabled: boolean, revision: number, updatedAt: number,
-    now = Date.now()): QuotaGuardSetting {
-    if (!Number.isSafeInteger(revision) || revision < 0 ||
+    now = Date.now(), thresholdPercent = QUOTA_GUARD_THRESHOLD_PERCENT): QuotaGuardSetting {
+    if (!isQuotaGuardThreshold(thresholdPercent) || !Number.isSafeInteger(revision) || revision < 0 ||
         !Number.isFinite(updatedAt) || updatedAt < 0) throw new Error('QUOTA_GUARD_SYNC_INVALID');
     const previous = this.readMirrorSync(now);
     if (revision < previous.revision) return previous;
     mkdirSync(dirname(this.settingFile), { recursive: true });
     const value: StoredSetting = {
-      version: 1, enabled, revision, updatedAt, syncedAt: now,
+      version: 1, enabled, thresholdPercent, revision, updatedAt, syncedAt: now,
     };
     const temporary = this.settingFile + '.' + process.pid + '.' + randomUUID() + '.tmp';
     try {
@@ -233,15 +239,15 @@ export function quotaGuardFileAdmission(store: QuotaGuardSettingStore,
   if (setting.pending) return { allowed: false, reason: 'QUOTA_GUARD_SYNC_PENDING' };
   if (!setting.enabled) return { allowed: true, reason: null };
   const runtime = store.readRuntimeSync(hostId);
-  if (runtime?.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_BLOCKED' };
+  if (runtime?.settingRevision === setting.revision && runtime.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_BLOCKED' };
   const peerHost: QuotaHostId = hostId === '6v' ? 'noha' : '6v';
   const peer = store.readPeerRuntimeSync(peerHost);
-  if (peer?.runtime.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_PEER_BLOCKED' };
-  if (!runtime || runtime.nativeStatus !== 'online' ||
+  if (peer?.runtime.settingRevision === setting.revision && peer.runtime.triggers.length) return { allowed: false, reason: 'QUOTA_GUARD_PEER_BLOCKED' };
+  if (!runtime || runtime.settingRevision !== setting.revision || runtime.nativeStatus !== 'online' ||
       runtime.lastReadAt === null || now - runtime.lastReadAt > maxReadAgeMs) {
     return { allowed: false, reason: 'QUOTA_GUARD_MONITOR_UNAVAILABLE' };
   }
-  if (!peer || peer.runtime.nativeStatus !== 'online' ||
+  if (!peer || peer.runtime.settingRevision !== setting.revision || peer.runtime.nativeStatus !== 'online' ||
       peer.runtime.lastReadAt === null || now - peer.receivedAt > maxPeerAgeMs ||
       now - peer.runtime.lastReadAt > maxReadAgeMs) {
     return { allowed: false, reason: 'QUOTA_GUARD_PEER_PENDING' };

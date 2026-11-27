@@ -26,6 +26,8 @@ const object = (value: unknown): Json =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {};
 const nativeId = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9_.:-]{8,200}$/.test(value);
+const terminalTurn = (status: unknown): boolean =>
+  status === 'completed' || status === 'interrupted' || status === 'failed';
 
 /**
  * Host-local quota authority for admission and interruption. It owns its own
@@ -51,6 +53,7 @@ export class QuotaGuardService {
   private initialized = false;
   private refreshing: Promise<void> | null = null;
   private discovering: Promise<void> | null = null;
+  private reconciling: Promise<void> | null = null;
   private runtime: QuotaGuardRuntime;
   private interruptTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private activeTurns = new Map<string, { threadId: string; turnId: string }>();
@@ -113,9 +116,7 @@ export class QuotaGuardService {
   }
 
   status(): QuotaGuardRuntime {
-    const setting = this.store.readSettingSync(this.hostId);
-    return { ...this.runtime, enabled: setting.enabled,
-      settingRevision: setting.revision, updatedAt: this.runtime.updatedAt };
+    return this.runtime;
   }
 
   async observeRateLimitResponse(input: unknown, observedAt = Date.now()): Promise<void> {
@@ -126,14 +127,15 @@ export class QuotaGuardService {
       this.persist();
       return;
     }
-    const triggers = mergeQuotaGuardTriggers(this.runtime.triggers, readings, observedAt);
+    const setting = this.store.readSettingSync(this.hostId);
+    const triggers = mergeQuotaGuardTriggers(this.runtime.triggers, readings, observedAt,
+      setting.thresholdPercent);
     const wasBlocked = this.runtime.triggers.length > 0;
     const triggersChanged = JSON.stringify(triggers) !== JSON.stringify(this.runtime.triggers);
     this.runtime = {
       ...this.runtime, triggers, nativeStatus: 'online', lastReadAt: observedAt,
       lastReadError: null, updatedAt: observedAt,
-      enabled: this.settingEnabled(),
-      settingRevision: this.store.readSettingSync(this.hostId).revision,
+      enabled: setting.enabled, settingRevision: setting.revision,
     };
     this.persist(triggersChanged);
     if (triggers.length > 0) {
@@ -145,15 +147,14 @@ export class QuotaGuardService {
     else if (wasBlocked) await this.recoverActiveTurns();
   }
 
-  private settingEnabled(): boolean {
-    try { return this.store.readSettingSync(this.hostId).enabled; }
-    catch { return false; }
-  }
-
   private blocked(): boolean {
-    if (!this.settingEnabled()) return false;
-    if (this.runtime.triggers.length > 0) return true;
-    return (this.store.readPeerRuntimeSync(this.peerHostId)?.runtime.triggers.length ?? 0) > 0;
+    try {
+      const setting = this.store.readSettingSync(this.hostId);
+      if (!setting.enabled) return false;
+      const peer = this.store.readPeerRuntimeSync(this.peerHostId)?.runtime;
+      return (this.runtime.settingRevision === setting.revision && this.runtime.triggers.length > 0) ||
+        (peer?.settingRevision === setting.revision && peer.triggers.length > 0);
+    } catch { return false; }
   }
 
   private persist(advanceRevision = false): void {
@@ -172,9 +173,14 @@ export class QuotaGuardService {
 
   private checkGuardLatches(): void {
     if (this.closed) return;
-    const low = this.settingEnabled() &&
-      (this.runtime.triggers.length > 0 ||
-        (this.store.readPeerRuntimeSync(this.peerHostId)?.runtime.triggers.length ?? 0) > 0);
+    try {
+      const setting = this.store.readSettingSync(this.hostId);
+      if (!setting.pending && setting.revision !== this.runtime.settingRevision &&
+          this.initialized && !this.refreshing && !this.readRetryTimer) {
+        void this.refreshRateLimits();
+      }
+    } catch { /* Admission handles invalid settings. */ }
+    const low = this.blocked();
     if (low && !this.guardBlocked) {
       for (const active of this.activeTurns.values()) {
         void this.interruptTurn(active.threadId, active.turnId, 0);
@@ -268,8 +274,12 @@ export class QuotaGuardService {
       this.persist();
       if (this.pollTimer) clearInterval(this.pollTimer);
       this.pollTimer = setInterval(() => {
-        if (this.initialized) void this.refreshRateLimits();
+        if (this.initialized) {
+          void this.refreshRateLimits();
+          void this.reconcileInterrupts();
+        }
       }, this.pollMs);
+      await this.reconcileInterrupts();
       await this.refreshRateLimits();
       await this.recoverActiveTurns();
     } catch {
@@ -344,7 +354,9 @@ export class QuotaGuardService {
     if (method === 'account/rateLimits/updated') {
       this.rateGeneration++;
       const snapshot = object(params.rateLimits);
-      if (Object.keys(snapshot).length) {
+      // Only a full read can establish readiness for a new settings revision.
+      if (Object.keys(snapshot).length &&
+          this.store.readSettingSync(this.hostId).revision === this.runtime.settingRevision) {
         await this.observeRateLimitResponse({ rateLimits: snapshot });
       }
       await this.refreshRateLimits();
@@ -363,17 +375,11 @@ export class QuotaGuardService {
     }
     if (method === 'turn/completed') {
       const threadId = params.threadId;
-      const turnId = object(params.turn).id;
+      const turn = object(params.turn);
+      const turnId = turn.id;
       if (nativeId(threadId) && nativeId(turnId)) {
         this.activeTurns.delete(threadId + ':' + turnId);
-        const prior = this.runtime.interrupts.find((item) => item.threadId === threadId &&
-          item.turnId === turnId && (item.state === 'requested' || item.state === 'retrying'));
-        if (prior) this.updateInterrupt(threadId, turnId, 'confirmed', null);
-        this.runtime = { ...this.runtime,
-          interrupts: this.runtime.interrupts.filter((item) =>
-            item.threadId !== threadId || item.turnId !== turnId ||
-            item.state === 'confirmed' || item.state === 'failed') };
-        this.persist();
+        if (terminalTurn(turn.status)) this.confirmTerminal(threadId, turnId);
       }
       return;
     }
@@ -402,6 +408,7 @@ export class QuotaGuardService {
     const interrupts = this.runtime.interrupts.map((item) => {
       if (item.threadId !== threadId || item.turnId !== turnId) return item;
       found = true;
+      if (item.state === 'confirmed') return item;
       return { ...item, state, reason,
         attempts: attempts ?? item.attempts,
         confirmedAt: state === 'confirmed' ? Date.now() : item.confirmedAt };
@@ -411,6 +418,66 @@ export class QuotaGuardService {
       confirmedAt: state === 'confirmed' ? Date.now() : null });
     this.runtime = { ...this.runtime, interrupts, updatedAt: Date.now() };
     this.persist();
+  }
+
+  private confirmTerminal(threadId: string, turnId: string): void {
+    const prior = this.runtime.interrupts.find((item) => item.threadId === threadId &&
+      item.turnId === turnId && item.state !== 'confirmed');
+    if (!prior) return;
+    const key = threadId + ':' + turnId;
+    const timer = this.interruptTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.interruptTimers.delete(key);
+    this.activeTurns.delete(key);
+    this.updateInterrupt(threadId, turnId, 'confirmed', null);
+  }
+
+  // Recheck exact persisted turns, not just loaded threads or recent turns.
+  // Missing history or a failed read is never evidence of termination.
+  private async reconcileInterrupts(): Promise<void> {
+    if (!this.initialized || this.closed || this.reconciling) return this.reconciling ?? undefined;
+    const socket = this.socket;
+    this.reconciling = (async () => {
+      const unresolved = this.runtime.interrupts.filter((item) => item.state !== 'confirmed');
+      for (const threadId of new Set(unresolved.map((item) => item.threadId))) {
+        if (this.closed || !this.initialized || this.socket !== socket) break;
+        const targets = new Set(unresolved.filter((item) => item.threadId === threadId)
+          .map((item) => item.turnId));
+        const cursors = new Set<string>();
+        let cursor: string | null = null;
+        try {
+          for (let index = 0; index < 20 && targets.size > 0; index++) {
+            const page = await this.request('thread/turns/list', {
+              threadId, limit: 100, sortDirection: 'desc', itemsView: 'summary',
+              ...(cursor ? { cursor } : {}),
+            });
+            if (this.closed || !this.initialized || this.socket !== socket || !Array.isArray(page.data)) break;
+            for (const value of page.data) {
+              const turn = object(value);
+              const turnId = turn.id;
+              if (!nativeId(turnId) || !targets.delete(turnId)) continue;
+              if (terminalTurn(turn.status)) this.confirmTerminal(threadId, turnId);
+              else if (turn.status === 'inProgress' && this.blocked()) {
+                const key = threadId + ':' + turnId;
+                const current = this.runtime.interrupts.find((item) => item.threadId === threadId &&
+                  item.turnId === turnId);
+                if (current && current.state !== 'confirmed' &&
+                    !this.interruptsInFlight.has(key) && !this.interruptTimers.has(key) &&
+                    (current.state === 'failed' || current.attempts >= this.retryDelaysMs.length)) {
+                  this.updateInterrupt(threadId, turnId, 'requested', null, 0);
+                  await this.interruptTurn(threadId, turnId, 0);
+                }
+              }
+            }
+            const next = page.nextCursor;
+            if (typeof next !== 'string' || !next || cursors.has(next)) break;
+            cursors.add(next);
+            cursor = next;
+          }
+        } catch { /* Keep unverified status for the next poll/reconnect. */ }
+      }
+    })().finally(() => { this.reconciling = null; });
+    return this.reconciling;
   }
 
   private async interruptTurn(threadId: string, turnId: string, attempt: number): Promise<void> {
@@ -447,8 +514,13 @@ export class QuotaGuardService {
           attempt + 1);
       }
     } catch (error) {
-      const reason = error instanceof Error && error.message === 'NATIVE_TIMEOUT'
-        ? 'INTERRUPT_TIMEOUT' : 'NATIVE_OFFLINE';
+      const latest = this.runtime.interrupts.find((item) =>
+        item.threadId === threadId && item.turnId === turnId);
+      if (latest?.state === 'confirmed' || this.closed) return;
+      const code = error instanceof Error ? error.message : '';
+      const reason = code === 'NATIVE_TIMEOUT' ? 'INTERRUPT_TIMEOUT'
+        : code === 'NATIVE_RPC_FAILED' ? 'NATIVE_RPC_FAILED'
+          : code === 'NATIVE_SEND_FAILED' ? 'NATIVE_SEND_FAILED' : 'NATIVE_OFFLINE';
       if (attempt + 1 < this.retryDelaysMs.length) {
         this.updateInterrupt(threadId, turnId, 'retrying', reason, attempt + 1);
         const timer = setTimeout(() => {

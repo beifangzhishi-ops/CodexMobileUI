@@ -632,11 +632,12 @@ Gateway OAuth is independent of native Codex model login. For model requests, au
 
 ## Features implemented in source
 
-- **3% shared quota guard (source):** Both quota popovers expose the same
-  default-off setting, persisted by 6v and mirrored to noha through the existing
+- **Shared quota guard (source):** Both quota popovers expose the same
+  default-off setting and a remaining-quota threshold from 0% to 100%
+  in whole percentage points (default 3%). 6v persists the settings and mirrors them to noha through the existing
   authenticated private peer. Either host can latch a guard when any valid
   native rate-limit window, including non-Codex limit IDs, has raw remaining
-  quota at or below 3%. The host services block new turns, steering, native
+  quota at or below the saved threshold. The host services block new turns, steering, native
   queue additions/starts, goal execution, compaction, titles and manual
   scheduler runs while latched; due scheduled occurrences are skipped.
   Confirmed active turns are interrupted with their exact native thread/turn
