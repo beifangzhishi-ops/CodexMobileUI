@@ -270,7 +270,7 @@ export function quotaGuardGuardedMethod(method: string): boolean {
 }
 
 export function quotaGuardHostView(runtime: QuotaGuardRuntime | null,
-  expectedHost: QuotaHostId, now = Date.now()): QuotaGuardHostView {
+  expectedHost: QuotaHostId, now = Date.now(), sharedBlocked = false): QuotaGuardHostView {
   if (!runtime || runtime.hostId !== expectedHost) {
     return { hostId: expectedHost, status: 'pending', readAt: null,
       triggeredCount: 0, reason: '等待这台电脑的额度状态' };
@@ -278,17 +278,17 @@ export function quotaGuardHostView(runtime: QuotaGuardRuntime | null,
   const active = runtime.interrupts.filter((item) => item.state === 'requested' || item.state === 'retrying');
   const failed = runtime.interrupts.filter((item) => item.state === 'failed');
   const confirmed = runtime.interrupts.filter((item) => item.state === 'confirmed');
-  const reason = runtime.triggers[0]
-    ? quotaWindowLabel(runtime.triggers[0]) +
-      (runtime.discovery === 'incomplete' ? '；活跃回合扫描不完整' : '')
-    : runtime.lastReadError;
+  const blocked = sharedBlocked || runtime.triggers.length > 0;
+  const reason = [runtime.triggers[0] ? quotaWindowLabel(runtime.triggers[0]) : runtime.lastReadError,
+    blocked && runtime.discovery !== 'complete' ? '活跃回合及子 Agent 扫描尚未确认' : null]
+    .filter(Boolean).join('；') || null;
   const fresh = runtime.nativeStatus === 'online' && runtime.lastReadAt !== null &&
     now - runtime.lastReadAt <= 150_000;
   const status: QuotaGuardHostView['status'] = !runtime.enabled ? 'off'
-    : runtime.triggers.length > 0 && failed.length > 0 ? 'failed'
-      : runtime.triggers.length > 0 && active.length > 0 ? 'interrupting'
-        : runtime.triggers.length > 0 && confirmed.length > 0 ? 'confirmed'
-          : runtime.triggers.length > 0 ? 'guarded'
+    : blocked && failed.length > 0 ? 'failed'
+      : blocked && active.length > 0 ? 'interrupting'
+        : blocked && fresh && runtime.discovery === 'complete' && confirmed.length > 0 ? 'confirmed'
+          : blocked ? 'guarded'
             : fresh ? 'ready' : 'degraded';
   return {
     hostId: expectedHost, status, readAt: runtime.lastReadAt,
@@ -299,21 +299,30 @@ export function quotaGuardHostView(runtime: QuotaGuardRuntime | null,
 export function buildQuotaGuardState(setting: QuotaGuardSetting,
   syncPending: boolean, syncReason: string | null, syncedAt: number | null,
   runtimes: Partial<Record<QuotaHostId, QuotaGuardRuntime | null>>): QuotaGuardSharedState {
+  const now = Date.now();
+  const sharedBlocked = setting.enabled && Object.values(runtimes).some((runtime) =>
+    runtime?.settingRevision === setting.revision && runtime.triggers.length > 0);
   const hosts = {
-    '6v': quotaGuardHostView(runtimes['6v'] ?? null, '6v'),
-    noha: quotaGuardHostView(runtimes.noha ?? null, 'noha'),
+    '6v': quotaGuardHostView(runtimes['6v'] ?? null, '6v', now, sharedBlocked),
+    noha: quotaGuardHostView(runtimes.noha ?? null, 'noha', now, sharedBlocked),
   } satisfies Record<QuotaHostId, QuotaGuardHostView>;
   const triggered = Object.values(hosts).flatMap((host) =>
     host.triggeredCount > 0 && host.reason ? [{ host, reason: host.reason }] : []);
   const activeInterrupt = Object.values(hosts).some((host) => host.status === 'interrupting');
   const failed = Object.values(hosts).some((host) => host.status === 'failed');
   const confirmed = Object.values(hosts).some((host) => host.status === 'confirmed');
+  const allDiscovered = !syncPending && (['6v', 'noha'] as const).every((id) => {
+    const runtime = runtimes[id];
+    return runtime?.settingRevision === setting.revision && runtime.enabled &&
+      runtime.nativeStatus === 'online' && runtime.lastReadAt !== null &&
+      now - runtime.lastReadAt <= 150_000 && runtime.discovery === 'complete';
+  });
   const degraded = Object.values(hosts).some((host) =>
     host.status === 'degraded' || host.status === 'pending');
   let status: QuotaGuardSharedState['status'];
   if (!setting.enabled) status = 'off';
   else if (triggered.length > 0) status = failed ? 'failed'
-    : activeInterrupt ? 'interrupting' : confirmed ? 'confirmed' : 'guarded';
+    : activeInterrupt ? 'interrupting' : confirmed && allDiscovered ? 'confirmed' : 'guarded';
   else if (syncPending || degraded) status = syncPending ? 'pending' : 'degraded';
   else status = 'ready';
   const triggerReason = triggered.length === 0 ? null
