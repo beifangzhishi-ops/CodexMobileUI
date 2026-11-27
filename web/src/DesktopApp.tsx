@@ -47,7 +47,7 @@ import { ThinkingIndicator } from './ThinkingIndicator';
 import type { PermissionMode, FollowUpMode } from './useLiveCodex';
 import { copyToClipboard, localMessageId } from './browserHelpers';
 import { defaultPathHosts, fetchPathHosts, pathForViewer, savePathHosts, type PathHosts } from './pathHosts';
-import { detectBrowserMachine } from './browserMachine';
+import { MOBILE_VIEWER, resolveViewerDevice, type ViewerDevice } from './viewerDevice';
 import {
   addOptimisticSubmission, positionOptimisticSubmissions, reconcileOptimisticAfterRead, visibleOptimisticSubmissions,
 } from './optimisticSubmissions';
@@ -269,21 +269,23 @@ export default function DesktopApp() {
     timer: number; fired: boolean } | null>(null);
   const suppressNextClick = useRef<{ hostId: HostId; id: string; until: number } | null>(null);
   const [pathHosts, setPathHosts] = useState<PathHosts>(defaultPathHosts);
-  const [manualViewerHost, setManualViewerHost] = useState<HostId | null>(() => {
-    const stored = window.localStorage.getItem('codexmobileui:viewerHost');
-    return validHostId(stored) ? stored : null;
+  const nativeViewer = typeof (window as Window & {
+    ReactNativeWebView?: { postMessage: unknown };
+  }).ReactNativeWebView?.postMessage === 'function';
+  const [manualViewerHost, setManualViewerHost] = useState<string | null>(() => {
+    try { return window.localStorage.getItem('codexmobileui:viewerHost'); }
+    catch { return null; }
   });
-  const [autoViewerHost, setAutoViewerHost] = useState<HostId | null>(null);
-  const viewerHost = autoViewerHost ?? manualViewerHost;
+  const viewerDevice = resolveViewerDevice(manualViewerHost, hosts.map(({ id }) => id), nativeViewer);
+  const viewerHost = viewerDevice === MOBILE_VIEWER ? null : viewerDevice;
   useEffect(() => {
     void fetchPathHosts().then(setPathHosts).catch(() => undefined);
-    void detectBrowserMachine().then(setAutoViewerHost);
   }, []);
-  const changeViewerHost = (host: HostId | null) => {
-    if (autoViewerHost) return;
+  const changeViewerHost = (host: ViewerDevice) => {
+    if (nativeViewer) return;
     setManualViewerHost(host);
-    if (host) window.localStorage.setItem('codexmobileui:viewerHost', host);
-    else window.localStorage.removeItem('codexmobileui:viewerHost');
+    try { window.localStorage.setItem('codexmobileui:viewerHost', host); }
+    catch { /* retain session preference */ }
   };
   const [publicationTarget, setPublicationTarget] = useState<PublicationTarget | null>(null);
   const [forkingThread, setForkingThread] = useState<string | null>(null);
@@ -2221,8 +2223,8 @@ export default function DesktopApp() {
         setPathHosts(saved);
 
       }}
-      viewerHost={viewerHost}
-      viewerHostAuto={autoViewerHost !== null}
+      viewerHost={viewerDevice}
+      nativeViewer={nativeViewer}
       onViewerHost={changeViewerHost}
       hosts={hosts.map((host) => host.id)}
       initialHost={settingsProject?.hostId ?? currentHost}
@@ -2411,6 +2413,7 @@ export default function DesktopApp() {
     </div></div>}
 
     {publicationTarget && <PublicationPreview target={publicationTarget}
+      mobileViewer={viewerDevice === MOBILE_VIEWER}
       request={live.request} onClose={() => setPublicationTarget(null)}
 
       onCopyLink={(url) => copyToClipboard(url)}/>}

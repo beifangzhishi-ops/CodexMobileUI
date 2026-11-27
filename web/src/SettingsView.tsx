@@ -3,6 +3,7 @@ import { FileText, RefreshCw, Save, X } from 'lucide-react';
 import type { HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import type { PathHosts } from './pathHosts';
+import { MOBILE_VIEWER, type ViewerDevice } from './viewerDevice';
 
 type Kind = 'globalRules' | 'projectRules' | 'config';
 type Snapshot = {
@@ -17,9 +18,9 @@ type Props = {
   browserNotifications: { available: boolean; enabled: boolean; error: string; toggle: (enabled: boolean) => Promise<void> };
   pathHosts: PathHosts;
   onSavePathHosts: (hosts: PathHosts) => Promise<void>;
-  viewerHost: HostId | null;
-  viewerHostAuto: boolean;
-  onViewerHost: (host: HostId | null) => void;
+  viewerHost: ViewerDevice;
+  nativeViewer: boolean;
+  onViewerHost: (host: ViewerDevice) => void;
   hosts: readonly HostId[];
   initialHost: HostId;
   initialProjectId?: string;
@@ -44,7 +45,7 @@ function snapshot(value: unknown): Snapshot {
 }
 export function SettingsView({ hosts, initialHost, initialProjectId, projects, theme, onTheme,
   followUpMode, onFollowUpMode, request, onClose,
-  pathHosts, onSavePathHosts, viewerHost, viewerHostAuto, onViewerHost, browserNotifications }: Props) {
+  pathHosts, onSavePathHosts, viewerHost, nativeViewer, onViewerHost, browserNotifications }: Props) {
   const [network, setNetwork] = useState<PathHosts>(() => structuredClone(pathHosts));
   const nativeNotifications = (window as Window & {
     ReactNativeWebView?: { postMessage: (message: string) => void }
@@ -197,13 +198,14 @@ export function SettingsView({ hosts, initialHost, initialProjectId, projects, t
             ...old, [id]: { ip: old[id]?.ip ?? '', share: event.target.value.trim() },
           }))}/></label>
       </div>)}
-      <label>当前浏览器所在电脑
-        <select value={viewerHost ?? ''} disabled={viewerHostAuto} onChange={(event) =>
-          onViewerHost(event.target.value ? event.target.value as HostId : null)}>
-          <option value="">未识别（不转换显示路径）</option>
-          {hosts.map((id) => <option key={id} value={id}>{id}</option>)}
+      <label>当前设备
+        <select value={viewerHost} disabled={nativeViewer} onChange={(event) =>
+          onViewerHost(event.target.value)}>
+          {(hosts.includes('6v') ? hosts : ['6v', ...hosts]).map((id) =>
+            <option key={id} value={id}>{id}{id === '6v' ? '（主服务器）' : ''}</option>)}
+          <option value={MOBILE_VIEWER}>手机 App</option>
         </select>
-        <small>{viewerHostAuto ? '已通过本机服务自动识别' : '本机服务不可识别时，可手动选择'}</small>
+        <small>{nativeViewer ? '手机 App 使用系统保存' : '仅保存在当前浏览器，手机 App 模式使用文件下载'}</small>
       </label>
       {networkError && <p role="alert">{networkError}</p>}
       <button type="button" disabled={!networkDirty || networkBusy}

@@ -11,7 +11,6 @@ import { webContentSecurityPolicy } from './securityPolicy.mjs';
 import { resolveUserTextDetailed, validatePathHosts } from './pathResolver.mjs';
 import { PathSettingsStore } from './pathSettings.mjs';
 import { PathOverlayStore } from './pathOverlays.mjs';
-import { respondLocalIdentity } from './localIdentity.mjs';
 import { NotificationFeed, watchNativeCompletions } from './notificationFeed.mjs';
 import { validModelIdentifier } from './modelIdentifier.mjs';
 import {
@@ -376,9 +375,6 @@ const server = http.createServer((req, res) => {
   if (req.url === '/healthz' && req.socket.remoteAddress === '127.0.0.1') {
     res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok'); return;
   }
-  if (respondLocalIdentity(req, res, {
-    hostId: localHostId, port, origin: config.origin ?? 'http://100.76.74.124:4190',
-  })) return;
   const reminderRequest = !coordinator && req.method === 'GET' &&
     /^\/internal\/reminder-events\?after=(0|[1-9]\d{0,15})$/.exec(req.url ?? '');
   if (reminderRequest) {

@@ -1,24 +1,15 @@
 # CodexMobileUI 架构（2026-11-21 当前运行状态）
 
-## Browser-local machine detection (2026-11-23)
+## Browser-local viewer preference (2026-11-27)
 
-The shared web UI must **not** use the Coordinator host or selected thread host
-as the identity of the computer displaying a file link. Ordinary browsers
-identify 6v/noha by requesting `/api/local-machine` on their own loopback
-`127.0.0.1:4190` (6v Coordinator) and `127.0.0.1:4191` (noha Agent).
-Each listener returns only its own identity, only to the configured Coordinator
-Origin and only over loopback. The web CSP allows precisely those two local
-HTTP endpoints; both support Chromium private-network preflights. If exactly
-one response matches, the browser uses that computer for local-vs-UNC display
-path conversion. Otherwise the browser retains a manual choice, if any, or
-leaves paths unchanged; it must never silently default to 6v. Android does not need a Windows
-identity; unrecognized devices do not guess one.
-
-This is deployed with the existing web static build and both loopback Web
-Bridge processes. noha's host-only bundle must copy `localIdentity.mjs` as
-`scripts/localIdentity.mjs` beside `scripts/web-bridge.mjs`. No APK
-rebuild is required for this shared-web-only change. Verified in actual
-headless Edge browsers on both 6v and noha after the 2026-11-23 deployment.
+The browser stores its viewer device in localStorage independently of other
+browsers. The default is primary host 6v; users may select any registered
+host or Mobile App mode. Mobile App mode leaves displayed paths unchanged
+and uses the existing private file download flow (browser save in a browser,
+native system save in Android). The actual Android WebView always uses Mobile
+App mode. The loopback machine identity probes and CORS endpoint are retired.
+Viewer identity is presentation-only and never changes the thread owner or
+the authenticated publication target.
 
 ## Windows client delivery (retired 2026-11-27)
 

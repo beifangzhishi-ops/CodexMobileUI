@@ -208,9 +208,10 @@ function PreviewContent({ file, hostId, onSaveImage, imageBusy, imageProgress }:
 }
 
 export function PublicationPreview({
-  target, request, onClose, onCopyLink,
+  target, request, onClose, onCopyLink, mobileViewer = false,
 }: {
   target: PublicationTarget;
+  mobileViewer?: boolean;
   request: HostRequest;
   onClose: () => void;
   onCopyLink: (url: string) => Promise<void>;
@@ -226,6 +227,7 @@ export function PublicationPreview({
   const [imageProgress, setImageProgress] = useState<number | null>(null);
   const imageAbortRef = useRef<AbortController | null>(null);
   const android = hasNativePublicationDownload();
+  const downloadMode = android || mobileViewer;
 
   const localAction = useCallback(async (file: PublishedFile) => {
     if (abortRef.current) return;
@@ -235,7 +237,7 @@ export function PublicationPreview({
     setError(null);
     setLocalStatus(null);
     try {
-      if (android) {
+      if (downloadMode) {
         await downloadPublication(target.hostId, file, request, (received, total) => {
           setProgress(Math.round(received / total * 100));
         }, controller.signal);
@@ -248,7 +250,7 @@ export function PublicationPreview({
     } catch (reason) {
       if (!controller.signal.aborted) {
         if (reason instanceof Error && reason.message.includes('CANCEL')) setLocalStatus('已取消保存');
-        else setError(android ? '文件保存失败，可重新开始' : '本端文件操作失败');
+        else setError(downloadMode ? '文件保存失败，可重新开始' : '本端文件操作失败');
       }
     } finally {
       if (abortRef.current === controller) {
@@ -257,7 +259,7 @@ export function PublicationPreview({
         setBusy(false);
       }
     }
-  }, [android, onCopyLink, request, target.hostId]);
+  }, [downloadMode, onCopyLink, request, target.hostId]);
   const latestAction = useRef(localAction);
   useEffect(() => { latestAction.current = localAction; }, [localAction]);
   const saveImage = useCallback(async (published: PublishedFile) => {
@@ -295,7 +297,7 @@ export function PublicationPreview({
       if (!active) return;
       if (publication.status === 'ready') {
         setFile(publication);
-        if (!canPreview(publication) && android) void latestAction.current(publication);
+        if (!canPreview(publication) && downloadMode) void latestAction.current(publication);
       } else setError(publication.error === 'tooLarge'
         ? '文件超过 ' + Math.round(MAX_PUBLICATION_BYTES / 1024 / 1024) + ' MiB 私有快照上限'
         : publication.error === 'missing'
@@ -309,10 +311,10 @@ export function PublicationPreview({
       abortRef.current?.abort();
       imageAbortRef.current?.abort();
     };
-  }, [attempt, request, target.hostId, target.itemId, target.linkIndex, target.threadId, android]);
+  }, [attempt, request, target.hostId, target.itemId, target.linkIndex, target.threadId, downloadMode]);
 
-  const ActionIcon = android ? Download : Copy;
-  const actionLabel = android ? (progress === null ? '保存到系统' : '保存中 · ' + progress + '%') :
+  const ActionIcon = downloadMode ? Download : Copy;
+  const actionLabel = downloadMode ? (progress === null ? (android ? '保存到系统' : '下载文件') : '保存中 · ' + progress + '%') :
     '复制私有链接';
   return <section className="publication-preview-page" role="dialog" aria-modal="true"
     aria-labelledby="publication-preview-title">

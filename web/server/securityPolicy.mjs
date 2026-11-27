@@ -16,7 +16,7 @@ export function webContentSecurityPolicy(origin) {
     "script-src 'self'",
     "style-src 'self'",
     "style-src-attr 'unsafe-inline'",
-    `connect-src 'self' ${websocket} http://127.0.0.1:4190 http://127.0.0.1:4191`,
+    `connect-src 'self' ${websocket}`,
     "img-src 'self' blob: data: https:",
     "frame-src 'self'",
     "media-src 'self' blob:",

@@ -7,7 +7,7 @@ test('tailnet web permits HTTPS logo images and exact browser WebSocket endpoint
   const policy = webContentSecurityPolicy('http://100.76.74.124:4190');
   assert.match(policy, /img-src 'self' blob: data: https:/);
   assert.match(policy, /connect-src 'self' ws:\/\/100\.76\.74\.124:4190/);
-  assert.match(policy, /http:\/\/127\.0\.0\.1:4190 http:\/\/127\.0\.0\.1:4191/);
+  assert.doesNotMatch(policy, /http:\/\/127\.0\.0\.1:419[01]/);
   assert.match(policy, /script-src 'self'/);
   assert.match(policy, /frame-src 'self'/);
   assert.match(policy, /media-src 'self' blob:/);

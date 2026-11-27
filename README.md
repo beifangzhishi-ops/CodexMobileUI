@@ -703,7 +703,7 @@ The owner's original Desktop environment is needed for work during development. 
 
 6v 和 noha 各共享整个 C 盘，分别为 `\\\\100.76.74.124\\6v1f\\` 和
 `\\\\100.96.30.32\\noha\\`。在共享设置里为每台电脑维护 IP + 共享名，
-配置由 6v Web Coordinator 私有保存；浏览器通过本机回环服务识别电脑。
+配置由 6v Web Coordinator 私有保存；浏览器独立保存设备选择，默认主服务器 6v；手机 App 模式不转换路径，使用私有文件下载。
 
 用户输入的 Windows 绝对路径由目标主机逐台检查本机 C 盘和另一电脑的 SMB 路径。
 唯一可访问匹配才改写成目标 Codex 可读的本地/UNC 路径；两台同路径都存在时
