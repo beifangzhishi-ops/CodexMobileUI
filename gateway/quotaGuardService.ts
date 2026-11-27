@@ -354,7 +354,9 @@ export class QuotaGuardService {
     if (method === 'account/rateLimits/updated') {
       this.rateGeneration++;
       const snapshot = object(params.rateLimits);
-      if (Object.keys(snapshot).length) {
+      // Only a full read can establish readiness for a new settings revision.
+      if (Object.keys(snapshot).length &&
+          this.store.readSettingSync(this.hostId).revision === this.runtime.settingRevision) {
         await this.observeRateLimitResponse({ rateLimits: snapshot });
       }
       await this.refreshRateLimits();
