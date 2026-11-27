@@ -1,4 +1,4 @@
-import type { HostId } from './types';
+import { validHostId, type HostId } from './types.ts';
 
 export type CompletedThread = { hostId: HostId; threadId: string };
 export type ThreadCompletionsSnapshot = { revision: number; items: CompletedThread[] };
@@ -15,7 +15,7 @@ export function parseThreadCompletions(value: unknown): ThreadCompletionsSnapsho
         if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
         const thread = item as Record<string, unknown>;
         return Object.keys(thread).length === 2 &&
-          (thread.hostId === '6v' || thread.hostId === 'noha') &&
+          validHostId(thread.hostId) &&
           typeof thread.threadId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(thread.threadId);
       })) {
     throw Error('INVALID_THREAD_COMPLETIONS');

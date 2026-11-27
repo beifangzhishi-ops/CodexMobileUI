@@ -9,7 +9,7 @@ test('shared pins keep host and type identity without trusting browser cache', (
   ] };
   assert.deepEqual(parseSidebarPins(valid), valid);
   assert.throws(() => parseSidebarPins({ revision: 0, items: [
-    { ...valid.items[0], hostId: 'arbitrary' },
+    { ...valid.items[0], hostId: 'all' },
   ] }), /INVALID_PINS/);
   assert.throws(() => parseSidebarPins({ revision: -1, items: [] }), /INVALID_PINS/);
 });

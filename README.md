@@ -4,6 +4,13 @@ An unofficial, self-hosted client for the Codex App Server on Windows, Android a
 
 ## Overview
 
+The Web Coordinator supports a private configuration-driven host roster. The
+browser, Android WebView and Electron renderer discover stable host IDs and
+labels through the same-origin /api/hosts endpoint; publication requests and
+previews are routed to the owning host, not to the Coordinator's own Gateway.
+See [multi-host configuration](docs/multi-host.md) for registration and current
+native-client and quota-protection limitations.
+
 - Multi-host connection through a private Tailscale network, with native Codex conversations and project management.
 - Streaming messages, tool activity, model selection, permissions, approvals, goals, side chats and context compaction.
 - File and image attachments, private file previews, inline Visualize components, notifications and quota indicators.

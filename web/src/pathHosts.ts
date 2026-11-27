@@ -1,4 +1,4 @@
-import type { HostId } from './types';
+import { validHostId, type HostId } from './types.ts';
 
 export type PathHosts = Record<HostId, { ip: string; share: string }>;
 export const defaultPathHosts: PathHosts = {
@@ -9,9 +9,9 @@ export const defaultPathHosts: PathHosts = {
 export function parsePathHosts(value: unknown): PathHosts {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('INVALID_PATH_HOSTS');
   const data = value as Record<string, unknown>;
-  if (Object.keys(data).sort().join(',') !== '6v,noha') throw Error('INVALID_PATH_HOSTS');
+  if (Object.keys(data).length > 16 || !Object.keys(data).every(validHostId)) throw Error('INVALID_PATH_HOSTS');
   const parsed = {} as PathHosts;
-  for (const id of ['6v', 'noha'] as HostId[]) {
+  for (const id of Object.keys(data)) {
     const entry = data[id];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw Error('INVALID_PATH_HOSTS');
     const { ip, share } = entry as Record<string, unknown>;
@@ -42,7 +42,7 @@ export function pathForViewer(path: string, origin: HostId, viewer: HostId | nul
   hosts: PathHosts): string {
   if (!viewer) return path;
   const normalized = path.replace(/\//g, '\\');
-  for (const id of ['6v', 'noha'] as HostId[]) {
+  for (const id of Object.keys(hosts)) {
     const prefix = '\\\\' + hosts[id].ip + '\\' + hosts[id].share + '\\';
     if (normalized.toLowerCase().startsWith(prefix.toLowerCase())) {
       const suffix = normalized.slice(prefix.length);
@@ -51,6 +51,7 @@ export function pathForViewer(path: string, origin: HostId, viewer: HostId | nul
   }
   if (!/^[Cc]:[\\/]/.test(path)) return path;
   if (viewer === origin) return normalized;
+  if (!Object.hasOwn(hosts, origin)) return path;
   return '\\\\' + hosts[origin].ip + '\\' + hosts[origin].share + '\\' + normalized.slice(3);
 }
 

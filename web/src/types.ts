@@ -1,4 +1,7 @@
-export type HostId = '6v' | 'noha';
+export type HostId = string;
+export type Host = { id: HostId; displayName: string };
+export const validHostId = (id: unknown): id is HostId =>
+  typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(id) && !['all', 'constructor', 'prototype'].includes(id);
 export type HostFilter = HostId | 'all';
 export type ConversationStatus = 'idle' | 'running' | 'unread';
 export type Role = 'user' | 'assistant';
@@ -57,9 +60,3 @@ export type Conversation = {
   attachedToThreadId?: string;
   messages: Message[];
 };
-
-// Host registration is fixed here; project and thread data always comes from Codex.
-export const hosts: { id: HostId; displayName: string }[] = [
-  { id: '6v', displayName: '6v' },
-  { id: 'noha', displayName: 'noha' },
-];

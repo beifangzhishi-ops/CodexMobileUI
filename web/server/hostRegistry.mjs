@@ -29,7 +29,7 @@ export function createHostRegistry(config, stateDir = resolve('.state')) {
   for (const item of entries) {
     if (!item || typeof item !== 'object' || Array.isArray(item) ||
         Object.keys(item).some((key) => !['id', 'displayName', 'peerUrl'].includes(key)) ||
-        typeof item.id !== 'string' || !ID.test(item.id) || item.id === 'all' ||
+        typeof item.id !== 'string' || !ID.test(item.id) || ['all', 'constructor', 'prototype'].includes(item.id) ||
         item.id === '6v' || hosts.has(item.id) ||
         typeof item.displayName !== 'string' || !item.displayName.trim() ||
         item.displayName.length > 80 || !validPeerUrl(item.peerUrl)) {

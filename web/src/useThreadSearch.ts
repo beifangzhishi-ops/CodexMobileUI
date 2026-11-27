@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { obj, parseThreads, text } from './nativeProtocol';
-import { hosts, type Conversation, type HostId } from './types';
+import type { Conversation, HostId } from './types';
 
 type Request = (hostId: HostId, method: string, params: Record<string, unknown>, timeout: number) => Promise<unknown>;
 type Hit = { conversation: Conversation; snippet?: string };
@@ -27,9 +27,9 @@ async function searchPage(request: Request, query: string, source: Source): Prom
 }
 
 export function useThreadSearch(open: boolean, query: string, online: Record<HostId, string>, request: Request) {
-  const sixOnline = online['6v'] === 'online';
-  const nohaOnline = online.noha === 'online';
-  const key = open && query ? JSON.stringify([query, sixOnline, nohaOnline]) : '';
+  const onlineIds = Object.keys(online).filter((id) => online[id] === 'online').sort();
+  const onlineKey = JSON.stringify(onlineIds);
+  const key = open && query ? JSON.stringify([query, onlineKey]) : '';
   const session = useRef<{ key: string; busy: boolean } | null>(null);
   const [state, setState] = useState<{ key: string; pages: Page[]; pending: boolean }>({ key: '', pages: [], pending: false });
 
@@ -47,17 +47,17 @@ export function useThreadSearch(open: boolean, query: string, online: Record<Hos
   }
 
   useEffect(() => {
-    if (!key || (!sixOnline && !nohaOnline)) {
+    if (!key || !onlineIds.length) {
       setState({ key: '', pages: [], pending: false });
       return;
     }
     const current = { key, busy: false };
     session.current = current;
-    const sources = hosts.filter(({ id }) => id === '6v' ? sixOnline : nohaOnline)
-      .flatMap(({ id }) => [false, true].map((titlesOnly) => ({ hostId: id, titlesOnly })));
+    const sources = (JSON.parse(onlineKey) as HostId[])
+      .flatMap((id) => [false, true].map((titlesOnly) => ({ hostId: id, titlesOnly })));
     const timer = window.setTimeout(() => void fetchPages(current, sources, [], query), 200);
     return () => { clearTimeout(timer); session.current = null; };
-  }, [key, sixOnline, nohaOnline, query, request]);
+  }, [key, onlineKey, query, request]);
 
   const pages = state.key === key ? state.pages : [];
   const hits = new Map<string, Hit>();
@@ -68,7 +68,7 @@ export function useThreadSearch(open: boolean, query: string, online: Record<Hos
   const next = pages.flatMap((page) => page.next ? [page.next] : []);
   return {
     hits: [...hits.values()].sort((a, b) => b.conversation.updatedAt - a.conversation.updatedAt),
-    pending: !!key && (sixOnline || nohaOnline) && (state.key !== key || state.pending),
+    pending: !!key && onlineIds.length > 0 && (state.key !== key || state.pending),
     error: pages.every((page) => page.failed) && pages.length > 0 ? '搜索失败'
       : pages.some((page) => page.failed) ? '部分搜索请求失败' : null,
     hasMore: next.length > 0,

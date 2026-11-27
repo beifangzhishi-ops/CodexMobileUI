@@ -73,18 +73,19 @@ const hostRegistry = coordinator ? createHostRegistry(config) : null;
 const configuredLocalHostId = config.hostId ?? 'noha';
 if (!coordinator && (typeof configuredLocalHostId !== 'string' ||
     !/^[a-z0-9][a-z0-9-]{0,31}$/.test(configuredLocalHostId) ||
-    configuredLocalHostId === 'all' || configuredLocalHostId === '6v'))
+    ['all', '6v', 'constructor', 'prototype'].includes(configuredLocalHostId)))
   throw Error('Invalid local host identity');
 const localHostId = coordinator ? '6v' : configuredLocalHostId;
 const isKnownHost = (id) => coordinator ? hostRegistry.has(id) : id === localHostId;
+const hasAdditionalPeers = () => coordinator && hostRegistry.list().some(({ id }) => id !== '6v' && id !== 'noha');
 const quotaGuardStore = new QuotaGuardSettingStore(resolve('.state'));
 const titleService = new WebTitleService(resolve('.state'), localHostId);
-const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state')) : null;
-const threadCompletions = coordinator ? new ThreadCompletionStore(resolve('.state')) : null;
-const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json')) : null;
-const pathOverlays = coordinator ? new PathOverlayStore(resolve('.state/file-path-overlays.json')) : null;
+const sidebarPins = coordinator ? new SidebarPinsStore(resolve('.state'), isKnownHost) : null;
+const threadCompletions = coordinator ? new ThreadCompletionStore(resolve('.state'), isKnownHost) : null;
+const pathSettings = coordinator ? new PathSettingsStore(resolve('.state/file-path-hosts.json'), isKnownHost) : null;
+const pathOverlays = coordinator ? new PathOverlayStore(resolve('.state/file-path-overlays.json'), isKnownHost) : null;
 const notificationFeed = coordinator
-  ? new NotificationFeed(resolve('.state/mobile-notification-events.json')) : null;
+  ? new NotificationFeed(resolve('.state/mobile-notification-events.json'), isKnownHost) : null;
 const quotaGuardSubscribers = new Set();
 let remoteQuotaGuardRuntime = null;
 let remoteQuotaGuardReachable = false;
@@ -534,7 +535,7 @@ const server = http.createServer((req, res) => {
       let raw = '';
       for await (const chunk of req) {
         raw += chunk.toString('utf8');
-        if (raw.length > 512) throw Error('INVALID_REQUEST');
+        if (raw.length > 4096) throw Error('INVALID_REQUEST');
       }
       return pathSettings.save(JSON.parse(raw));
     })().then((result) => reply(200, result))
@@ -653,14 +654,15 @@ function allowedFrame(msg) {
   if (msg.method === 'web/pathResolve') return subset(p, ['text', 'hosts']) &&
     Object.keys(p).length === 2 && typeof p.text === 'string' &&
     p.text.length <= 12000 && p.hosts && typeof p.hosts === 'object' &&
-    !Array.isArray(p.hosts) && JSON.stringify(p.hosts).length <= 512 &&
-    (() => { try { validatePathHosts(p.hosts); return true; } catch { return false; } })();
+    !Array.isArray(p.hosts) && JSON.stringify(p.hosts).length <= 4096 &&
+    (() => { try { const hosts = validatePathHosts(p.hosts); return !coordinator || Object.keys(hosts).every(isKnownHost); } catch { return false; } })();
   if (msg.method === 'web/pathFile') return subset(p, ['path', 'sourceHost', 'hosts']) &&
     Object.keys(p).length === 3 && typeof p.path === 'string' &&
-    p.path.length <= 2048 && isKnownHost(p.sourceHost) &&
+    p.path.length <= 2048 && typeof p.sourceHost === 'string' &&
+    (coordinator ? isKnownHost(p.sourceHost) : (p.sourceHost === localHostId || Object.hasOwn(p.hosts ?? {}, p.sourceHost))) &&
     p.hosts && typeof p.hosts === 'object' && !Array.isArray(p.hosts) &&
-    JSON.stringify(p.hosts).length <= 512 &&
-    (() => { try { validatePathHosts(p.hosts); return true; } catch { return false; } })();
+    JSON.stringify(p.hosts).length <= 4096 &&
+    (() => { try { const hosts = validatePathHosts(p.hosts); return !coordinator || Object.keys(hosts).every(isKnownHost); } catch { return false; } })();
   if (msg.method === 'web/automation') {
     return subset(p, ['method', 'params']) && Object.keys(p).length === 2 &&
       automationMethods.has(p.method) && p.params && typeof p.params === 'object' &&
@@ -951,7 +953,7 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
       scheduleCalls.finish(msg.params?.threadId, turnId);
     }
     if (notificationFeed && msg?.method === 'turn/completed' &&
-        (!remotePeer || targetHostId === 'noha')) {
+        isKnownHost(targetHostId)) {
       const hostId = targetHostId;
       void notificationFeed.observe(hostId, msg.params,
         (host, thread, turnId) => notificationFeed.titleReaders.get(host)?.(host, thread, turnId)
@@ -1007,6 +1009,7 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
       void (async () => {
         let state;
         if (msg.method === 'quotaGuard/set') {
+          if (msg.params.enabled && hasAdditionalPeers()) throw Error('QUOTA_GUARD_ADDITIONAL_PEERS');
           await quotaGuardStore.setEnabled(msg.params.enabled, msg.params.expectedRevision);
           await syncPeerQuotaGuard();
         }
@@ -1015,14 +1018,14 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
         safeSend(JSON.stringify({ id: msg.id, result: { state } }));
       })().catch((error) => {
         const known = new Set(['QUOTA_GUARD_CONFLICT', 'QUOTA_GUARD_BUSY',
-          'QUOTA_GUARD_STATE_INVALID', 'QUOTA_GUARD_INVALID_PARAMS']);
+          'QUOTA_GUARD_STATE_INVALID', 'QUOTA_GUARD_INVALID_PARAMS', 'QUOTA_GUARD_ADDITIONAL_PEERS']);
         safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
           message: known.has(error?.message) ? error.message : 'QUOTA_GUARD_UNAVAILABLE' } }));
       });
       return;
     }
     if (msg.method === 'web/quotaGuard') {
-      if (coordinator) {
+      if (coordinator || localHostId !== 'noha') {
         safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
           message: 'QUOTA_GUARD_PEER_ONLY' } }));
         return;
@@ -1041,6 +1044,20 @@ function attachRelay(browser, upstreamUrl, headers = {}, targetHostId = localHos
     // Direct relay bypasses the per-host Gateway. Gate every model-work method
     // here too, after upload/path/preparation branches and immediately before
     // the final native send below.
+    // The existing shared quota monitor is a two-host protocol. Never allow an
+    // additional peer to silently bypass the active authoritative protection.
+    if (remotePeer && targetHostId !== 'noha' &&
+        (quotaGuardGuardedMethod(msg.method) || (msg.method === 'web/automation' &&
+          ['automation/create', 'automation/update', 'automation/run', 'automation/toggle'].includes(msg.params.method)))) {
+      let protectedMode = true;
+      try { const setting = quotaGuardStore.readAuthoritativeSync(); protectedMode = setting.enabled || setting.pending; }
+      catch { /* Fail closed on unverified protection state. */ }
+      if (protectedMode) {
+        safeSend(JSON.stringify({ id: msg.id, error: { code: -32000,
+          message: 'QUOTA_GUARD_ADDITIONAL_PEERS' } }));
+        return;
+      }
+    }
     if (relayHostId && quotaGuardGuardedMethod(msg.method)) {
       const admission = quotaGuardFileAdmission(quotaGuardStore, relayHostId, 135_000);
       if (!admission.allowed) {
@@ -1219,9 +1236,12 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(port, '127.0.0.1', () => { console.log('Web bridge mode=' + mode + ' listening on loopback port ' + port); });
 if (notificationFeed) {
   watchNativeCompletions(notificationFeed, '6v', 'ws://127.0.0.1:45891');
-  const legacyPeer = hostRegistry.get('noha');
-  if (legacyPeer) watchNativeCompletions(notificationFeed, 'noha', legacyPeer.peerUrl, {
-    Authorization: 'Bearer ' + legacyPeer.credential,
-  });
+  for (const { id } of hostRegistry.list()) {
+    if (id === localHostId) continue;
+    const peer = hostRegistry.get(id);
+    watchNativeCompletions(notificationFeed, id, peer.peerUrl, {
+      Authorization: 'Bearer ' + peer.credential,
+    });
+  }
 }
 if (coordinator) void syncPeerQuotaGuard();

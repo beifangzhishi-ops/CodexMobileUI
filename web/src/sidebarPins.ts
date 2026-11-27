@@ -1,4 +1,4 @@
-import type { HostId } from './types';
+import { validHostId, type HostId } from './types.ts';
 
 export type SidebarPin = { type: 'project' | 'thread'; hostId: HostId; id: string };
 export type SidebarPinsSnapshot = { revision: number; items: SidebarPin[] };
@@ -11,7 +11,7 @@ export function parseSidebarPins(value: unknown): SidebarPinsSnapshot {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
         const p = item as Record<string, unknown>;
         return Object.keys(p).length === 3 && (p.type === 'project' || p.type === 'thread') &&
-          (p.hostId === '6v' || p.hostId === 'noha') && typeof p.id === 'string' && /^[\w-]{1,128}$/.test(p.id);
+          validHostId(p.hostId) && typeof p.id === 'string' && /^[\w-]{1,128}$/.test(p.id);
       })) throw Error('INVALID_PINS');
   return data as SidebarPinsSnapshot;
 }

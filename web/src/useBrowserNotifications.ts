@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { HostId } from './types';
+import { validHostId, type HostId } from './types.ts';
 
 const preference = 'codex-web-system-notifications';
 const cursorKey = preference + '-cursor';
@@ -16,7 +16,7 @@ function completion(value: unknown): Completion | null {
   if (!value || typeof value !== 'object') return null;
   const event = value as Partial<Completion>;
   return Number.isSafeInteger(event.seq) && event.seq! > 0 &&
-    (event.hostId === '6v' || event.hostId === 'noha') &&
+    validHostId(event.hostId) &&
     typeof event.threadId === 'string' && /^[a-zA-Z0-9_-]{8,256}$/.test(event.threadId) &&
     typeof event.title === 'string' && typeof event.preview === 'string' &&
     (event.status === 'completed' || event.status === 'failed' || event.status === 'interrupted')

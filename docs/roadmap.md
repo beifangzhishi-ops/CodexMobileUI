@@ -1,5 +1,18 @@
 # CodexMobileUI implementation and acceptance
 
+## 2026-11-27 Config-driven multi-host Web release
+
+- [x] Route publication preparation and download by registered host identity.
+- [x] Discover the configured host roster in the shared Web UI; use host-scoped
+  search, completion state, pins, path mappings and browser notification routing.
+- [x] Verify 98 core, 33 host, 5 build-state, 18 UI/dependency and 134 Web tests;
+  Gateway/Web builds and Chromium desktop/390px with a simulated third host.
+- [x] Keep the existing Android 0.2.4 artifact: no native source changes; the
+  existing SHA-256 matches the release record below.
+- [ ] Physical third-host acceptance, expanded quota monitoring and native
+  third-host background notifications/Explorer support remain separate.
+
+
 ## 2026-11-27 Second private release (0.2.4)
 
 - [x] Include verified live sub-agent activity, bounded thread settings relay,

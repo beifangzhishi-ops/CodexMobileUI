@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Conversation, HostId, Message } from './types';
+import { validHostId, type Conversation, type Host, type HostId, type Message } from './types';
+import { fetchHosts } from './hostRegistry';
 import {
   applyNotice, obj, parseGoal, parseModels, parsePermissions, parseProjects, parseQueue,
   parseSnapshot, parseThreads, parseThreadForkResponse, reconcileObservedReasoning, text, threadPreviewTitle,
@@ -54,7 +55,6 @@ export type SendOptions = {
   onAccepted?: (threadId: string, turnId: string, steered: boolean) => void;
 };
 export type Approval = { hostId: HostId; id: number; method: string; detail: string };
-const HOSTS: HostId[] = ['6v', 'noha'];
 const permissionParams = (mode: PermissionMode | undefined): Params =>
   mode === 'default' ? { permissions: ':workspace', approvalsReviewer: 'user' } :
   mode === 'auto-review' ? { permissions: ':workspace', approvalsReviewer: 'auto_review' } :
@@ -64,6 +64,7 @@ const permissionId = (mode: PermissionMode) => permissionParams(mode).permission
 const threadKey = (hostId: HostId, id: string) => hostId + ':' + id;
 
 export function useLiveCodex() {
+  const [hosts, setHosts] = useState<Host[]>([]);
   const [status, setStatus] = useState<Record<HostId, HostStatus>>({ '6v': 'connecting', noha: 'connecting' });
   const [errors, setErrors] = useState<Record<HostId, string | null>>({ '6v': null, noha: null });
   const [rateQuota, setRateQuota] = useState<Partial<Record<HostId, RateQuota>>>({});
@@ -625,15 +626,30 @@ export function useLiveCodex() {
       };
       socket.onerror = () => { /* onclose owns reconnection */ };
     }
-    for (const hostId of HOSTS) connect(hostId);
+    const discovery = new AbortController();
+    let discovered: Host[] = [];
+    async function discover() {
+      try {
+        const list = await fetchHosts(discovery.signal);
+        if (discovery.signal.aborted) return;
+        discovered = list;
+        setStatus(Object.fromEntries(list.map(({ id }) => [id, 'connecting' as const])));
+        setHosts(list);
+        for (const { id } of list) connect(id);
+      } catch {
+        if (!discovery.signal.aborted) retryTimers.push(window.setTimeout(() => void discover(), 3000));
+      }
+    }
+    void discover();
     const quotaTimer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      for (const hostId of HOSTS) {
+      for (const { id: hostId } of discovered) {
         if (clients.current.get(hostId)?.ready) void refreshRateQuota(hostId).catch(() => undefined);
       }
       if (clients.current.get('6v')?.ready) void refreshQuotaGuard().catch(() => undefined);
     }, 5 * 60_000);
     return () => {
+      discovery.abort();
       alive.current = false;
       clearInterval(quotaTimer);
       retryTimers.forEach(clearTimeout);
@@ -704,7 +720,7 @@ export function useLiveCodex() {
         try { path = native.filePath(file); } catch { /* Browser File lacks a native path. */ }
         if (/^[A-Za-z]:[\\/]/.test(path)) {
           const localHost = await native.localHost?.().catch(() => null);
-          if (localHost === '6v' || localHost === 'noha') {
+          if (validHostId(localHost)) {
             const resolved = obj(await request(hostId, 'web/pathFile', {
               path, sourceHost: localHost, hosts: options.pathHosts,
             }).catch(() => null));
@@ -755,7 +771,7 @@ export function useLiveCodex() {
       return;
     }
     const expected = permissionParams(mode);
-    if (!permissions[hostId].some((p) => p.id === expected.permissions && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
+    if (!(permissions[hostId] ?? []).some((p) => p.id === expected.permissions && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
     await request(hostId, 'thread/settings/update', { threadId, ...expected }, 30_000);
     const actual = obj(await request(hostId, 'thread/resume', { threadId }));
     if (text(obj(actual.activePermissionProfile).id) !== expected.permissions ||
@@ -773,7 +789,7 @@ export function useLiveCodex() {
     const key = threadKey(hostId, threadId);
     const previous = modelUpdates.current.get(key) ?? Promise.resolve();
     const work = previous.catch(() => undefined).then(async () => {
-      const chosen = models[hostId].find((candidate) => candidate.id === model || candidate.model === model);
+      const chosen = (models[hostId] ?? []).find((candidate) => candidate.id === model || candidate.model === model);
       if (!chosen) throw Error('MODEL_NOT_AVAILABLE');
       if (!chosen.efforts.includes(effort)) throw Error('EFFORT_NOT_AVAILABLE');
       await request(hostId, 'thread/settings/update', { threadId, model: chosen.id, effort }, 30_000);
@@ -814,8 +830,8 @@ export function useLiveCodex() {
     // silently replace the chosen profile or inherited config.toml defaults.
     const nativePerms = existingId ? {} : permissionParams(perm);
     const profile = existingId ? undefined : permissionId(perm);
-    if (profile && !permissions[hostId].some((p) => p.id === profile && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
-    const nativeModel = options.model ? models[hostId].find((m) => m.id === options.model) : undefined;
+    if (profile && !(permissions[hostId] ?? []).some((p) => p.id === profile && p.allowed)) throw Error('PERMISSION_NOT_ALLOWED');
+    const nativeModel = options.model ? (models[hostId] ?? []).find((m) => m.id === options.model) : undefined;
     if (options.model && !nativeModel) throw Error('MODEL_NOT_AVAILABLE');
     if (options.effort && !nativeModel?.efforts.includes(options.effort)) throw Error('EFFORT_NOT_AVAILABLE');
     const settings: Params = {
@@ -824,7 +840,7 @@ export function useLiveCodex() {
       ...nativePerms,
       ...(options.plan ? { collaborationMode: {
         mode: 'plan', settings: {
-          model: nativeModel?.id ?? models[hostId].find((m) => m.isDefault)?.id,
+          model: nativeModel?.id ?? (models[hostId] ?? []).find((m) => m.isDefault)?.id,
           reasoning_effort: options.effort || nativeModel?.defaultEffort || null,
           developer_instructions: null,
         } } } : {}),
@@ -1055,7 +1071,7 @@ export function useLiveCodex() {
 
   return {
     prepareAttachments,
-    status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
+    hosts, status, errors, rateQuota, refreshRateQuota, quotaGuard, refreshQuotaGuard, setQuotaGuardEnabled,
     projects, conversations, agentActivityRevision, reportAgentActivity, models, permissions, threadPermissions, customPermissionChanged, approval, goals, queues,
     contextUsages, clearContextUsage, compactions, compactThread, recheckCompaction,
     listSideChats, createSideChat, loadSideChat, readSubAgent, readSubAgentActivity,

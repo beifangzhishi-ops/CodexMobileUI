@@ -2,10 +2,10 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const UUID = /^[0-9a-f-]{20,80}$/i;
-const HOSTS = ['6v', 'noha'];
+const validHost = (id) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(id) && !['all', 'constructor', 'prototype'].includes(id);
 function valid(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      !HOSTS.includes(value.hostId) || !UUID.test(value.threadId) ||
+      !validHost(value.hostId) || !UUID.test(value.threadId) ||
       !UUID.test(value.turnId) || !Array.isArray(value.changes) ||
       value.changes.length < 1 || value.changes.length > 24) throw Error('INVALID_OVERLAY');
   for (const item of value.changes) {
@@ -20,9 +20,11 @@ function valid(value) {
 
 /** UI-only display metadata. Native thread content remains the sole inference source. */
 export class PathOverlayStore {
-  constructor(filename) { this.filename = filename; this.queue = Promise.resolve(); }
+  constructor(filename, acceptsHost = (id) => id === '6v' || id === 'noha') {
+    this.filename = filename; this.queue = Promise.resolve(); this.acceptsHost = acceptsHost;
+  }
   async read(hostId, threadId) {
-    if (!HOSTS.includes(hostId) || !UUID.test(threadId)) throw Error('INVALID_OVERLAY_QUERY');
+    if (!this.acceptsHost(hostId) || !UUID.test(threadId)) throw Error('INVALID_OVERLAY_QUERY');
     let data;
     try { data = JSON.parse(await readFile(this.filename, 'utf8')); }
     catch { return []; }
@@ -32,6 +34,7 @@ export class PathOverlayStore {
   }
   async save(input) {
     const item = valid(input);
+    if (!this.acceptsHost(item.hostId)) throw Error('INVALID_OVERLAY');
     const task = this.queue.then(async () => {
       let all;
       try { all = JSON.parse(await readFile(this.filename, 'utf8')); }

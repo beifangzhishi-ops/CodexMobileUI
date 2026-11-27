@@ -49,7 +49,7 @@ test('old section folds migrate without resetting other first-visit defaults', (
 
 test('malformed or overlong cached entries cannot break the sidebar', () => {
   assert.deepEqual(parseSidebarPreferences({
-    showAllRecent: 'false', collapsedHosts: [1, '6v', '6v', 'other', 'a'.repeat(250)],
+    showAllRecent: 'false', collapsedHosts: [1, '6v', '6v', 'bad/host', 'a'.repeat(250)],
     openedProjects: ['6v:valid', {}], collapsedSections: ['recent', 'bad'],
     sidebarOpen: 'false',
   }), {

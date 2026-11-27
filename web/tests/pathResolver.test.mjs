@@ -95,6 +95,15 @@ test('Electron file with known owner bypasses ambiguous C search and uploads onl
   assert.equal(await resolveSelectedFile('D:\\a.pdf', 'noha', '6v', hosts, has()), null);
 });
 
+test('third registered host participates in verified path resolution', async () => {
+  const expanded = validatePathHosts({ ...hosts, 'third-pc': { ip: '100.90.10.11', share: 'third' } });
+  const remote = localToNetwork(local, 'third-pc', expanded);
+  assert.equal(await resolveInputPath(local, '6v', expanded, has(remote)), remote);
+  assert.deepEqual((await resolveUserTextDetailed(local, '6v', expanded, has(local, remote))).ambiguities, [local]);
+  assert.equal(await resolveInputPath(local, 'third-pc', hosts, has(local)), local);
+  assert.equal(pathForViewer(local, 'third-pc', '6v', hosts), local);
+});
+
 test('invalid configs and unknown UNC shares cannot redirect', async () => {
   assert.throws(() => validatePathHosts({ ...hosts, noha: { ip: '8.8.8.8', share: 'noha' } }));
   assert.throws(() => validatePathHosts({ ...hosts, noha: { ip: '100.96.30.32', share: '..' } }));

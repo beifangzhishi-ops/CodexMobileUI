@@ -69,7 +69,7 @@ export function AutomationView({ hosts, initialHost, projects, models, status,
   const [error, setError] = useState('');
   const online = status[host] === 'online';
   const hostProjects = projects.filter((project) => project.hostId === host);
-  const hostModels = models[host];
+  const hostModels = models[host] ?? [];
   const draftModel = hostModels.find((model) => modelValue(model) === draft.model);
   const selectedModel = hostModels.find((model) => modelValue(model) === selected?.model);
   const call = useCallback((method: string, params: Record<string, unknown> = {}) =>

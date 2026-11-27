@@ -6,16 +6,16 @@ export const DEFAULT_PATH_HOSTS = Object.freeze({
   '6v': { ip: '100.76.74.124', share: '6v1f' },
   noha: { ip: '100.96.30.32', share: 'noha' },
 });
-const HOST_IDS = ['6v', 'noha'];
+const validHost = (id) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(id) && !['all', 'constructor', 'prototype'].includes(id);
 const ABSOLUTE_START = /(?:[A-Za-z]:[\\/]|\\\\[\w.-]+\\[\w$.-]+\\)/g;
 const PATH_END = /[\r\n\t<>"'`|]/;
 const TRAILING = /[\s.,!?;:\uff0c\u3002\uff01\uff1f\uff1b)\]\}]+$/u;
 
 export function validatePathHosts(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).sort().join(',') !== '6v,noha') throw Error('INVALID_PATH_HOSTS');
+      Object.keys(value).length > 16 || !Object.keys(value).every(validHost)) throw Error('INVALID_PATH_HOSTS');
   const result = {};
-  for (const id of HOST_IDS) {
+  for (const id of Object.keys(value)) {
     const item = value[id];
     if (!item || typeof item !== 'object' || Array.isArray(item) ||
         Object.keys(item).sort().join(',') !== 'ip,share') throw Error('INVALID_PATH_HOST');
@@ -33,7 +33,7 @@ export function validatePathHosts(value) {
 }
 
 export function localToNetwork(localPath, owner, hosts) {
-  if (!HOST_IDS.includes(owner) || typeof localPath !== 'string' ||
+  if (!validHost(owner) || typeof localPath !== 'string' ||
       !/^[Cc]:[\\/]/.test(localPath)) return null;
   const item = hosts[owner];
   if (!item) return null;
@@ -44,7 +44,7 @@ export function localToNetwork(localPath, owner, hosts) {
 export function networkToLocal(remotePath, hosts) {
   if (typeof remotePath !== 'string') return null;
   const normalized = remotePath.replace(/\//g, '\\');
-  for (const id of HOST_IDS) {
+  for (const id of Object.keys(hosts)) {
     const prefix = `\\\\${hosts[id].ip}\\${hosts[id].share}`;
     if (normalized.toLowerCase() === prefix.toLowerCase()) return { owner: id, path: 'C:\\' };
     if (normalized.toLowerCase().startsWith((prefix + '\\').toLowerCase())) {
@@ -55,11 +55,11 @@ export function networkToLocal(remotePath, hosts) {
 }
 
 export function pathForViewer(path, originHost, viewerHost, hosts) {
-  if (!HOST_IDS.includes(viewerHost)) return path;
+  if (!validHost(viewerHost)) return path;
   const network = networkToLocal(path, hosts);
   if (network) return network.owner === viewerHost ? network.path :
     localToNetwork(network.path, network.owner, hosts) ?? path;
-  if (!HOST_IDS.includes(originHost) || !/^[Cc]:[\\/]/.test(path)) return path;
+  if (!validHost(originHost) || !/^[Cc]:[\\/]/.test(path)) return path;
   return originHost === viewerHost ? win32.normalize(path) :
     localToNetwork(path, originHost, hosts) ?? path;
 }
@@ -75,7 +75,7 @@ async function readable(path) {
 
 async function probeInputPath(raw, destinationHost, hosts, probe = readable) {
   if (typeof raw !== 'string' || raw.length > 2048 || /[\x00-\x1f]/.test(raw) ||
-      !HOST_IDS.includes(destinationHost)) return { value: raw, status: 'missing' };
+      !validHost(destinationHost)) return { value: raw, status: 'missing' };
   const known = networkToLocal(raw, hosts);
   if (known) {
     const target = known.owner === destinationHost ? known.path :
@@ -89,7 +89,7 @@ async function probeInputPath(raw, destinationHost, hosts, probe = readable) {
   const candidates = [];
   // C: is shared by both machines. Never choose based only on a matching filename.
   if (path[0].toUpperCase() === 'C') {
-    for (const id of HOST_IDS) {
+    for (const id of new Set([destinationHost, ...Object.keys(hosts)])) {
       const candidate = id === destinationHost ? path : localToNetwork(path, id, hosts);
       if (candidate) candidates.push(candidate);
     }
@@ -110,7 +110,7 @@ export async function resolveInputPath(raw, destinationHost, hosts, probe = read
 
 /** Physical files chosen in Electron have a known owner: never cross-probe by filename. */
 export async function resolveSelectedFile(path, owner, destination, hosts, probe = readable) {
-  if (!HOST_IDS.includes(owner) || !HOST_IDS.includes(destination) ||
+  if (!validHost(owner) || !validHost(destination) ||
       typeof path !== 'string' || path.length > 2048 ||
       /[\x00-\x1f]/.test(path) || !/^[A-Za-z]:[\\/]/.test(path)) return null;
   const normalized = win32.normalize(path);

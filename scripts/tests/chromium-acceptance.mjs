@@ -107,8 +107,8 @@ try {
     return (await readFile(activePortFile, 'utf8')).split(/\r?\n/)[0];
   }, 'Chrome DevTools endpoint');
   const debuggerBase = `http://127.0.0.1:${activePort}`;
-  async function page(url) {
-    const response = await fetch(`${debuggerBase}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' });
+  async function page(url, initSource) {
+    const response = await fetch(`${debuggerBase}/json/new?${encodeURIComponent('about:blank')}`, { method: 'PUT' });
     if (!response.ok) throw Error(`Chrome could not create a page: ${response.status}`);
     const target = await response.json();
     const socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -117,6 +117,7 @@ try {
     devtools.on('Runtime.exceptionThrown', (event) => browserErrors.push(event.exceptionDetails?.text ?? 'Runtime exception'));
     await devtools.command('Page.enable');
     await devtools.command('Runtime.enable');
+    if (initSource) await devtools.command('Page.addScriptToEvaluateOnNewDocument', { source: initSource });
     await devtools.command('Page.navigate', { url });
     await waitUntil(() => devtools.evaluate('document.readyState === "complete"'), `page load ${url}`);
     return devtools;
@@ -200,6 +201,59 @@ try {
     assert.equal(await activityPage.evaluate(`document.body.textContent.includes('未在摘要中重写的思考过程。')`), true);
     await screenshot(activityPage, resolve(screenshotDir, 'subagent-terminal-narrow.png'));
   } finally { activityPage.close(); }
+
+  const rosterFixture = function () {
+    const roster = [{ id: '6v', displayName: '6v' }, { id: 'noha', displayName: 'noha' },
+      { id: 'test-peer', displayName: 'Third workstation' }];
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (url, options) => {
+      const path = new URL(String(url), location.href).pathname;
+      if (path === '/api/hosts') return Promise.resolve(new Response(JSON.stringify({ primaryHostId: '6v', hosts: roster })));
+      if (path === '/api/sidebar-pins' || path === '/api/thread-completions')
+        return Promise.resolve(new Response(JSON.stringify({ revision: 0, items: [] })));
+      return originalFetch(url, options);
+    };
+    const nativeSocket = window.WebSocket;
+    window.fixtureHostConnections = [];
+    window.WebSocket = new Proxy(nativeSocket, {
+      construct(target, args) {
+        const url = new URL(String(args[0]));
+        if (url.pathname !== '/api/connect') return Reflect.construct(target, args);
+        const host = url.searchParams.get('host');
+        window.fixtureHostConnections.push(host);
+        const fake = {
+          readyState: 1,
+          send(raw) {
+            const msg = JSON.parse(raw);
+            if (typeof msg.id === 'number') setTimeout(() => fake.onmessage?.({
+              data: JSON.stringify({ id: msg.id, result: { data: [] } }),
+            }), 0);
+          },
+          close() { fake.readyState = 3; },
+        };
+        setTimeout(() => fake.onmessage?.({ data: JSON.stringify({ type: 'ready' }) }), 0);
+        return fake;
+      },
+    });
+  };
+  const rosterPage = await page('http://127.0.0.1:' + webPort + '/', '(' + rosterFixture.toString() + ')()');
+  try {
+    await rosterPage.command('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await waitUntil(() => rosterPage.evaluate("Array.from(document.querySelectorAll('.tree-host strong')).some(el => el.textContent === 'Third workstation')"), 'third host in real shared sidebar');
+    assert.deepEqual(await rosterPage.evaluate('window.fixtureHostConnections.slice().sort()'), ['6v', 'noha', 'test-peer']);
+    await click(rosterPage, '.composer-host-selector');
+    await rosterPage.evaluate("Array.from(document.querySelectorAll('.target-popover button')).find(el => el.textContent.includes('Third workstation')).click()");
+    await waitUntil(() => rosterPage.evaluate("document.querySelector('.composer-host-selector')?.textContent.includes('test-peer')"), 'third host composer selection');
+    await screenshot(rosterPage, resolve(screenshotDir, 'multi-host-desktop.png'));
+    await rosterPage.command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await new Promise(resolveWait => setTimeout(resolveWait, 350));
+    assert.ok(await rosterPage.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
+    await click(rosterPage, '.mobile-menu');
+    await waitUntil(() => rosterPage.evaluate("document.querySelector('.sidebar-is-open') !== null"), 'mobile sidebar open');
+    await new Promise(resolveWait => setTimeout(resolveWait, 350));
+    assert.ok(await rosterPage.evaluate("Array.from(document.querySelectorAll('.tree-host strong')).some(el => el.textContent === 'Third workstation')"));
+    await screenshot(rosterPage, resolve(screenshotDir, 'multi-host-narrow.png'));
+  } finally { rosterPage.close(); }
 
   assert.deepEqual(browserErrors, [], `Chromium runtime errors: ${browserErrors.join('; ')}`);
   console.log(`PASS: real Chromium project pagination and parent/child activity at desktop and 390px; screenshots: ${screenshotDir}`);

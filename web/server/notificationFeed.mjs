@@ -85,8 +85,9 @@ export function notificationContentFromRead(snapshot, turnId, completedTurn) {
 
 /** One private 6v-owned event log for both native App Servers. */
 export class NotificationFeed {
-  constructor(path) {
+  constructor(path, acceptsHost = (id) => id === '6v' || id === 'noha') {
     this.path = path;
+    this.acceptsHost = acceptsHost;
     this.sequence = 0;
     this.events = [];
     this.clients = new Set();
@@ -100,7 +101,7 @@ export class NotificationFeed {
             Array.isArray(state.events)) {
           this.sequence = state.sequence;
           this.events = state.events.filter((e) => e && Number.isSafeInteger(e.seq) &&
-            (e.hostId === '6v' || e.hostId === 'noha') &&
+            this.acceptsHost(e.hostId) &&
             validId(e.threadId) && validId(e.turnId) &&
             typeof e.at === 'number' && e.at > Date.now() - MAX_AGE)
             .slice(-MAX_EVENTS).map((e) => ({
@@ -126,7 +127,7 @@ export class NotificationFeed {
     const threadId = p.threadId;
     const turn = plain(p.turn);
     const turnId = turn.id || p.turnId;
-    if (!['6v', 'noha'].includes(hostId) || !validId(threadId) || !validId(turnId)) return;
+    if (!this.acceptsHost(hostId) || !validId(threadId) || !validId(turnId)) return;
     const key = hostId + ':' + turnId;
     if (this.seen.has(key) || this.pending.has(key)) return;
     this.pending.add(key);

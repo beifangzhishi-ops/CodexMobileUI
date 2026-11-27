@@ -1,16 +1,15 @@
-import type { HostId } from './types';
+import { validHostId, type HostId } from './types.ts';
 
 export type ContextKind = 'thread' | 'project' | 'message' | 'file' | 'image';
 export type ContextTarget = { kind: ContextKind; hostId: HostId; id: string;
   origin?: 'user' | 'assistant'; itemId?: string; linkIndex?: number };
 
-const hostIds: readonly string[] = ['6v', 'noha'];
 export function contextTargetFromAttributes(kind: string | null, host: string | null,
   id: string | null, origin?: string | null, itemId?: string | null,
   linkIndex?: string | null): ContextTarget | null {
   if (kind !== 'thread' && kind !== 'project' && kind !== 'message' &&
       kind !== 'file' && kind !== 'image') return null;
-  if (!host || !hostIds.includes(host) || !id ||
+  if (!validHostId(host) || !id ||
       id.length > (kind === 'file' ? 4096 : 256)) return null;
   const index = linkIndex === undefined || linkIndex === null || linkIndex === ''
     ? undefined : Number(linkIndex);
@@ -41,7 +40,7 @@ export function threadFromLink(urlText: string): { hostId: HostId; id: string } 
     const url = new URL(urlText);
     const host = url.searchParams.get('host');
     const id = url.searchParams.get('thread');
-    if (!host || !hostIds.includes(host) || !id || id.length > 256) return null;
+    if (!validHostId(host) || !id || id.length > 256) return null;
     return { hostId: host as HostId, id };
   } catch { return null; }
 }
@@ -51,6 +50,6 @@ export function readUnreadThreads(raw: string | null): Record<string, true> {
     const value: unknown = JSON.parse(raw ?? '{}');
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     return Object.fromEntries(Object.entries(value).filter(([key, v]) =>
-      /^(6v|noha):[^:]{1,256}$/.test(key) && v === true)) as Record<string, true>;
+      validHostId(key.split(':', 1)[0]) && /^[^:]+:[^:]{1,256}$/.test(key) && v === true)) as Record<string, true>;
   } catch { return {}; }
 }

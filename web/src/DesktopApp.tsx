@@ -9,7 +9,7 @@ import {
   Plus, Puzzle, Search, Settings, ShieldCheck, ShieldLock, SquarePen, Sun, Target, Trash2, TriangleAlert, X, Pencil, Minimize2, PanelRightOpen,
   type LucideIcon,
 } from 'lucide-react';
-import { hosts } from './types';
+import { validHostId } from './types';
 import type { Conversation, HostId } from './types';
 import type { NativeProject } from './nativeProtocol';
 import { fetchSidebarPins, setSidebarPin, parseSidebarPins, type SidebarPin,
@@ -184,7 +184,7 @@ export default function DesktopApp() {
     try { return loadSidebarPreferences(window.localStorage); }
     catch { return defaultSidebarPreferences(); }
   });
-  const { conversations, projects } = live;
+  const { conversations, projects, hosts } = live;
   const getProjectName = (id: string | null, hostId?: HostId) =>
     projects.find((p) => p.id === id && (!hostId || p.hostId === hostId))?.name ?? null;
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -273,7 +273,7 @@ export default function DesktopApp() {
   const [pathHosts, setPathHosts] = useState<PathHosts>(defaultPathHosts);
   const [manualViewerHost, setManualViewerHost] = useState<HostId | null>(() => {
     const stored = window.localStorage.getItem('codexmobileui:viewerHost');
-    return stored === '6v' || stored === 'noha' ? stored : null;
+    return validHostId(stored) ? stored : null;
   });
   const [autoViewerHost, setAutoViewerHost] = useState<HostId | null>(null);
   const viewerHost = autoViewerHost ?? manualViewerHost;
@@ -469,7 +469,7 @@ export default function DesktopApp() {
     composeRef.current?.focus();
     requestAnimationFrame(() => composeRef.current?.setSelectionRange(caret, caret));
   }
-  const availableModels = live.models[currentHost];
+  const availableModels = live.models[currentHost] ?? [];
   const selectedModel = (active?.model
     ? availableModels.find((item) => item.id === active.model || item.model === active.model)
     : availableModels.find((item) => item.id === modelByHost[currentHost])) ??
@@ -689,7 +689,7 @@ export default function DesktopApp() {
   useEffect(() => {
     const open = (event: Event) => {
       const target = (event as CustomEvent).detail as { hostId?: string; threadId?: string } | null;
-      if (!target || !['6v', 'noha'].includes(target.hostId ?? '') ||
+      if (!target || !validHostId(target.hostId) || (hosts.length > 0 && !hosts.some(({ id }) => id === target.hostId)) ||
         !/^[a-zA-Z0-9_-]{8,256}$/.test(target.threadId ?? '')) return;
       const hostId = target.hostId as HostId;
       const threadId = target.threadId!;
@@ -1341,7 +1341,7 @@ export default function DesktopApp() {
     if (pendingPermission || submitting) return;
     const profile = mode === 'default' || mode === 'auto-review' ? ':workspace' :
       mode === 'read-only' ? ':read-only' : mode === 'full-access' ? ':danger-full-access' : null;
-    if (profile && !live.permissions[currentHost].some((p) => p.id === profile && p.allowed)) {
+    if (profile && !(live.permissions[currentHost] ?? []).some((p) => p.id === profile && p.allowed)) {
       setNotice('电脑的原生权限配置未允许此选项');
       return;
     }
@@ -1900,7 +1900,7 @@ export default function DesktopApp() {
               const terminal = Boolean(turn?.terminal) &&
                 !(isRunning && active.activeTurnId === message.turnId);
               const isTool = message.kind === 'tool';
-              const logo = findToolLogo(toolLogos[active.hostId], message.pluginId, message.appId);
+              const logo = findToolLogo(toolLogos[active.hostId] ?? [], message.pluginId, message.appId);
               return <Fragment key={message.id}>
                 {optimisticPositions.get(index)?.map(renderOptimisticSubmission)}
                 <article data-context-kind="message" data-message-index={index}
@@ -2200,7 +2200,7 @@ export default function DesktopApp() {
                 }}>{effortLabels[item] ?? item}{effectiveEffort === item && <Check className="check-icon" size={16}/>}</button>)}
               </div>}
               {popup === 'project' && <div className="popover composer-popover target-popover"><span className="popover-heading">新聊天目标电脑 / 项目</span>
-                {hosts.map((host) => <button key={host.id} onClick={() => { createNewChat(host.id); }}><Monitor size={17}/>{host.id}{!active && newHost === host.id && <Check className="check-icon" size={16}/>}</button>)}
+                {hosts.map((host) => <button key={host.id} onClick={() => { createNewChat(host.id); }}><Monitor size={17}/>{host.displayName}{!active && newHost === host.id && <Check className="check-icon" size={16}/>}</button>)}
                 <div className="popover-divider"/>{projects.filter((p) => p.hostId === currentHost).map((p) =>
                   <button key={p.id} aria-pressed={!active && newProject === p.id} onClick={() => createNewChat(p.hostId, p.id)}>
                     <Folder size={16}/>{p.name}{!active && newProject === p.id && <Check className="check-icon" size={16}/>}
@@ -2436,7 +2436,8 @@ export default function DesktopApp() {
           </div>
           <label className="quota-guard-toggle">
             <input type="checkbox" checked={quotaGuardState?.enabled === true}
-              disabled={quotaGuardWorking || !quotaGuardState || live.status['6v'] !== 'online'}
+              disabled={quotaGuardWorking || !quotaGuardState || live.status['6v'] !== 'online' ||
+                (!quotaGuardState.enabled && hosts.some(({ id }) => id !== '6v' && id !== 'noha'))}
               onChange={() => void toggleQuotaGuard()}
               aria-label="任一额度窗口剩余不超过 3% 时启用自动保护" />
             <span className="quota-guard-switch" aria-hidden="true"/>
@@ -2445,6 +2446,8 @@ export default function DesktopApp() {
           <div className="quota-guard-note">
             按原生原始比例判断。触发后阻止新回合、引导、队列、目标和定时任务；读取与手动停止不受影响。
           </div>
+          {hosts.some(({ id }) => id !== '6v' && id !== 'noha') &&
+            <div className="quota-guard-note">共享额度保护仍限于 6v / noha；保护开启时新主机的模型工作会被拦截。</div>}
           <div className="quota-guard-status" role="status">
             <strong>{quotaGuardStatusLabel(quotaGuardState?.status)}</strong>
             {quotaGuardState?.triggerReason && <span>{quotaGuardState.triggerReason}</span>}

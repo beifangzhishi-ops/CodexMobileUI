@@ -2,7 +2,7 @@
  * Local presentation state for the one shared browser / Android WebView UI.
  * Canonical projects, threads and shared pins remain owned by the servers.
  */
-import type { HostId } from './types';
+import { validHostId, type HostId } from './types.ts';
 
 export type SidebarPreferences = {
   showAllRecent: boolean;
@@ -52,7 +52,7 @@ export function parseSidebarPreferences(value: unknown, legacySections?: unknown
   return {
     showAllRecent: typeof raw.showAllRecent === 'boolean' ? raw.showAllRecent : true,
     collapsedHosts: ids(raw.collapsedHosts).filter((host): host is HostId =>
-      host === '6v' || host === 'noha'),
+      validHostId(host)),
     openedProjects: ids(raw.openedProjects),
     collapsedSections: ids(sections).filter((section) => validSections.has(section)),
     sidebarOpen: typeof raw.sidebarOpen === 'boolean' ? raw.sidebarOpen : null,

@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type CompletedThread = { hostId: '6v' | 'noha'; threadId: string };
+export type CompletedThread = { hostId: string; threadId: string };
 export type ThreadCompletionsSnapshot = { revision: number; items: CompletedThread[] };
 
 const MAX_ITEMS = 2000;
@@ -12,7 +12,7 @@ function validThread(value: unknown): value is CompletedThread {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const thread = value as Record<string, unknown>;
   return Object.keys(thread).length === 2 &&
-    (thread.hostId === '6v' || thread.hostId === 'noha') &&
+    typeof thread.hostId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(thread.hostId) && !['all', 'constructor', 'prototype'].includes(thread.hostId) &&
     typeof thread.threadId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(thread.threadId);
 }
 
@@ -27,7 +27,7 @@ export class ThreadCompletionStore {
   private readonly path: string;
   private readonly primaryMarker: string;
 
-  constructor(stateDirectory: string) {
+  constructor(stateDirectory: string, private readonly acceptsHost: (id: string) => boolean = (id) => id === '6v' || id === 'noha') {
     this.path = join(stateDirectory, 'thread-completions.json');
     // The Coordinator already requires this existing 6v-only marker for its
     // shared sidebar state. Reuse it rather than introducing another setup step.
@@ -72,7 +72,7 @@ export class ThreadCompletionStore {
 
   async set(thread: unknown, completed: unknown): Promise<ThreadCompletionsSnapshot> {
     this.requirePrimary();
-    if (!validThread(thread) || typeof completed !== 'boolean') {
+    if (!validThread(thread) || !this.acceptsHost(thread.hostId) || typeof completed !== 'boolean') {
       throw new Error('COMPLETIONS_INVALID_PARAMS');
     }
     const lockPath = this.path + '.lock';

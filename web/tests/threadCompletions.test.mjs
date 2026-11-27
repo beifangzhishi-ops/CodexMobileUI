@@ -12,7 +12,7 @@ test('thread completions keep host-scoped identity and reject ambiguous snapshot
   assert.deepEqual(parseThreadCompletions(valid), valid);
   assert.throws(() => parseThreadCompletions({
     revision: 0,
-    items: [{ hostId: 'arbitrary', threadId: 'thread-1' }],
+    items: [{ hostId: 'all', threadId: 'thread-1' }],
   }), /INVALID_THREAD_COMPLETIONS/);
   assert.throws(() => parseThreadCompletions({
     revision: 0,

@@ -189,13 +189,13 @@ export function SettingsView({ hosts, initialHost, initialProjectId, projects, t
       <p>每台电脑的共享名对应 C 盘。发送绝对路径时会逐台确认文件位置。</p>
       {hosts.map((id) => <div key={id} className="path-host-settings">
         <strong>{id}</strong>
-        <label>IP 地址<input aria-label={id + ' IP'} value={network[id].ip}
+        <label>IP 地址<input aria-label={id + ' IP'} value={network[id]?.ip ?? ''}
           onChange={(event) => setNetwork((old) => ({
-            ...old, [id]: { ...old[id], ip: event.target.value.trim() },
+            ...old, [id]: { share: old[id]?.share ?? '', ip: event.target.value.trim() },
           }))}/></label>
-        <label>共享名<input aria-label={id + ' 共享名'} value={network[id].share}
+        <label>共享名<input aria-label={id + ' 共享名'} value={network[id]?.share ?? ''}
           onChange={(event) => setNetwork((old) => ({
-            ...old, [id]: { ...old[id], share: event.target.value.trim() },
+            ...old, [id]: { ip: old[id]?.ip ?? '', share: event.target.value.trim() },
           }))}/></label>
       </div>)}
       {!desktopBridge() && <label>当前浏览器所在电脑

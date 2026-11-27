@@ -313,7 +313,7 @@ test('real Coordinator bridge scopes completion state by host across restart', a
       },
     }), { id: 7, result: { hostId: 'test-peer', id: 'd'.repeat(64) } });
 
-    const set = (hostId: '6v' | 'noha', completed: boolean, origin = expectedOrigin) => request(
+    const set = (hostId: string, completed: boolean, origin = expectedOrigin) => request(
       started.port,
       {
         method: 'POST',
@@ -345,6 +345,11 @@ test('real Coordinator bridge scopes completion state by host across restart', a
     const clearNoha = await set('noha', false);
     assert.deepEqual(JSON.parse(clearNoha.body), { revision: 4, items: [] });
 
+    const third = await set('test-peer', true);
+    assert.equal(third.status, 200);
+    assert.deepEqual(JSON.parse(third.body).items, [{ hostId: 'test-peer', threadId: 'shared-thread' }]);
+    assert.equal((await set('unregistered', true)).status, 400);
+    assert.equal((await set('test-peer', false)).status, 200);
     const restored = await set('noha', true);
     assert.equal(restored.status, 200);
     const crossOrigin = await set('6v', true, 'https://wrong.example');
@@ -353,7 +358,7 @@ test('real Coordinator bridge scopes completion state by host across restart', a
     assert.equal(wrongHost.status, 403);
     const beforeRestart = await request(started.port);
     assert.deepEqual(JSON.parse(beforeRestart.body), {
-      revision: 5,
+      revision: 7,
       items: [{ hostId: 'noha', threadId: 'shared-thread' }],
     });
 
@@ -364,7 +369,7 @@ test('real Coordinator bridge scopes completion state by host across restart', a
     const afterRestart = await request(started.port);
     assert.equal(afterRestart.status, 200);
     assert.deepEqual(JSON.parse(afterRestart.body), {
-      revision: 5,
+      revision: 7,
       items: [{ hostId: 'noha', threadId: 'shared-thread' }],
     });
   } finally {

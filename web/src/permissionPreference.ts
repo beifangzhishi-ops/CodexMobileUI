@@ -77,7 +77,7 @@ function preferences(): Saved {
     const parsed = JSON.parse(localStorage.getItem(key) || '{}');
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter(([name, value]) =>
-      /^(6v|noha):[A-Za-z0-9_-]{1,128}$/.test(name) && typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) as Saved;
+      /^(?!all:)[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9_-]{1,128}$/.test(name) && typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) as Saved;
   } catch { return {}; }
 }
 

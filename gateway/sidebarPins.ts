@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type SidebarPin = { type: 'project' | 'thread'; hostId: '6v' | 'noha'; id: string };
+export type SidebarPin = { type: 'project' | 'thread'; hostId: string; id: string };
 export type SidebarPinSnapshot = { revision: number; items: SidebarPin[] };
 
 function validPin(value: unknown): value is SidebarPin {
@@ -11,7 +11,7 @@ function validPin(value: unknown): value is SidebarPin {
   const pin = value as Record<string, unknown>;
   return Object.keys(pin).length === 3 &&
     (pin.type === 'project' || pin.type === 'thread') &&
-    (pin.hostId === '6v' || pin.hostId === 'noha') &&
+    typeof pin.hostId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(pin.hostId) && !['all', 'constructor', 'prototype'].includes(pin.hostId) &&
     typeof pin.id === 'string' && /^[\w-]{1,128}$/.test(pin.id);
 }
 
@@ -26,7 +26,7 @@ export class SidebarPinsStore {
   private readonly path: string;
   private readonly primaryMarker: string;
 
-  constructor(stateDirectory: string) {
+  constructor(stateDirectory: string, private readonly acceptsHost: (id: string) => boolean = (id) => id === '6v' || id === 'noha') {
     this.path = join(stateDirectory, 'sidebar-pins.json');
     this.primaryMarker = join(stateDirectory, 'sidebar-pins-primary');
   }
@@ -57,7 +57,7 @@ export class SidebarPinsStore {
 
   async set(pin: unknown, pinned: unknown): Promise<SidebarPinSnapshot> {
     this.requirePrimary();
-    if (!validPin(pin) || typeof pinned !== 'boolean') throw new Error('PINS_INVALID_PARAMS');
+    if (!validPin(pin) || !this.acceptsHost(pin.hostId) || typeof pinned !== 'boolean') throw new Error('PINS_INVALID_PARAMS');
     const lockPath = this.path + '.lock';
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     for (let tries = 0; tries < 120; tries++) {
